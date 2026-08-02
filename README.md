@@ -78,7 +78,7 @@ Configuration
 | Item         | Value                 |
 | ------------ | -----------------     |
 | Architecture | 784 → 256 -> 128 → 10 |
-| Activation   | GELU                  |
+| Activation   | ReLU                  |
 | Loss         | Cross Entropy         |
 | Optimizer    | SGD                   |
 | Backend      | Vulkan Compute        |
@@ -89,7 +89,7 @@ Results
 | Metric        |                    Value |
 | ------------- | -----------------------: |
 | Accuracy      |                 **~99%** |
-| Training Time |                **~20 s** |
+| Training Time |                **~20s** |
 | Hardware      | **AMD Radeon 860M iGPU** |
 
 ---
