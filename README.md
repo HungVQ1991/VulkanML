@@ -88,7 +88,7 @@ Results
 
 | Metric        |                    Value |
 | ------------- | -----------------------: |
-| Accuracy      |                 **~98%** |
+| Accuracy      |                 **~99%** |
 | Training Time |                **~20 s** |
 | Hardware      | **AMD Radeon 860M iGPU** |
 
