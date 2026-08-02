@@ -885,6 +885,177 @@ public:
         return std::make_shared<Cpu_Matrix_Impl>(batch_size, in_h * in_w * channels, std::move(result_data));
     }
 
+    std::shared_ptr<Impl> batchNormForward(
+        const std::shared_ptr<Impl> &gamma,
+        const std::shared_ptr<Impl> &beta,
+        std::shared_ptr<Impl> &running_mean,
+        std::shared_ptr<Impl> &running_var,
+        std::shared_ptr<Impl> &batch_mean,
+        std::shared_ptr<Impl> &batch_var,
+        std::shared_ptr<Impl> &x_hat, 
+        float epsilon,
+        float momentum,
+        bool is_training) const override
+    {
+        std::size_t n = rows;
+        std::size_t d = cols;
+
+        auto gamma_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(gamma);
+        auto beta_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(beta);
+        auto r_mean_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(running_mean);
+        auto r_var_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(running_var);
+
+        std::vector<float> out_data(n * d);
+        std::vector<float> x_hat_data(n * d); // Tạo bộ đệm lưu trữ x_hat
+
+        if (is_training)
+        {
+            std::vector<float> b_mean(d, 0.0f);
+            std::vector<float> b_var(d, 0.0f);
+
+            for (std::size_t i = 0; i < n; ++i)
+            {
+                for (std::size_t j = 0; j < d; ++j)
+                {
+                    b_mean[j] += data[i * d + j];
+                }
+            }
+
+            float inv_n = 1.0f / static_cast<float>(n);
+            for (std::size_t j = 0; j < d; ++j)
+            {
+                b_mean[j] *= inv_n;
+            }
+
+            for (std::size_t i = 0; i < n; ++i)
+            {
+                for (std::size_t j = 0; j < d; ++j)
+                {
+                    float diff = data[i * d + j] - b_mean[j];
+                    b_var[j] += diff * diff;
+                }
+            }
+
+            for (std::size_t j = 0; j < d; ++j)
+            {
+                b_var[j] *= inv_n;
+            }
+
+            std::vector<float> r_mean_data = r_mean_cpu->getData();
+            std::vector<float> r_var_data = r_var_cpu->getData();
+
+            for (std::size_t j = 0; j < d; ++j)
+            {
+                r_mean_data[j] = (1.0f - momentum) * r_mean_data[j] + momentum * b_mean[j];
+                r_var_data[j] = (1.0f - momentum) * r_var_data[j] + momentum * b_var[j];
+            }
+
+            r_mean_cpu->uploadData(r_mean_data);
+            r_var_cpu->uploadData(r_var_data);
+
+            batch_mean = std::make_shared<Cpu_Matrix_Impl>(1, d, b_mean);
+            batch_var = std::make_shared<Cpu_Matrix_Impl>(1, d, b_var);
+
+            const std::vector<float> &gamma_data = gamma_cpu->getData();
+            const std::vector<float> &beta_data = beta_cpu->getData();
+
+            for (std::size_t i = 0; i < n; ++i)
+            {
+                for (std::size_t j = 0; j < d; ++j)
+                {
+                    float val_x_hat = (data[i * d + j] - b_mean[j]) / std::sqrt(b_var[j] + epsilon);
+                    x_hat_data[i * d + j] = val_x_hat; // Ghi nhận giá trị vào bộ đệm
+                    out_data[i * d + j] = gamma_data[j] * val_x_hat + beta_data[j];
+                }
+            }
+        }
+        else
+        {
+            const std::vector<float> &r_mean_data = r_mean_cpu->getData();
+            const std::vector<float> &r_var_data = r_var_cpu->getData();
+            const std::vector<float> &gamma_data = gamma_cpu->getData();
+            const std::vector<float> &beta_data = beta_cpu->getData();
+
+            for (std::size_t i = 0; i < n; ++i)
+            {
+                for (std::size_t j = 0; j < d; ++j)
+                {
+                    float val_x_hat = (data[i * d + j] - r_mean_data[j]) / std::sqrt(r_var_data[j] + epsilon);
+                    x_hat_data[i * d + j] = val_x_hat; // Ghi nhận giá trị vào bộ đệm
+                    out_data[i * d + j] = gamma_data[j] * val_x_hat + beta_data[j];
+                }
+            }
+        }
+
+        x_hat = std::make_shared<Cpu_Matrix_Impl>(n, d, std::move(x_hat_data)); // Khởi tạo và gán đối tượng x_hat
+        return std::make_shared<Cpu_Matrix_Impl>(n, d, std::move(out_data));
+    }
+
+    std::shared_ptr<Impl> batchNormBackward(
+        const std::shared_ptr<Impl> &grad_output,
+        const std::shared_ptr<Impl> &gamma,
+        const std::shared_ptr<Impl> &batch_var,
+        const std::shared_ptr<Impl> &x_hat,
+        std::shared_ptr<Impl> &grad_gamma,
+        std::shared_ptr<Impl> &grad_beta,
+        float epsilon) const override
+    {
+        std::size_t n = rows;
+        std::size_t d = cols;
+
+        auto dout_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(grad_output);
+        auto gamma_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(gamma);
+        auto b_var_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(batch_var);
+        auto x_hat_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(x_hat);
+        
+        auto g_gamma_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(grad_gamma);
+        auto g_beta_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(grad_beta);
+
+        const std::vector<float> &dout_data = dout_cpu->getData();
+        const std::vector<float> &gamma_data = gamma_cpu->getData();
+        const std::vector<float> &var_data = b_var_cpu->getData();
+        const std::vector<float> &x_hat_data = x_hat_cpu->getData();
+
+        std::vector<float> dgamma_data(d, 0.0f);
+        std::vector<float> dbeta_data(d, 0.0f);
+        std::vector<float> dx_data(n * d);
+
+        for (std::size_t i = 0; i < n; ++i)
+        {
+            for (std::size_t j = 0; j < d; ++j)
+            {
+                std::size_t idx = i * d + j;
+                float dout = dout_data[idx];
+                
+                dgamma_data[j] += dout * x_hat_data[idx];
+                dbeta_data[j] += dout;
+            }
+        }
+
+        g_gamma_cpu->uploadData(dgamma_data);
+        g_beta_cpu->uploadData(dbeta_data);
+
+        float inv_n = 1.0f / static_cast<float>(n);
+
+        for (std::size_t j = 0; j < d; ++j)
+        {
+            float std_inv = 1.0f / std::sqrt(var_data[j] + epsilon);
+            float g_val = gamma_data[j];
+            float dg_val = dgamma_data[j];
+            float db_val = dbeta_data[j];
+
+            float coeff = g_val * std_inv * inv_n;
+
+            for (std::size_t i = 0; i < n; ++i)
+            {
+                std::size_t idx = i * d + j;
+                dx_data[idx] = coeff * (static_cast<float>(n) * dout_data[idx] - db_val - x_hat_data[idx] * dg_val);
+            }
+        }
+
+        return std::make_shared<Cpu_Matrix_Impl>(n, d, std::move(dx_data));
+    }
+
     void uploadData(const std::vector<float> &host_data) override
     {
         if (host_data.size() != data.size())

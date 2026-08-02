@@ -3,6 +3,7 @@
 #include <vector>
 #include <cassert>
 
+#include "batch_norm_layer.h"
 #include "layer.h"
 #include "relu.h"
 #include "softmax.h"
@@ -252,6 +253,21 @@ bool testMaxPool2d(Execution_Target exec_target)
                                   14.0f, 16.0f});
 }
 
+bool testBatchNorm(Execution_Target exec_target)
+{
+    Batch_Norm_Layer bn_layer(1, 1e-5f, 0.1f, exec_target);
+    Matrix input_mat(3, 1, {1.0f, 2.0f, 3.0f}, exec_target);
+
+    Matrix out_mat = bn_layer.forward(input_mat);
+    bool forward_ok = verifyMatrix(out_mat, {-1.2247f, 0.0f, 1.2247f});
+
+    Matrix grad_out(3, 1, {1.0f, 2.0f, 1.0f}, exec_target);
+    Matrix grad_in = bn_layer.backward(grad_out);
+    bool backward_ok = verifyMatrix(grad_in, {-0.4082f, 0.8165f, -0.4082f});
+
+    return forward_ok && backward_ok;
+}
+
 bool testGlobalAvgPool2d(Execution_Target exec_target)
 {
     Matrix input_mat(1, 8, {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f}, exec_target);
@@ -345,7 +361,9 @@ void runTestSuite(Execution_Target exec_target, const std::string &target_name)
     std::cout << "GlobalAvgPool2D Backward: " << (testGlobalAvgPool2dBackward(exec_target) ? "PASS" : "FAIL") << "\n";
 
     std::cout << "Layer Gradient Update: " << (testLayerUpdate(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "Neural Network Pipeline: " << (testNeuralNetworkPipeline(exec_target) ? "PASS" : "FAIL") << "\n\n";
+    std::cout << "Neural Network Pipeline: " << (testNeuralNetworkPipeline(exec_target) ? "PASS" : "FAIL") << "\n";
+
+    std::cout << "BatchNorm Forward & Backward: " << (testBatchNorm(exec_target) ? "PASS" : "FAIL") << "\n\n";
 }
 
 int main()

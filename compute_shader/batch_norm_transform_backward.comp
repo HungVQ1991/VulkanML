@@ -1,0 +1,35 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer DOut { float dout_data[]; };
+layout(std430, binding = 1) readonly buffer XHat { float x_hat[]; };
+layout(std430, binding = 2) readonly buffer Gamma { float gamma_data[]; };
+layout(std430, binding = 3) readonly buffer DGamma { float dgamma_data[]; };
+layout(std430, binding = 4) readonly buffer DBeta { float dbeta_data[]; };
+layout(std430, binding = 5) readonly buffer Var { float var_data[]; };
+layout(std430, binding = 6) writeonly buffer DIn { float dx_data[]; };
+
+layout(push_constant) uniform Constants {
+    uint total_elements;
+    uint batch_size; 
+    uint dim;
+    float epsilon;
+} pcs;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pcs.total_elements) return;
+
+    uint j = idx % pcs.dim;
+    
+    float std_inv = 1.0 / sqrt(var_data[j] + pcs.epsilon);
+    float g_val = gamma_data[j];
+    float dg_val = dgamma_data[j];
+    float db_val = dbeta_data[j];
+    float inv_n = 1.0 / float(pcs.batch_size);
+
+    float coeff = g_val * std_inv * inv_n;
+    
+    dx_data[idx] = coeff * (float(pcs.batch_size) * dout_data[idx] - db_val - x_hat[idx] * dg_val);
+}

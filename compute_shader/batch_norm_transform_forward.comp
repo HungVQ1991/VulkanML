@@ -1,0 +1,28 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer InData { float data[]; };
+layout(std430, binding = 1) readonly buffer Mean { float mean_data[]; };
+layout(std430, binding = 2) readonly buffer Var { float var_data[]; };
+layout(std430, binding = 3) readonly buffer Gamma { float gamma_data[]; };
+layout(std430, binding = 4) readonly buffer Beta { float beta_data[]; };
+layout(std430, binding = 5) writeonly buffer OutData { float out_data[]; };
+layout(std430, binding = 6) writeonly buffer XHat { float x_hat[]; };
+
+layout(push_constant) uniform Constants {
+    uint total_elements;
+    uint dim;
+    float epsilon;
+} pcs;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pcs.total_elements) return;
+
+    uint j = idx % pcs.dim;
+    float norm_val = (data[idx] - mean_data[j]) / sqrt(var_data[j] + pcs.epsilon);
+    
+    x_hat[idx] = norm_val;
+    out_data[idx] = gamma_data[j] * norm_val + beta_data[j];
+}

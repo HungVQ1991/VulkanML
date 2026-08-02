@@ -11,6 +11,8 @@
 
 #include "logger.h"
 
+const bool DEBUG_VALIDATION = false;
+
 constexpr std::uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
 struct Resource_Garbage
@@ -95,12 +97,12 @@ private:
         debug_info.pfnUserCallback = debugCallback;
 
         VkInstanceCreateInfo create_info{.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
-        create_info.pNext = &debug_info;
+        if (DEBUG_VALIDATION) create_info.pNext = &debug_info;
         create_info.pApplicationInfo = &app_info;
-        create_info.enabledLayerCount = 1;
-        create_info.ppEnabledLayerNames = validation_layers;
-        create_info.enabledExtensionCount = 1;
-        create_info.ppEnabledExtensionNames = instance_extensions;
+        create_info.enabledLayerCount = DEBUG_VALIDATION ? 1 : 0;
+        create_info.ppEnabledLayerNames = DEBUG_VALIDATION ? validation_layers : nullptr;
+        create_info.enabledExtensionCount = DEBUG_VALIDATION ? 1 : 0;
+        create_info.ppEnabledExtensionNames = DEBUG_VALIDATION ? instance_extensions : nullptr;
 
         if (vkCreateInstance(&create_info, nullptr, &instance) != VK_SUCCESS)
         {

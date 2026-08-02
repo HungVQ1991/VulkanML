@@ -12,6 +12,8 @@
 #include "magic_enum.hpp"
 #include "logger.h"
 
+const int BINDING_SIZE = 8;
+
 enum Compute_Pipeline
 {
     ADD,
@@ -38,6 +40,10 @@ enum Compute_Pipeline
     MAXPOOL2D_BACKWARD,
     GLOBAL_AVGPOOL_FORWARD,
     GLOBAL_AVGPOOL_BACKWARD,
+    BATCH_NORM_STATS_FORWARD,
+    BATCH_NORM_TRANSFORM_FORWARD,
+    BATCH_NORM_STATS_BACKWARD,
+    BATCH_NORM_TRANSFORM_BACKWARD,
     COMPUTE_PIPELINE_END
 };
 
@@ -176,8 +182,8 @@ public:
             }
         } guard{this};
 
-        VkDescriptorSetLayoutBinding bindings[4]{};
-        for (std::uint32_t i = 0; i < 4; ++i)
+        VkDescriptorSetLayoutBinding bindings[BINDING_SIZE]{};
+        for (std::uint32_t i = 0; i < BINDING_SIZE; ++i)
         {
             bindings[i].binding = i;
             bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -186,7 +192,7 @@ public:
         }
 
         VkDescriptorSetLayoutCreateInfo layout_info{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        layout_info.bindingCount = 4;
+        layout_info.bindingCount = BINDING_SIZE;
         layout_info.pBindings = bindings;
 
         if (vkCreateDescriptorSetLayout(device, &layout_info, nullptr, &descriptor_set_layout) != VK_SUCCESS)

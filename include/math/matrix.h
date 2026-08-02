@@ -181,6 +181,32 @@ public:
     Matrix globalAvgPool2dBackward(std::uint32_t in_h, std::uint32_t in_w, std::uint32_t channels) const
     { return Matrix(pimpl->globalAvgPool2dBackward(in_h, in_w, channels), current_target); }
 
+    Matrix batchNormForward(const Matrix &gamma, const Matrix &beta,
+                            Matrix &running_mean, Matrix &running_var,
+                            Matrix &batch_mean, Matrix &batch_var, Matrix &x_hat,
+                            float epsilon, float momentum, bool is_training) const
+    {
+        auto result_impl = pimpl->batchNormForward(
+            gamma.pimpl, beta.pimpl,
+            running_mean.pimpl, running_var.pimpl,
+            batch_mean.pimpl, batch_var.pimpl, x_hat.pimpl,
+            epsilon, momentum, is_training);
+
+        return Matrix(result_impl, current_target);
+    }
+
+    Matrix batchNormBackward(const Matrix &grad_output, const Matrix &gamma,
+                             const Matrix &batch_var, const Matrix &x_hat,
+                             Matrix &grad_gamma, Matrix &grad_beta,
+                             float epsilon) const
+    {
+        auto dx_impl = pimpl->batchNormBackward(
+            grad_output.pimpl, gamma.pimpl, batch_var.pimpl, x_hat.pimpl,
+            grad_gamma.pimpl, grad_beta.pimpl, epsilon);
+
+        return Matrix(dx_impl, current_target);
+    }
+
     Execution_Target getTarget() const { return current_target; }
     void uploadData(const std::vector<float> &host_data) { pimpl->uploadData(host_data); }
 };

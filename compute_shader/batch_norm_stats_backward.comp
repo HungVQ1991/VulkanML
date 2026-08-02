@@ -1,0 +1,30 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer DOut { float dout_data[]; };
+layout(std430, binding = 1) readonly buffer XHat { float x_hat[]; };
+layout(std430, binding = 2) writeonly buffer DGamma { float dgamma_data[]; };
+layout(std430, binding = 3) writeonly buffer DBeta { float dbeta_data[]; };
+
+layout(push_constant) uniform Constants {
+    uint batch_size;
+    uint dim;
+} pcs;
+
+void main() {
+    uint j = gl_GlobalInvocationID.x;
+    if (j >= pcs.dim) return;
+
+    float dgamma_sum = 0.0;
+    float dbeta_sum = 0.0;
+
+    for (uint i = 0; i < pcs.batch_size; ++i) {
+        float dout = dout_data[i * pcs.dim + j];
+        dgamma_sum += dout * x_hat[i * pcs.dim + j];
+        dbeta_sum += dout;
+    }
+
+    dgamma_data[j] = dgamma_sum;
+    dbeta_data[j] = dbeta_sum;
+}

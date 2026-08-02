@@ -107,4 +107,24 @@ public:
 
     virtual std::shared_ptr<Impl> globalAvgPool2d(std::uint32_t in_h, std::uint32_t in_w, std::uint32_t channels) const = 0;
     virtual std::shared_ptr<Impl> globalAvgPool2dBackward(std::uint32_t in_h, std::uint32_t in_w, std::uint32_t channels) const = 0;
+    virtual std::shared_ptr<Impl> batchNormForward(
+        const std::shared_ptr<Impl> &gamma,
+        const std::shared_ptr<Impl> &beta,
+        std::shared_ptr<Impl> &running_mean,
+        std::shared_ptr<Impl> &running_var,
+        std::shared_ptr<Impl> &batch_mean,
+        std::shared_ptr<Impl> &batch_var,
+        std::shared_ptr<Impl> &x_hat,
+        float epsilon,
+        float momentum,
+        bool is_training) const = 0;
+
+    virtual std::shared_ptr<Impl> batchNormBackward(
+        const std::shared_ptr<Impl> &grad_output,
+        const std::shared_ptr<Impl> &gamma,
+        const std::shared_ptr<Impl> &batch_mean,
+        const std::shared_ptr<Impl> &batch_var,
+        std::shared_ptr<Impl> &grad_gamma,
+        std::shared_ptr<Impl> &grad_beta,
+        float epsilon) const = 0;
 };

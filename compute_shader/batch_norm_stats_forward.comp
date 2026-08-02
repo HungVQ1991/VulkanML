@@ -1,0 +1,38 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer InData { float data[]; };
+layout(std430, binding = 1) writeonly buffer BatchMean { float batch_mean[]; };
+layout(std430, binding = 2) writeonly buffer BatchVar { float batch_var[]; };
+layout(std430, binding = 3) buffer RunningMean { float running_mean[]; };
+layout(std430, binding = 4) buffer RunningVar { float running_var[]; };
+
+layout(push_constant) uniform Constants {
+    uint batch_size;
+    uint dim;
+    float momentum;
+} pcs;
+
+void main() {
+    uint j = gl_GlobalInvocationID.x;
+    if (j >= pcs.dim) return;
+
+    float sum = 0.0;
+    for (uint i = 0; i < pcs.batch_size; ++i) {
+        sum += data[i * pcs.dim + j];
+    }
+    float mean = sum / float(pcs.batch_size);
+    batch_mean[j] = mean;
+
+    float var_sum = 0.0;
+    for (uint i = 0; i < pcs.batch_size; ++i) {
+        float diff = data[i * pcs.dim + j] - mean;
+        var_sum += diff * diff;
+    }
+    float variance = var_sum / float(pcs.batch_size);
+    batch_var[j] = variance;
+
+    running_mean[j] = (1.0 - pcs.momentum) * running_mean[j] + pcs.momentum * mean;
+    running_var[j] = (1.0 - pcs.momentum) * running_var[j] + pcs.momentum * variance;
+}

@@ -7,6 +7,7 @@
 #include <memory>
 #include <cmath>
 
+#include "batch_norm_layer.h"
 #include "neural_network.h"
 #include "layer.h"
 #include "relu.h"
@@ -20,11 +21,9 @@
 #include "globalavgpool2d_layer.h"
 
 constexpr std::size_t INPUT_DIM = 784;
-constexpr std::size_t HIDDEN_DIM_1 = 256;
-constexpr std::size_t HIDDEN_DIM_2 = 128;
 constexpr std::size_t OUTPUT_DIM = 10;
 constexpr std::size_t BATCH_SIZE = 512;
-constexpr std::size_t EPOCHS = 20;
+constexpr std::size_t EPOCHS = 10;
 constexpr float LEARNING_RATE = 0.01f;
 
 uint32_t swapEndian(uint32_t val)
@@ -162,16 +161,20 @@ int main()
 
     Execution_Target target = Execution_Target::VULKAN_GPU;
     Neural_Network nn(target);
+
     nn.addLayer(std::make_unique<Conv2d_Layer>(28, 28, 1, 16, 3, 1, 1, target));
+    nn.addLayer(std::make_unique<Batch_Norm_Layer>(28 * 28 * 16, 1e-5f, 0.1f, target));
     nn.addLayer(std::make_unique<GeLU>(target));
     nn.addLayer(std::make_unique<MaxPool2d_Layer>(28, 28, 16, 2, 2, 0, target));
 
     nn.addLayer(std::make_unique<Conv2d_Layer>(14, 14, 16, 32, 3, 1, 1, target));
+    nn.addLayer(std::make_unique<Batch_Norm_Layer>(14 * 14 * 32, 1e-5f, 0.1f, target));
     nn.addLayer(std::make_unique<GeLU>(target));
 
-    // Classifier (Flatten: 14 * 14 * 32 = 6272)
     nn.addLayer(std::make_unique<Layer>(6272, 128, target));
+    nn.addLayer(std::make_unique<Batch_Norm_Layer>(128, 1e-5f, 0.1f, target));
     nn.addLayer(std::make_unique<GeLU>(target));
+
     nn.addLayer(std::make_unique<Layer>(128, 10, target));
     nn.addLayer(std::make_unique<Softmax>(true, target));
 
