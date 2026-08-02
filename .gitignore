@@ -11,3 +11,4 @@ CMakeLists.txt
 *.py
 cifar_train.cpp
 main.cpp
+include/math/magic_enum.hpp
