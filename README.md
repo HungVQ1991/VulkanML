@@ -20,7 +20,7 @@ Unlike production frameworks that hide implementation details behind large abstr
 | Category                    | Features                                                                                                                                         |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Core**                    | Sequential neural network, Forward propagation, Backpropagation, Topology-aware model serialization (NNA1 format)                                |
-| **Layers**                  | Dense (Fully Connected), Conv2D, MaxPool2D, Batch Normalization (`Batch_Norm_Layer`)                                                             |
+| **Layers**                  | Dense (Fully Connected), Conv2D, MaxPool2D, Batch Normalization                                                                                  |
 | **Activation Functions**    | ReLU, GELU, Softmax                                                                                                                              |
 | **Loss Functions**          | Mean Squared Error (MSE), Categorical Cross Entropy (CCE)                                                                                        |
 | **Optimizers & Schedulers** | Stochastic Gradient Descent (SGD), Learning Rate Schedulers (Cosine Annealing, Step Decay, Multi-Step, Exponential, Polynomial, ReduceOnPlateau) |
