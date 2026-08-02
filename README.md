@@ -171,30 +171,6 @@ This project instead uses Vulkan Compute to
 
 ---
 
-## Repository Structure
-
-```
-include/
-    layers/
-    math/
-    optimizer/
-    loss/<br>
-src/
-    layers/
-    math/
-    optimizer/
-    vulkan/<br>
-shader/
-    matmul.comp
-    activation.comp
-
-examples/<br>
-models/<br>
-dataset/<br>
-```
-
----
-
 ## Building
 
 Requirements
