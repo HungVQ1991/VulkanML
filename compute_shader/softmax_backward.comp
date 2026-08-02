@@ -1,0 +1,45 @@
+#version 450
+
+#define WORKGROUP_SIZE 32
+
+layout(local_size_x = WORKGROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer Output_P { float p_data[]; };
+layout(std430, binding = 1) readonly buffer Grad_In { float grad_in[]; };
+layout(std430, binding = 2) writeonly buffer Grad_Out { float grad_out[]; };
+
+layout(push_constant) uniform Softmax_Dimensions {
+    uint rows;
+    uint cols;
+} dims;
+
+shared float shared_mem[WORKGROUP_SIZE];
+
+void main() {
+    uint row = gl_WorkGroupID.x;
+    uint tid = gl_LocalInvocationID.x;
+
+    if (row >= dims.rows) return;
+    uint offset = row * dims.cols;
+
+    float local_dot = 0.0;
+    for (uint c = tid; c < dims.cols; c += WORKGROUP_SIZE) {
+        local_dot += p_data[offset + c] * grad_in[offset + c];
+    }
+    shared_mem[tid] = local_dot;
+    barrier();
+
+    for (uint stride = WORKGROUP_SIZE / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            shared_mem[tid] += shared_mem[tid + stride];
+        }
+        barrier();
+    }
+    float dot_product = shared_mem[0];
+    barrier();
+
+    for (uint c = tid; c < dims.cols; c += WORKGROUP_SIZE) {
+        float p_val = p_data[offset + c];
+        grad_out[offset + c] = p_val * (grad_in[offset + c] - dot_product);
+    }
+}

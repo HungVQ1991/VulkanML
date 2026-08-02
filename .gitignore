@@ -1,0 +1,12 @@
+output/
+build/
+archive/
+__pycache__/
+.vscode/
+data/
+logs/
+compute_shader/*.spv
+CMakeLists.txt
+*.exe
+*.py
+cifar_train.cpp

@@ -1,0 +1,68 @@
+#pragma once
+
+#include <stdexcept>
+
+#include "ilayer.h"
+#include "math/matrix.h"
+#include "math/logger.h"
+
+class MaxPool2d_Layer : public ILayer
+{
+private:
+    std::uint32_t in_h;
+    std::uint32_t in_w;
+    std::uint32_t channels;
+    std::uint32_t out_h;
+    std::uint32_t out_w;
+    std::uint32_t kernel_size;
+    std::uint32_t stride;
+    std::uint32_t padding;
+
+    Matrix inputs;
+    Matrix outputs;
+    Matrix mask;
+
+    bool has_forward;
+    Execution_Target target;
+
+public:
+    MaxPool2d_Layer(std::uint32_t h, std::uint32_t w, std::uint32_t c, std::uint32_t k, std::uint32_t s, std::uint32_t p, Execution_Target exec_target = Execution_Target::CPU)
+        : in_h(h), in_w(w), channels(c), kernel_size(k), stride(s), padding(p), target(exec_target), has_forward(false)
+    {
+        out_h = (in_h + 2 * padding - kernel_size) / stride + 1;
+        out_w = (in_w + 2 * padding - kernel_size) / stride + 1;
+    }
+
+    ~MaxPool2d_Layer() override = default;
+
+    Matrix forward(const Matrix &input_matrix) override
+    {
+        inputs = input_matrix;
+        auto result = inputs.maxpool2d(in_h, in_w, channels, kernel_size, stride, padding);
+        outputs = result.first;
+        mask = result.second;
+        has_forward = true;
+        return outputs;
+    }
+
+    Matrix backward(const Matrix &gradient_output) override
+    {
+        if (!has_forward)
+        {
+            Logger::logMessage("MaxPool2d_Layer::backward: Backward called before forward", LOG_ERROR);
+            throw std::logic_error("Backward called before forward");
+        }
+
+        return gradient_output.maxpool2dBackward(mask, in_h, in_w, channels, out_h, out_w, kernel_size, stride, padding);
+    }
+
+    void update(float, float = 1.0f) override {}
+
+    void resetGradient() override
+    {
+        inputs = Matrix(0, 0, target);
+        outputs = Matrix(0, 0, target);
+        mask = Matrix(0, 0, target);
+        has_forward = false;
+    }
+};

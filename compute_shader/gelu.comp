@@ -1,0 +1,19 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer Input_Buffer { float input_data[]; };
+layout(set = 0, binding = 1) writeonly buffer Output_Buffer { float output_data[]; };
+
+layout(push_constant) uniform Push_Constants { uint num_elements; };
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= num_elements) return;
+
+    float x = input_data[idx];
+    float k = 0.79788456f;
+    float y = k * (x + 0.044715f * x * x * x);
+    
+    output_data[idx] = 0.5f * x * (1.0f + tanh(y));
+}

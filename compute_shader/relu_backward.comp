@@ -1,0 +1,26 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer Forward_Input_Buffer { float forward_input[]; };
+layout(set = 0, binding = 1) readonly buffer Grad_Output_Buffer { float grad_output[]; };
+layout(set = 0, binding = 2) writeonly buffer Grad_Input_Buffer { float grad_input[]; };
+
+layout(push_constant) uniform Push_Constants { uint num_elements; };
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= num_elements) return;
+
+    float x = forward_input[idx];
+    float grad = grad_output[idx];
+
+    float k = 0.79788456f;
+    float y = k * (x + 0.044715f * x * x * x);
+    float tanh_y = tanh(y);
+
+    float cdf = 0.5f * (1.0f + tanh_y);
+    float pdf = 0.5f * x * (1.0f - tanh_y * tanh_y) * k * (1.0f + 0.134145f * x * x);
+
+    grad_input[idx] = grad * (cdf + pdf);
+}

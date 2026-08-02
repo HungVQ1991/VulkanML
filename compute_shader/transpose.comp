@@ -1,0 +1,37 @@
+#version 450
+
+#define TILE_SIZE 16
+
+layout(local_size_x = TILE_SIZE, local_size_y = TILE_SIZE, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer Buffer_A { float data_a[]; };
+layout(std430, binding = 1) writeonly buffer Buffer_C { float data_c[]; };
+
+layout(push_constant) uniform Transpose_Dimensions {
+    uint rows;
+    uint cols;
+} dims;
+
+shared float tile[TILE_SIZE][TILE_SIZE + 1];
+
+void main() {
+    // 1. Tọa độ của luồng trên ma trận gốc (Input)
+    uint in_col = gl_GlobalInvocationID.x;
+    uint in_row = gl_GlobalInvocationID.y;
+
+    uint local_col = gl_LocalInvocationID.x;
+    uint local_row = gl_LocalInvocationID.y;
+
+    if (in_row < dims.rows && in_col < dims.cols) {
+        tile[local_row][local_col] = data_a[in_row * dims.cols + in_col];
+    }
+
+    barrier();
+
+    uint out_col = gl_WorkGroupID.y * TILE_SIZE + local_col;
+    uint out_row = gl_WorkGroupID.x * TILE_SIZE + local_row;
+
+    if (out_row < dims.cols && out_col < dims.rows) {
+        data_c[out_row * dims.rows + out_col] = tile[local_col][local_row];
+    }
+} 

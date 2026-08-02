@@ -1,0 +1,59 @@
+#version 450
+
+#define TILE_SIZE 16
+
+layout(local_size_x = TILE_SIZE, local_size_y = TILE_SIZE, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer Matrix_X { float data_x[]; };
+layout(std430, binding = 1) readonly buffer Matrix_W { float data_w[]; };
+layout(std430, binding = 2) readonly buffer Matrix_B { float data_b[]; };
+layout(std430, binding = 3) writeonly buffer Matrix_Y { float data_y[]; };
+
+layout(push_constant) uniform Push_Constants {
+    uint rows_x;
+    uint cols_x;
+    uint cols_w;
+    uint pad;
+} dims;
+
+shared float tile_x[TILE_SIZE][TILE_SIZE];
+shared float tile_w[TILE_SIZE][TILE_SIZE];
+
+void main() {
+    uint row = gl_GlobalInvocationID.y;
+    uint col = gl_GlobalInvocationID.x;
+    uint local_row = gl_LocalInvocationID.y;
+    uint local_col = gl_LocalInvocationID.x;
+
+    float sum = 0.0;
+    uint num_tiles = (dims.cols_x + TILE_SIZE - 1) / TILE_SIZE;
+
+    for (uint t = 0; t < num_tiles; ++t) {
+        uint tiled_col_x = t * TILE_SIZE + local_col;
+        if (row < dims.rows_x && tiled_col_x < dims.cols_x) {
+            tile_x[local_row][local_col] = data_x[row * dims.cols_x + tiled_col_x];
+        } else {
+            tile_x[local_row][local_col] = 0.0;
+        }
+
+        uint tiled_row_w = t * TILE_SIZE + local_row;
+        if (tiled_row_w < dims.cols_x && col < dims.cols_w) {
+            tile_w[local_row][local_col] = data_w[tiled_row_w * dims.cols_w + col];
+        } else {
+            tile_w[local_row][local_col] = 0.0;
+        }
+
+        barrier();
+
+        #pragma unroll
+        for (uint k = 0; k < TILE_SIZE; ++k) {
+            sum += tile_x[local_row][k] * tile_w[k][local_col];
+        }
+
+        barrier();
+    }
+
+    if (row < dims.rows_x && col < dims.cols_w) {
+        data_y[row * dims.cols_w + col] = sum + data_b[col];
+    }
+}

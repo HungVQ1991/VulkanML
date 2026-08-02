@@ -1,0 +1,38 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) readonly buffer Input_Buffer { float input_data[]; };
+layout(set = 0, binding = 1) writeonly buffer Output_Buffer { float output_data[]; };
+
+layout(push_constant) uniform Push_Constants {
+    uint batch_size;
+    uint in_h;
+    uint in_w;
+    uint channels;
+} params;
+
+void main() {
+    uint c_idx = gl_GlobalInvocationID.x;
+    uint n_idx = gl_GlobalInvocationID.y;
+
+    if (c_idx >= params.channels || n_idx >= params.batch_size) {
+        return;
+    }
+
+    float sum = 0.0;
+    
+    for (uint h = 0; h < params.in_h; h++) {
+        for (uint w = 0; w < params.in_w; w++) {
+            uint in_idx = n_idx * params.in_h * params.in_w * params.channels +
+                          h * params.in_w * params.channels +
+                          w * params.channels +
+                          c_idx;
+            
+            sum += input_data[in_idx];
+        }
+    }
+
+    uint out_idx = n_idx * params.channels + c_idx;
+    output_data[out_idx] = sum / float(params.in_h * params.in_w);
+}

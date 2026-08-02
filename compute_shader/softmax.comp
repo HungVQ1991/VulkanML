@@ -1,0 +1,62 @@
+#version 450
+
+#define WORKGROUP_SIZE 32
+
+layout(local_size_x = WORKGROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer Input_Buffer { float in_data[]; };
+layout(std430, binding = 1) writeonly buffer Output_Buffer { float out_data[]; };
+
+layout(push_constant) uniform Softmax_Dimensions {
+    uint rows;
+    uint cols;
+} dims;
+
+shared float shared_mem[WORKGROUP_SIZE];
+
+void main() {
+    uint row = gl_WorkGroupID.x;
+    uint tid = gl_LocalInvocationID.x;
+
+    if (row >= dims.rows) return;
+    uint offset = row * dims.cols;
+
+    float local_max = -3.402823466e+38;
+    for (uint c = tid; c < dims.cols; c += WORKGROUP_SIZE) {
+        local_max = max(local_max, in_data[offset + c]);
+    }
+    shared_mem[tid] = local_max;
+    barrier();
+
+    for (uint stride = WORKGROUP_SIZE / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            shared_mem[tid] = max(shared_mem[tid], shared_mem[tid + stride]);
+        }
+        barrier();
+    }
+    float row_max = shared_mem[0];
+    barrier();
+
+    float local_sum = 0.0;
+    for (uint c = tid; c < dims.cols; c += WORKGROUP_SIZE) {
+        float exp_val = exp(in_data[offset + c] - row_max);
+        out_data[offset + c] = exp_val;
+        local_sum += exp_val;
+    }
+    shared_mem[tid] = local_sum;
+    barrier();
+
+    for (uint stride = WORKGROUP_SIZE / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            shared_mem[tid] += shared_mem[tid + stride];
+        }
+        barrier();
+    }
+    float row_sum = shared_mem[0];
+    barrier();
+
+    float inv_sum = 1.0 / row_sum;
+    for (uint c = tid; c < dims.cols; c += WORKGROUP_SIZE) {
+        out_data[offset + c] *= inv_sum;
+    }
+}

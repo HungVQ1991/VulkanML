@@ -1,0 +1,23 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer Input_Buffer {
+    float input_data[];
+};
+
+layout(std430, set = 0, binding = 1) writeonly buffer Output_Buffer {
+    float output_data[];
+};
+
+layout(push_constant) uniform Push_Constants {
+    uint total_elements;
+    float scalar;
+} push_constants;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx < push_constants.total_elements) {
+        output_data[idx] = input_data[idx] * push_constants.scalar;
+    }
+}
