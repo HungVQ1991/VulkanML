@@ -77,7 +77,7 @@ Configuration
 
 | Item         | Value                 |
 | ------------ | -----------------     |
-| Architecture | 784 → 256 -> 128 → 10 |
+| Architecture | 784 → 256 → 128 → 10 |
 | Activation   | ReLU                  |
 | Loss         | Cross Entropy         |
 | Optimizer    | SGD                   |
