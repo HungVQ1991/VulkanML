@@ -9,6 +9,7 @@
 #include <utility>
 #include <windows.h>
 
+#include "learning_rate.h"
 #include "ilayer.h"
 #include "cost_function.h"
 #include "math/execution_engine.h"

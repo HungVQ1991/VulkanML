@@ -1,6 +1,7 @@
 #pragma once
 
 #include "math/matrix.h"
+#include "learning_rate.h"
 
 class ILayer
 {

@@ -9,6 +9,7 @@
 #include "softmax.h"
 #include "cost_function.h"
 #include "neural_network.h"
+#include "learning_rate.h"
 #include "math/matrix.h"
 
 bool nearlyEqual(float a, float b, float eps = 1e-4f)
@@ -332,6 +333,101 @@ bool testGlobalAvgPool2dBackward(Execution_Target exec_target)
                                   1.0f, 2.0f});
 }
 
+bool testLearningRate()
+{
+    Learning_Rate lr_no_decay(0.01f, Decay_Mode::NO_DECAY);
+    for (int epoch = 0; epoch < 5; ++epoch)
+    {
+        if (!nearlyEqual(lr_no_decay.getCurrentRate(), 0.01f))
+        {
+            return false;
+        }
+        lr_no_decay.step();
+    }
+
+    Learning_Rate lr_step(0.01f, Decay_Mode::STEP_DECAY, 0.1f, 5);
+    if (!nearlyEqual(lr_step.getCurrentRate(), 0.01f))
+    {
+        return false;
+    }
+    for (int epoch = 0; epoch < 5; ++epoch)
+    {
+        lr_step.step();
+    }
+    if (!nearlyEqual(lr_step.getCurrentRate(), 0.001f))
+    {
+        return false;
+    }
+
+    Learning_Rate lr_multi(0.01f, Decay_Mode::MULTI_STEP_DECAY, 0.1f, std::vector<float>{3.0f, 7.0f});
+    if (!nearlyEqual(lr_multi.getCurrentRate(), 0.01f))
+    {
+        return false;
+    }
+    for (int epoch = 0; epoch < 3; ++epoch)
+    {
+        lr_multi.step();
+    }
+    if (!nearlyEqual(lr_multi.getCurrentRate(), 0.001f))
+    {
+        return false;
+    }
+
+    Learning_Rate lr_exp(0.1f, Decay_Mode::EXPONENTIAL_DECAY, 0.9f);
+    if (!nearlyEqual(lr_exp.getCurrentRate(), 0.1f))
+    {
+        return false;
+    }
+    lr_exp.step();
+    if (!nearlyEqual(lr_exp.getCurrentRate(), 0.09f))
+    {
+        return false;
+    }
+
+    Learning_Rate lr_cos(0.1f, Decay_Mode::COSINE_ANNEALING, 0.1f, 10, 10, 0.0f);
+    if (!nearlyEqual(lr_cos.getCurrentRate(), 0.1f))
+    {
+        return false;
+    }
+    for (int epoch = 0; epoch < 5; ++epoch)
+    {
+        lr_cos.step();
+    }
+    if (!nearlyEqual(lr_cos.getCurrentRate(), 0.05f))
+    {
+        return false;
+    }
+
+    Learning_Rate lr_poly(0.1f, Decay_Mode::POLYNOMIAL_DECAY, 0.1f, 10, 10, 0.0f);
+    if (!nearlyEqual(lr_poly.getCurrentRate(), 0.1f))
+    {
+        return false;
+    }
+    for (int epoch = 0; epoch < 5; ++epoch)
+    {
+        lr_poly.step();
+    }
+    if (!nearlyEqual(lr_poly.getCurrentRate(), 0.05f))
+    {
+        return false;
+    }
+
+    Learning_Rate lr_plateau(0.01f, Decay_Mode::REDUCE_ON_PLATEAU, 0.5f, 3, 1e-5f, true);
+    lr_plateau.step(50.0f);
+    lr_plateau.step(50.0f);
+    lr_plateau.step(50.0f);
+    if (!nearlyEqual(lr_plateau.getCurrentRate(), 0.01f))
+    {
+        return false;
+    }
+    lr_plateau.step(50.0f);
+    if (!nearlyEqual(lr_plateau.getCurrentRate(), 0.005f))
+    {
+        return false;
+    }
+    return true;
+}
+
 void runTestSuite(Execution_Target exec_target, const std::string &target_name)
 {
     std::cout << "--- Running Tests on " << target_name << " ---\n";
@@ -363,13 +459,13 @@ void runTestSuite(Execution_Target exec_target, const std::string &target_name)
     std::cout << "Layer Gradient Update: " << (testLayerUpdate(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "Neural Network Pipeline: " << (testNeuralNetworkPipeline(exec_target) ? "PASS" : "FAIL") << "\n";
 
-    std::cout << "BatchNorm Forward & Backward: " << (testBatchNorm(exec_target) ? "PASS" : "FAIL") << "\n\n";
+    std::cout << "BatchNorm Forward & Backward: " << (testBatchNorm(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "Learning Rate Scheduler: " << (testLearningRate() ? "PASS" : "FAIL") << "\n\n";
 }
 
 int main()
 {
     runTestSuite(Execution_Target::VULKAN_GPU, "GPU");
     runTestSuite(Execution_Target::CPU, "CPU");
-    std::cout << "Hello";
     return 0;
 }

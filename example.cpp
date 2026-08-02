@@ -6,7 +6,10 @@
 #include <string>
 #include <memory>
 #include <cmath>
+#include <random>
+#include <format>
 
+#include "learning_rate.h"
 #include "batch_norm_layer.h"
 #include "neural_network.h"
 #include "layer.h"
@@ -22,13 +25,40 @@
 
 constexpr std::size_t INPUT_DIM = 784;
 constexpr std::size_t OUTPUT_DIM = 10;
-constexpr std::size_t BATCH_SIZE = 512;
-constexpr std::size_t EPOCHS = 10;
-constexpr float LEARNING_RATE = 0.01f;
+constexpr std::size_t BATCH_SIZE = 128;
+constexpr std::size_t EPOCHS = 30;
 
 uint32_t swapEndian(uint32_t val)
 {
     return (val << 24) | ((val << 8) & 0x00FF0000) | ((val >> 8) & 0x0000FF00) | (val >> 24);
+}
+
+void augmentMnistImage(const float *src_ptr, float *dst_ptr, std::mt19937 &rng)
+{
+    std::uniform_int_distribution<int> crop_dist(0, 4);
+
+    int crop_x = crop_dist(rng);
+    int crop_y = crop_dist(rng);
+
+    for (int y = 0; y < 28; ++y)
+    {
+        int orig_y = y + crop_y - 2;
+        for (int x = 0; x < 28; ++x)
+        {
+            int orig_x = x + crop_x - 2;
+            std::size_t dst_idx = y * 28 + x;
+
+            if (orig_y >= 0 && orig_y < 28 && orig_x >= 0 && orig_x < 28)
+            {
+                std::size_t src_idx = orig_y * 28 + orig_x;
+                dst_ptr[dst_idx] = src_ptr[src_idx];
+            }
+            else
+            {
+                dst_ptr[dst_idx] = 0.0f;
+            }
+        }
+    }
 }
 
 void loadMnistImages(const std::string &file_path, std::vector<float> &images_data, uint32_t &num_images)
@@ -110,7 +140,9 @@ double runBenchmark(Execution_Target target,
                     const std::vector<float> &images_data,
                     const std::vector<float> &labels_data,
                     uint32_t num_images,
-                    Neural_Network &nn, const ICostFunction &cost_function)
+                    Neural_Network &nn,
+                    const ICostFunction &cost_function,
+                    Learning_Rate learning_rate)
 {
     std::size_t num_batches = num_images / BATCH_SIZE;
 
@@ -120,18 +152,27 @@ double runBenchmark(Execution_Target target,
     std::vector<float> batch_x(BATCH_SIZE * INPUT_DIM);
     std::vector<float> batch_y(BATCH_SIZE * OUTPUT_DIM);
 
+    std::random_device rd;
+    std::mt19937 rng(rd());
+
     auto start_time = std::chrono::high_resolution_clock::now();
 
     for (std::size_t epoch = 0; epoch < EPOCHS; ++epoch)
     {
+        float current_rate = learning_rate.getCurrentRate();
+        Logger::logMessage(std::format("Epoch {}: Current LR = {:.6f}", epoch, current_rate), LOG_INFO, true);
+
         for (std::size_t b = 0; b < num_batches; ++b)
         {
             std::size_t offset_x = b * BATCH_SIZE * INPUT_DIM;
             std::size_t offset_y = b * BATCH_SIZE * OUTPUT_DIM;
 
-            std::copy(images_data.begin() + offset_x,
-                      images_data.begin() + offset_x + (BATCH_SIZE * INPUT_DIM),
-                      batch_x.begin());
+            for (std::size_t i = 0; i < BATCH_SIZE; ++i)
+            {
+                augmentMnistImage(images_data.data() + offset_x + i * INPUT_DIM,
+                                  batch_x.data() + i * INPUT_DIM,
+                                  rng);
+            }
 
             std::copy(labels_data.begin() + offset_y,
                       labels_data.begin() + offset_y + (BATCH_SIZE * OUTPUT_DIM),
@@ -140,8 +181,9 @@ double runBenchmark(Execution_Target target,
             input_mat.uploadData(batch_x);
             target_mat.uploadData(batch_y);
 
-            nn.trainStep(input_mat, target_mat, cost_function, LEARNING_RATE, 1.0f);
+            nn.trainStep(input_mat, target_mat, cost_function, current_rate, 1.0f);
         }
+        learning_rate.step();
     }
 
     auto end_time = std::chrono::high_resolution_clock::now();
@@ -152,14 +194,14 @@ double runBenchmark(Execution_Target target,
 
 int main()
 {
-    const float GAIN = 2.0f;
+    Learning_Rate learning_rate(0.015f, Decay_Mode::COSINE_ANNEALING, 0.1f, 10, static_cast<int>(EPOCHS), 1e-4f);
     std::vector<float> images_data;
     std::vector<float> labels_data;
     uint32_t num_images = 0;
     loadMnistImages("data/train-images.idx3-ubyte", images_data, num_images);
     loadMnistLabels("data/train-labels.idx1-ubyte", labels_data, num_images);
 
-    Execution_Target target = Execution_Target::VULKAN_GPU;
+    Execution_Target target = Execution_Target::CPU;
     Neural_Network nn(target);
 
     nn.addLayer(std::make_unique<Conv2d_Layer>(28, 28, 1, 16, 3, 1, 1, target));
@@ -178,8 +220,8 @@ int main()
     nn.addLayer(std::make_unique<Layer>(128, 10, target));
     nn.addLayer(std::make_unique<Softmax>(true, target));
 
-    Logger::logMessage("Starting training benchmark...", LOG_INFO, true);
-    double duration = runBenchmark(target, images_data, labels_data, num_images, nn, CCE_Cost());
+    Logger::logMessage("Starting training benchmark with Data Augmentation...", LOG_INFO, true);
+    double duration = runBenchmark(target, images_data, labels_data, num_images, nn, CCE_Cost(), learning_rate);
     Logger::logMessage("Training completed in " + std::to_string(duration / 1000) + " s", LOG_INFO, true);
 
     nn.saveModel("output/model_weights.bin");

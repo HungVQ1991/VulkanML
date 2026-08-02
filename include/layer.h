@@ -8,6 +8,7 @@
 #include <utility>
 #include <algorithm>
 
+#include "learning_rate.h"
 #include "ilayer.h"
 #include "math/matrix.h"
 #include "math/logger.h"
