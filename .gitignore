@@ -10,3 +10,4 @@ CMakeLists.txt
 *.exe
 *.py
 cifar_train.cpp
+main.cpp

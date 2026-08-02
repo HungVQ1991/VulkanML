@@ -9,26 +9,12 @@
 #include <utility>
 #include <windows.h>
 
-#include "renderdoc_app.h"
 #include "ilayer.h"
 #include "cost_function.h"
 #include "math/execution_engine.h"
 #include "math/matrix.h"
 #include "math/logger.h"
 
-RENDERDOC_API_1_1_2 *rdoc_api = nullptr;
-
-void initRenderDocAPI()
-{
-    HMODULE mod = GetModuleHandleA("renderdoc.dll");
-    if (mod)
-    {
-        pRENDERDOC_GetAPI RENDERDOC_GetAPI = (pRENDERDOC_GetAPI)GetProcAddress(mod, "RENDERDOC_GetAPI");
-        int ret = RENDERDOC_GetAPI(eRENDERDOC_API_Version_1_1_2, (void **)&rdoc_api);
-        if (ret != 1)
-            rdoc_api = nullptr;
-    }
-}
 
 class Neural_Network
 {
