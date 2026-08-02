@@ -17,41 +17,18 @@ Unlike production frameworks that hide implementation details behind large abstr
 
 ## Features
 
-### Neural Network Components
+| Category                 | Features                                                                                   |
+| ------------------------ | ------------------------------------------------------------------------------------------ |
+| **Core**                 | Sequential neural network, Forward propagation, Backpropagation, Model serialization       |
+| **Layers**               | Dense (Fully Connected), Conv2D, MaxPool2D                                                 |
+| **Activation Functions** | ReLU, GELU, Softmax                                                                        |
+| **Loss Functions**       | Mean Squared Error (MSE), Cross Entropy                                                    |
+| **Optimizers**           | Stochastic Gradient Descent (SGD)                                                          |
+| **Math Library**         | Custom Matrix implementation, Matrix multiplication, Broadcasting, Element-wise operations |
+| **Execution Backends**   | CPU backend, Vulkan Compute backend, Unified execution interface                           |
+| **GPU Computing**        | Vulkan Compute Shaders, GPU memory abstraction, Compute pipeline execution                 |
+| **Utilities**            | Logging system, Binary model format                                                        |
 
-* Fully-connected (Dense) layer
-* GELU activation
-* ReLU activation
-* Softmax activation
-* Mean Squared Error (MSE)
-* Cross Entropy Loss
-* SGD optimizer
-* Forward propagation
-* Backpropagation
-* Model serialization/deserialization
-
-### Execution Backends
-
-* CPU backend
-* Vulkan Compute backend
-* Unified execution interface
-
-### Math Library
-
-* Custom Matrix implementation
-* Matrix multiplication
-* Broadcasting
-* Element-wise operators
-* Activation kernels
-* GPU memory abstraction
-
-### Utilities
-
-* Logging system
-* Binary model format
-* MNIST dataset loader
-* Evaluation utilities
-* Confusion matrix generation
 
 ---
 
@@ -92,26 +69,53 @@ model.train(images, labels);
 
 ---
 
-## Current Performance
+## Benchmarks
 
 ### MNIST
 
 Configuration
 
-* Architecture: 784 → Hidden → 10
-* Activation: GELU
-* Loss: Cross Entropy
-* Optimizer: SGD
-* Backend: Vulkan Compute
-* Epochs: 10
+| Item         | Value                 |
+| ------------ | -----------------     |
+| Architecture | 784 → 256 -> 128 → 10 |
+| Activation   | GELU                  |
+| Loss         | Cross Entropy         |
+| Optimizer    | SGD                   |
+| Backend      | Vulkan Compute        |
+| Epochs       | 10                    |
 
 Results
 
-| Metric        |                Value |
-| ------------- | -------------------: |
-| Accuracy      |                 ~98% |
-| Training Time |          ~20 seconds |
-| Hardware      | AMD Radeon 860M iGPU |
+| Metric        |                    Value |
+| ------------- | -----------------------: |
+| Accuracy      |                 **~98%** |
+| Training Time |                **~20 s** |
+| Hardware      | **AMD Radeon 860M iGPU** |
+
+---
+
+### CIFAR-100
+
+Configuration
+
+| Item         | Value                                                                                              |
+| ------------ | -------------------------------------------------------------------------------------------------- |
+| Architecture | Conv(3→32) → MaxPool → Conv(32→64) → MaxPool → Conv(64→128) → MaxPool → FC(2048→512) → FC(512→100) |
+| Activation   | GELU                                                                                               |
+| Loss         | Cross Entropy                                                                                      |
+| Optimizer    | SGD                                                                                                |
+| Backend      | Vulkan Compute                                                                                     |
+| Epochs       | 10                                                                                                 |
+
+Results
+
+| Metric              |                    Value |
+| ------------------- | -----------------------: |
+| Validation Accuracy |               **34.61%** |
+| Training Time       |           **6 min 32 s** |
+| Classes             |                      100 |
+| Hardware            | **AMD Radeon 860M iGPU** |
+
 
 ---
 
@@ -174,23 +178,19 @@ include/
     layers/
     math/
     optimizer/
-    loss/
-
+    loss/<br>
 src/
     layers/
     math/
     optimizer/
-    vulkan/
-
+    vulkan/<br>
 shader/
     matmul.comp
     activation.comp
 
-examples/
-
-models/
-
-dataset/
+examples/<br>
+models/<br>
+dataset/<br>
 ```
 
 ---
