@@ -43,13 +43,7 @@ public:
         : last_prediction(0, 0, exec_target),
           target(exec_target),
           persistent_input(0, 0, exec_target),
-          persistent_target(0, 0, exec_target)
-    {
-        if (target == Execution_Target::VULKAN_GPU)
-        {
-            initRenderDocAPI();
-        }
-    }
+          persistent_target(0, 0, exec_target) {}
 
     ~Neural_Network()
     {
