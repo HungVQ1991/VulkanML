@@ -31,6 +31,7 @@ enum Compute_Pipeline
     GELU,
     GELU_BACKWARD,
     SGD_UPDATE,
+    ADAM_UPDATE,
     SOFTMAX,
     SOFTMAX_BACKWARD,
     CONV2D_FORWARD_PASS,

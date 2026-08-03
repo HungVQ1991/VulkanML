@@ -466,6 +466,48 @@ public:
         }
     }
 
+    void adamUpdate(
+        const std::shared_ptr<Impl> &grad_impl,
+        const std::shared_ptr<Impl> &m_impl,
+        const std::shared_ptr<Impl> &v_impl,
+        float learning_rate,
+        float beta1,
+        float beta2,
+        float epsilon,
+        std::size_t timestep,
+        float max_gradient = 1.0f) override
+    {
+        validateSameDimensions(*grad_impl);
+        validateSameDimensions(*m_impl);
+        validateSameDimensions(*v_impl);
+
+        auto grad_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(grad_impl);
+        auto m_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(m_impl);
+        auto v_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(v_impl);
+
+        const std::vector<float> &grad_data = grad_cpu->getData();
+        std::vector<float> &m_data = m_cpu->data;
+        std::vector<float> &v_data = v_cpu->data;
+
+        std::size_t total_elements = data.size();
+
+        float correction1 = 1.0f - std::pow(beta1, static_cast<float>(timestep));
+        float correction2 = 1.0f - std::pow(beta2, static_cast<float>(timestep));
+
+        for (std::size_t i = 0; i < total_elements; ++i)
+        {
+            float g = (max_gradient > 0.0f) ? std::clamp(grad_data[i], -max_gradient, max_gradient) : grad_data[i];
+
+            m_data[i] = beta1 * m_data[i] + (1.0f - beta1) * g;
+            v_data[i] = beta2 * v_data[i] + (1.0f - beta2) * (g * g);
+
+            float m_hat = m_data[i] / correction1;
+            float v_hat = v_data[i] / correction2;
+
+            data[i] -= learning_rate * (m_hat / (std::sqrt(v_hat) + epsilon));
+        }
+    }
+
     std::shared_ptr<Impl> matmulAdd(const std::shared_ptr<Impl> &other, const std::shared_ptr<Impl> &bias) const override
     {
         validateMatmulDimensions(*other);

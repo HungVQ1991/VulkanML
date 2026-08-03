@@ -5,6 +5,8 @@
 #include "math/logger.h"
 #include "math/execution_engine.h"
 
+#include <fstream>
+
 class GeLU : public ILayer
 {
 private:
@@ -50,6 +52,10 @@ public:
         outputs = Matrix(0, 0, target);
         has_forward = false;
     }
+    
+    Layer_Type getLayerType() const override { return Layer_Type::GELU; }
+    void saveConfig(std::ofstream &out_file) const override {}
+    void saveState(std::ofstream &out_file) const override {}
+    void loadState(std::ifstream &in_file) override {}
 
-    void update(float, float = 1.0f) override {}
 };

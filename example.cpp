@@ -9,6 +9,7 @@
 #include <random>
 #include <format>
 
+#include "optimizer.h"
 #include "learning_rate.h"
 #include "batch_norm_layer.h"
 #include "neural_network.h"
@@ -25,8 +26,8 @@
 
 constexpr std::size_t INPUT_DIM = 784;
 constexpr std::size_t OUTPUT_DIM = 10;
-constexpr std::size_t BATCH_SIZE = 128;
-constexpr std::size_t EPOCHS = 30;
+constexpr std::size_t BATCH_SIZE = 512;
+constexpr std::size_t EPOCHS = 20;
 
 uint32_t swapEndian(uint32_t val)
 {
@@ -142,7 +143,8 @@ double runBenchmark(Execution_Target target,
                     uint32_t num_images,
                     Neural_Network &nn,
                     const ICostFunction &cost_function,
-                    Learning_Rate learning_rate)
+                    Learning_Rate learning_rate,
+                    IOptimizer &optimizer)
 {
     std::size_t num_batches = num_images / BATCH_SIZE;
 
@@ -180,8 +182,7 @@ double runBenchmark(Execution_Target target,
 
             input_mat.uploadData(batch_x);
             target_mat.uploadData(batch_y);
-
-            nn.trainStep(input_mat, target_mat, cost_function, current_rate, 1.0f);
+            nn.trainStep(input_mat, target_mat, cost_function, current_rate, optimizer, 1.0f);
         }
         learning_rate.step();
     }
@@ -192,16 +193,18 @@ double runBenchmark(Execution_Target target,
     return duration.count();
 }
 
+
 int main()
 {
-    Learning_Rate learning_rate(0.015f, Decay_Mode::COSINE_ANNEALING, 0.1f, 10, static_cast<int>(EPOCHS), 1e-4f);
+    Learning_Rate learning_rate(0.001f, Decay_Mode::COSINE_ANNEALING, 0.1f, 10, static_cast<int>(EPOCHS), 1e-4f);
+    Adam_Optimizer optimizer(learning_rate, 0.9, 0.999, 1e-8, 1.0f);
     std::vector<float> images_data;
     std::vector<float> labels_data;
     uint32_t num_images = 0;
     loadMnistImages("data/train-images.idx3-ubyte", images_data, num_images);
     loadMnistLabels("data/train-labels.idx1-ubyte", labels_data, num_images);
 
-    Execution_Target target = Execution_Target::CPU;
+    Execution_Target target = Execution_Target::VULKAN_GPU;
     Neural_Network nn(target);
 
     nn.addLayer(std::make_unique<Conv2d_Layer>(28, 28, 1, 16, 3, 1, 1, target));
@@ -221,7 +224,7 @@ int main()
     nn.addLayer(std::make_unique<Softmax>(true, target));
 
     Logger::logMessage("Starting training benchmark with Data Augmentation...", LOG_INFO, true);
-    double duration = runBenchmark(target, images_data, labels_data, num_images, nn, CCE_Cost(), learning_rate);
+    double duration = runBenchmark(target, images_data, labels_data, num_images, nn, CCE_Cost(), learning_rate, optimizer);
     Logger::logMessage("Training completed in " + std::to_string(duration / 1000) + " s", LOG_INFO, true);
 
     nn.saveModel("output/model_weights.bin");

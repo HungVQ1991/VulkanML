@@ -70,6 +70,16 @@ public:
     virtual std::shared_ptr<Impl> softmax() const = 0;
     virtual std::shared_ptr<Impl> softmaxBackward(const std::shared_ptr<Impl> &gradient) const = 0;
     virtual void sgdUpdate(const std::shared_ptr<Impl> &grad_impl, float learning_rate, float max_gradient = 0.0f) = 0;
+    virtual void adamUpdate(
+        const std::shared_ptr<Impl> &grad_impl,
+        const std::shared_ptr<Impl> &m_impl,
+        const std::shared_ptr<Impl> &v_impl,
+        float learning_rate,
+        float beta1,
+        float beta2,
+        float epsilon,
+        std::size_t timestep,
+        float max_gradient = 1.0f) = 0;
     virtual std::shared_ptr<Impl> matmulAdd(const std::shared_ptr<Impl> &other, const std::shared_ptr<Impl> &bias) const = 0;
     virtual std::shared_ptr<Impl> matmulTransA(const std::shared_ptr<Impl> &other) const = 0;
     virtual std::shared_ptr<Impl> matmulTransB(const std::shared_ptr<Impl> &other) const = 0;

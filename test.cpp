@@ -3,6 +3,7 @@
 #include <vector>
 #include <cassert>
 
+#include "optimizer.h"
 #include "batch_norm_layer.h"
 #include "layer.h"
 #include "relu.h"
@@ -145,26 +146,6 @@ bool testNormalizeAndActivations(Execution_Target exec_target)
     return norm_ok && relu_ok && softmax_ok;
 }
 
-bool testLayerUpdate(Execution_Target exec_target)
-{
-    Layer layer_inst(2, 2, exec_target);
-
-    layer_inst.setWeights(Matrix(2, 2, {1.0f, 2.0f, 3.0f, 4.0f}, exec_target));
-    layer_inst.setBiases(Matrix(1, 2, {5.0f, 6.0f}, exec_target));
-
-    layer_inst.weights_gradient = Matrix(2, 2, {0.5f, -1.0f, 2.0f, -3.0f}, exec_target);
-    layer_inst.biases_gradient = Matrix(1, 2, {4.0f, -2.0f}, exec_target);
-
-    layer_inst.update(0.1f, 100.0f);
-
-    Matrix expected_w(2, 2, {0.95f, 2.1f, 2.8f, 4.3f}, exec_target);
-    Matrix expected_b(1, 2, {4.6f, 6.2f}, exec_target);
-
-    bool w_ok = verifyMatrix(layer_inst.getWeights(), expected_w.getData());
-    bool b_ok = verifyMatrix(layer_inst.getBiases(), expected_b.getData());
-
-    return w_ok && b_ok;
-}
 
 bool testNeuralNetworkPipeline(Execution_Target exec_target)
 {
@@ -428,6 +409,48 @@ bool testLearningRate()
     return true;
 }
 
+bool testSgdOptimizer(Execution_Target exec_target)
+{
+    SGD_Optimizer optimizer(0.1f, 100.0f);
+
+    Matrix param_mat(2, 2, {1.0f, 2.0f, 3.0f, 4.0f}, exec_target);
+    Matrix grad_mat(2, 2, {0.5f, -1.0f, 2.0f, -3.0f}, exec_target);
+
+    std::vector<std::pair<Matrix *, Matrix *>> param_grad_pairs = {
+        {&param_mat, &grad_mat}};
+
+    optimizer.step(param_grad_pairs);
+
+    return verifyMatrix(param_mat, {0.95f, 2.1f, 2.8f, 4.3f});
+}
+
+bool testAdamOptimizer(Execution_Target exec_target)
+{
+    Adam_Optimizer optimizer(0.001f, 0.9f, 0.999f, 1e-8f, 100.0f);
+
+    Matrix param_mat(1, 2, {1.0f, 2.0f}, exec_target);
+    Matrix grad_mat(1, 2, {0.1f, -0.2f}, exec_target);
+
+    std::vector<std::pair<Matrix *, Matrix *>> param_grad_pairs = {
+        {&param_mat, &grad_mat}};
+
+    optimizer.step(param_grad_pairs);
+
+    bool first_step_ok = verifyMatrix(param_mat, {0.999f, 2.001f});
+
+    optimizer.reset();
+
+    Matrix param_reset(1, 2, {1.0f, 2.0f}, exec_target);
+    std::vector<std::pair<Matrix *, Matrix *>> reset_pairs = {
+        {&param_reset, &grad_mat}};
+
+    optimizer.step(reset_pairs);
+
+    bool reset_ok = verifyMatrix(param_reset, {0.999f, 2.001f});
+
+    return first_step_ok && reset_ok;
+}
+
 void runTestSuite(Execution_Target exec_target, const std::string &target_name)
 {
     std::cout << "--- Running Tests on " << target_name << " ---\n";
@@ -438,7 +461,6 @@ void runTestSuite(Execution_Target exec_target, const std::string &target_name)
     std::cout << "MatmulAdd Fusion: " << (testMatmulAdd(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "MatmulTransA (A^T * B): " << (testMatmulTransA(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "MatmulTransB (A * B^T): " << (testMatmulTransB(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "SGD Update: " << (testSgdUpdate(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "Scalar Operations: " << (testScalarOperations(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "Hadamard Operations: " << (testHadamardOperations(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "Transpose & Inverse: " << (testTransposeAndInverse(exec_target) ? "PASS" : "FAIL") << "\n";
@@ -456,11 +478,13 @@ void runTestSuite(Execution_Target exec_target, const std::string &target_name)
     std::cout << "GlobalAvgPool2D Forward: " << (testGlobalAvgPool2d(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "GlobalAvgPool2D Backward: " << (testGlobalAvgPool2dBackward(exec_target) ? "PASS" : "FAIL") << "\n";
 
-    std::cout << "Layer Gradient Update: " << (testLayerUpdate(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "Neural Network Pipeline: " << (testNeuralNetworkPipeline(exec_target) ? "PASS" : "FAIL") << "\n";
 
     std::cout << "BatchNorm Forward & Backward: " << (testBatchNorm(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "Learning Rate Scheduler: " << (testLearningRate() ? "PASS" : "FAIL") << "\n\n";
+
+    std::cout << "SGD Optimizer Step: " << (testSgdOptimizer(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "Adam Optimizer Step & Reset: " << (testAdamOptimizer(exec_target) ? "PASS" : "FAIL") << "\n";
 }
 
 int main()

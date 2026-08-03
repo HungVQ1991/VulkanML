@@ -22,8 +22,9 @@ Unlike production frameworks that hide implementation details behind large abstr
 | **Core**                    | Sequential neural network, Forward propagation, Backpropagation, Topology-aware model serialization (NNA1 format)                                |
 | **Layers**                  | Dense (Fully Connected), Conv2D, MaxPool2D, Batch Normalization                                                                                  |
 | **Activation Functions**    | ReLU, GELU, Softmax                                                                                                                              |
-| **Loss Functions**          | Mean Squared Error (MSE), Categorical Cross Entropy (CCE)                                                                                        |
-| **Optimizers & Schedulers** | Stochastic Gradient Descent (SGD), Learning Rate Schedulers (Cosine Annealing, Step Decay, Multi-Step, Exponential, Polynomial, ReduceOnPlateau) |
+| **Loss Functions**          |  MSE, CCE, MAE, BCE                                                                                                                              |
+| **Optimizers & Schedulers** | Stochastic Gradient Descent (SGD), Learning Rate Schedulers (Cosine Annealing, Step Decay, Multi-Step, Exponential, Polynomial, ReduceOnPlateau),|
+|                             | Adam Optimizer                                                                                                                                   |
 | **Data Augmentation**       | CPU-side Data Pipelines (Random Crop with Padding, Random Horizontal Flip, Random Shift)                                                         |
 | **Math Library**            | Custom Matrix implementation, Matrix multiplication, Broadcasting, Element-wise operations                                                       |
 | **Execution Backends**      | CPU backend, Vulkan Compute backend, Unified execution interface                                                                                 |
@@ -36,21 +37,21 @@ Unlike production frameworks that hide implementation details behind large abstr
 ## Project Architecture
 
 ```
-                  Neural Network
-                         │
-        ┌────────────────┼────────────────┐
-        │                │                │
-     Layers      Loss Functions      LR Schedulers
-        │                │                │
-        └────────────────┼────────────────┘
-                         │
-                     Matrix API
-                         │
-        ┌────────────────┴────────────────┐
-        │                                 │
-   CPU Backend                     Vulkan Backend
-        │                                 │
-   Native C++                      Compute Shaders
+                             Neural Network
+                                   │
+        ┌─────────────┼────────────┴──────────┼─────────────┐
+        │             |                       |             │
+     Layers     Loss Functions            Optimizer    LR Schedulers
+        │                                                   │
+        └───────────────────────────────────────────────────┘
+                                   │
+                               Matrix API
+                                   │
+                  ┌────────────────┴────────────────┐
+                  │                                 │
+             CPU Backend                     Vulkan Backend
+                  │                                 │
+             Native C++                      Compute Shaders
 ```
 
 ---
@@ -75,10 +76,11 @@ model.addLayer(std::make_unique<Softmax>(true, exec_target));
 
 // Configure Learning Rate Scheduler
 Learning_Rate lr_scheduler( 0.015f, Decay_Mode::COSINE_ANNEALING, 0.1f, 10, 30, 1e-5f);
+Adam_Optimizer optimizer(lr_scheduler, 0.9f, 0.999f, 1.0f);
 
 // Train with dynamic learning rate
 model.trainStep(input_mat, target_mat, CCE_Cost(), lr_scheduler.getCurrentRate());
-lr_scheduler.
+lr_scheduler.step();
 
 // Save model (topology + weights)
 model.saveModel("output/cifar100_model.bin");
@@ -96,18 +98,18 @@ model.saveModel("output/cifar100_model.bin");
 | --------------------- | ---------------------------------------------------------------------------------------------- |
 | Architecture          | Conv(1→16) → BN → GeLU → MaxPool → Conv(16→32) → BN → GeLU → FC(6272→128) → BN → GeLU → FC(10) |
 | Loss                  | Categorical Cross Entropy                                                                      |
-| Optimizer / Scheduler | SGD + Step Decay                                                                               |
+| Optimizer / Scheduler | Adam Optimizer + Cosine Annealing(0.01 -> 1e-5)                                                |
 | Data Augmentation     | Random Shift + Padding                                                                         |
 | Backend               | Vulkan Compute                                                                                 |
-| Epochs                | 10                                                                                             |
+| Epochs / Batch Size   | 20 epochs | Batch size 512                                                                     |
 
 ### Results
 
 | Metric        |                    Value |
 | ------------- | -----------------------: |
-| Accuracy      |               **99.10%** |
-| Wrong / Total |          **90 / 10,000** |
-| Training Time |                **~20 s** |
+| Accuracy      |               **99.40%** |
+| Wrong / Total |          **60 / 10,000** |
+| Training Time |              **~12.8 s** |
 | Hardware      | **AMD Radeon 860M iGPU** |
 
 ---
@@ -120,18 +122,18 @@ model.saveModel("output/cifar100_model.bin");
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | Architecture          | Conv(3→32) → BN → GeLU → MaxPool → Conv(32→64) → BN → GeLU → MaxPool → Conv(64→128) → BN → GeLU → MaxPool → FC(2048→512) → FC(512→100) |
 | Loss                  | Categorical Cross Entropy                                                                                                              |
-| Optimizer / Scheduler | SGD + Cosine Annealing (0.015 → 1e-5)                                                                                                  |
+| Optimizer / Scheduler | Adam + Cosine Annealing (0.015 → 1e-5)                                                                                                 |
 | Data Augmentation     | Random Crop (Padding = 4), Random Horizontal Flip                                                                                      |
 | Backend               | Vulkan Compute                                                                                                                         |
-| Epochs                | 30                                                                                                                                     |
+| Epochs / Batch size   | 100 epochs | Batch size 256                                                                                                            |
 
 ### Results
 
 | Metric              |                    Value |
 | ------------------- | -----------------------: |
-| Validation Accuracy |               **50.16%** |
-| Training Time       |          **21 min 30 s** |
-| Speed / Epoch       |                **~43 s** |
+| Validation Accuracy |               **57.63%** |
+| Training Time       |           **1 hr 7 min** |
+| Speed / Epoch       |                **~40 s** |
 | Classes             |                  **100** |
 | Hardware            | **AMD Radeon 860M iGPU** |
 

@@ -1,6 +1,9 @@
 #pragma once
 
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <fstream>
 #include <random>
 #include <vector>
 #include <stdexcept>
@@ -25,8 +28,8 @@ private:
 
     Matrix weights;
     Matrix biases;
-    Matrix grad_weights;
-    Matrix grad_biases;
+    Matrix weights_gradient;
+    Matrix biases_gradient;
     Matrix inputs;
     Matrix outputs;
 
@@ -52,8 +55,8 @@ private:
 
         weights = Matrix(1, num_weights, host_weights, target);
         biases = Matrix(1, out_c, host_biases, target);
-        grad_weights = Matrix(1, num_weights, target);
-        grad_biases = Matrix(1, out_c, target);
+        weights_gradient = Matrix(1, num_weights, target);
+        biases_gradient = Matrix(1, out_c, target);
     }
 
 public:
@@ -83,21 +86,16 @@ public:
             throw std::logic_error("Backward called before forward");
         }
 
-        inputs.conv2dBackwardWeight(gradient_output, grad_weights, grad_biases, in_h, in_w, in_c, out_h, out_w, out_c, kernel_size, stride, padding);
+        inputs.conv2dBackwardWeight(gradient_output, weights_gradient, biases_gradient, in_h, in_w, in_c, out_h, out_w, out_c, kernel_size, stride, padding);
         return gradient_output.conv2dBackwardInput(weights, in_h, in_w, in_c, out_h, out_w, out_c, kernel_size, stride, padding);
     }
 
-    void update(float learning_rate, float max_gradient = 0.0f) override
-    {
-        weights.sgdUpdate(grad_weights, learning_rate, max_gradient);
-        biases.sgdUpdate(grad_biases, learning_rate, max_gradient);
-    }
 
     void resetGradient() override
     {
         std::size_t num_weights = kernel_size * kernel_size * in_c * out_c;
-        grad_weights = Matrix(1, num_weights, target);
-        grad_biases = Matrix(1, out_c, target);
+        weights_gradient = Matrix(1, num_weights, target);
+        biases_gradient = Matrix(1, out_c, target);
         inputs = Matrix(0, 0, target);
         outputs = Matrix(0, 0, target);
         has_forward = false;
@@ -117,4 +115,34 @@ public:
     {
         return true;
     }
+
+    Layer_Type getLayerType() const override
+    {
+        return Layer_Type::CONV2D;
+    }
+
+    void saveConfig(std::ofstream &out_file) const override
+    {
+        out_file.write(reinterpret_cast<const char *>(&in_h), sizeof(in_h));
+        out_file.write(reinterpret_cast<const char *>(&in_w), sizeof(in_w));
+        out_file.write(reinterpret_cast<const char *>(&in_c), sizeof(in_c));
+        out_file.write(reinterpret_cast<const char *>(&out_c), sizeof(out_c));
+        out_file.write(reinterpret_cast<const char *>(&kernel_size), sizeof(kernel_size));
+        out_file.write(reinterpret_cast<const char *>(&stride), sizeof(stride));
+        out_file.write(reinterpret_cast<const char *>(&padding), sizeof(padding));
+    }
+
+    void saveState(std::ofstream &out_file) const override
+    {
+        weights.saveMatrix(out_file);
+        biases.saveMatrix(out_file);
+    }
+
+    void loadState(std::ifstream &in_file) override
+    {
+        weights = Matrix::loadMatrix(in_file, target);
+        biases = Matrix::loadMatrix(in_file, target);
+    }
+
+    std::vector<std::pair<Matrix *, Matrix *>> getParamsAndGrads() override { return {{&weights, &weights_gradient}, {&biases, &biases_gradient}}; }
 };

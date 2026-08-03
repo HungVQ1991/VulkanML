@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <stdexcept>
 #include <utility>
+#include <fstream>
 
 #include "ilayer.h"
 #include "math/matrix.h"
@@ -52,5 +53,8 @@ public:
         has_forward = false;
     }
 
-    void update(float, float = 1.0f) override {}
+    Layer_Type getLayerType() const override { return Layer_Type::RELU; }
+    void saveConfig(std::ofstream &out_file) const override {}
+    void saveState(std::ofstream &out_file) const override {}
+    void loadState(std::ifstream &in_file) override {}
 };

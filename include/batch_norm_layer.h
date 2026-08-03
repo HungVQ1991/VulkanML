@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+#include <fstream>
 #include <vector>
 #include <stdexcept>
 #include <utility>
@@ -113,12 +116,6 @@ public:
             epsilon);
     }
 
-    void update(float learning_rate, float max_gradient = 1.0f) override
-    {
-        gamma.sgdUpdate(grad_gamma, learning_rate, max_gradient);
-        beta.sgdUpdate(grad_beta, learning_rate, max_gradient);
-    }
-
     void resetGradient() override
     {
         grad_gamma = Matrix(1, input_dim, target);
@@ -154,4 +151,35 @@ public:
     {
         return true;
     }
+
+    Layer_Type getLayerType() const override
+    {
+        return Layer_Type::BATCH_NORM;
+    }
+
+    void saveConfig(std::ofstream &out_file) const override
+    {
+        std::uint32_t num_features = static_cast<std::uint32_t>(input_dim);
+        out_file.write(reinterpret_cast<const char *>(&num_features), sizeof(num_features));
+        out_file.write(reinterpret_cast<const char *>(&epsilon), sizeof(epsilon));
+        out_file.write(reinterpret_cast<const char *>(&momentum), sizeof(momentum));
+    }
+
+    void saveState(std::ofstream &out_file) const override
+    {
+        gamma.saveMatrix(out_file);
+        beta.saveMatrix(out_file);
+        running_mean.saveMatrix(out_file);
+        running_var.saveMatrix(out_file);
+    }
+
+    void loadState(std::ifstream &in_file) override
+    {
+        gamma = Matrix::loadMatrix(in_file, target);
+        beta = Matrix::loadMatrix(in_file, target);
+        running_mean = Matrix::loadMatrix(in_file, target);
+        running_var = Matrix::loadMatrix(in_file, target);
+    }
+
+    std::vector<std::pair<Matrix *, Matrix *>> getParamsAndGrads() override { return {{&gamma, &grad_gamma}, {&beta, &grad_beta}}; }
 };

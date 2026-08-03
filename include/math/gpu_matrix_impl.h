@@ -408,6 +408,57 @@ public:
         pushToGraph(SGD_UPDATE, {storage, grad_gpu->storage}, constants, (total_elements + 255) / 256);
     }
 
+    void adamUpdate(
+        const std::shared_ptr<Impl> &grad_impl,
+        const std::shared_ptr<Impl> &m_impl,
+        const std::shared_ptr<Impl> &v_impl,
+        float learning_rate,
+        float beta1,
+        float beta2,
+        float epsilon,
+        std::size_t timestep,
+        float max_gradient = 1.0f) override
+    {
+        validateSameDimensions(*grad_impl);
+        validateSameDimensions(*m_impl);
+        validateSameDimensions(*v_impl);
+
+        auto grad_gpu = castToGpuMatrix(grad_impl, "Gpu_Matrix_Impl::adamUpdate: Invalid grad_impl matrix");
+        auto m_gpu = castToGpuMatrix(m_impl, "Gpu_Matrix_Impl::adamUpdate: Invalid m_impl matrix");
+        auto v_gpu = castToGpuMatrix(v_impl, "Gpu_Matrix_Impl::adamUpdate: Invalid v_impl matrix");
+
+        std::uint32_t total_elements = static_cast<std::uint32_t>(rows * cols);
+
+        float correction1 = 1.0f - std::pow(beta1, static_cast<float>(timestep));
+        float correction2 = 1.0f - std::pow(beta2, static_cast<float>(timestep));
+
+        struct Adam_Push_Constants
+        {
+            std::uint32_t total_elements;
+            float learning_rate;
+            float beta1;
+            float beta2;
+            float epsilon;
+            float max_gradient;
+            float correction1;
+            float correction2;
+        } constants{
+            total_elements,
+            learning_rate,
+            beta1,
+            beta2,
+            epsilon,
+            max_gradient,
+            correction1,
+            correction2};
+
+        pushToGraph(
+            ADAM_UPDATE,
+            {storage, grad_gpu->storage, m_gpu->storage, v_gpu->storage},
+            constants,
+            (total_elements + 255) / 256);
+    }
+
     std::shared_ptr<Impl> matdiv(const std::shared_ptr<Impl> &other_impl) const override { return matmul(other_impl->inverse()); }
 
     std::shared_ptr<Impl> matmulAdd(const std::shared_ptr<Impl> &other, const std::shared_ptr<Impl> &bias) const override

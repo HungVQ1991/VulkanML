@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+#include <fstream>
 #include <stdexcept>
 
 #include "ilayer.h"
@@ -56,8 +58,6 @@ public:
         return gradient_output.maxpool2dBackward(mask, in_h, in_w, channels, out_h, out_w, kernel_size, stride, padding);
     }
 
-    void update(float, float = 1.0f) override {}
-
     void resetGradient() override
     {
         inputs = Matrix(0, 0, target);
@@ -65,4 +65,19 @@ public:
         mask = Matrix(0, 0, target);
         has_forward = false;
     }
+
+    Layer_Type getLayerType() const override { return Layer_Type::MAX_POOL_2D; }
+
+    void saveConfig(std::ofstream &out_file) const override
+    {
+        out_file.write(reinterpret_cast<const char *>(&in_h), sizeof(in_h));
+        out_file.write(reinterpret_cast<const char *>(&in_w), sizeof(in_w));
+        out_file.write(reinterpret_cast<const char *>(&channels), sizeof(channels));
+        out_file.write(reinterpret_cast<const char *>(&kernel_size), sizeof(kernel_size));
+        out_file.write(reinterpret_cast<const char *>(&stride), sizeof(stride));
+        out_file.write(reinterpret_cast<const char *>(&padding), sizeof(padding));
+    }
+
+    void saveState(std::ofstream &out_file) const override {}
+    void loadState(std::ifstream &in_file) override {}
 };

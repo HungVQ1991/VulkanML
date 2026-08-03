@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+#include <fstream>
 #include <stdexcept>
 
 #include "ilayer.h"
@@ -44,12 +46,25 @@ public:
         return gradient_output.globalAvgPool2dBackward(in_h, in_w, channels);
     }
 
-    void update(float, float = 1.0f) override {}
-
     void resetGradient() override
     {
         inputs = Matrix(0, 0, target);
         outputs = Matrix(0, 0, target);
         has_forward = false;
     }
+
+    Layer_Type getLayerType() const override
+    {
+        return Layer_Type::GLOBAL_AVG_POOL_2D;
+    }
+
+    void saveConfig(std::ofstream &out_file) const override
+    {
+        out_file.write(reinterpret_cast<const char *>(&in_h), sizeof(in_h));
+        out_file.write(reinterpret_cast<const char *>(&in_w), sizeof(in_w));
+        out_file.write(reinterpret_cast<const char *>(&channels), sizeof(channels));
+    }
+
+    void saveState(std::ofstream &out_file) const override {}
+    void loadState(std::ifstream &in_file) override {}
 };

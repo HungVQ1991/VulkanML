@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cstdint>
+#include <fstream>
+
 #include "layer.h"
 #include "math/matrix.h"
 
@@ -29,9 +32,18 @@ public:
         return cached_output.softmaxBackward(gradient_output);
     }
 
-    void update(float learning_rate, float max_gradient = 1.0f) override {}
-
     void resetGradient() override { cached_output = Matrix(0, 0, target); }
 
     bool hasParameters() const override { return false; }
+
+    Layer_Type getLayerType() const override { return Layer_Type::SOFTMAX; }
+
+    void saveConfig(std::ofstream &out_file) const override
+    {
+        std::uint8_t fused_val = is_fused_with_loss ? 1 : 0;
+        out_file.write(reinterpret_cast<const char *>(&fused_val), sizeof(fused_val));
+    }
+
+    void saveState(std::ofstream &out_file) const override {}
+    void loadState(std::ifstream &in_file) override {}
 };

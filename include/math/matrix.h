@@ -119,8 +119,33 @@ public:
         std::cout << std::endl;
     }
 
+    void saveMatrix(std::ofstream &out_file) const
+    {
+        std::uint32_t rows = static_cast<std::uint32_t>(pimpl->getRows());
+        std::uint32_t cols = static_cast<std::uint32_t>(pimpl->getCols());
+        out_file.write(reinterpret_cast<const char *>(&rows), sizeof(rows));
+        out_file.write(reinterpret_cast<const char *>(&cols), sizeof(cols));
+
+        std::vector<float> host_data = pimpl->getData();
+        out_file.write(reinterpret_cast<const char *>(host_data.data()), host_data.size() * sizeof(float));
+    }
+
+    static Matrix loadMatrix(std::ifstream &in_file, Execution_Target exec_target = Execution_Target::CPU)
+    {
+        std::uint32_t rows = 0;
+        std::uint32_t cols = 0;
+        in_file.read(reinterpret_cast<char *>(&rows), sizeof(rows));
+        in_file.read(reinterpret_cast<char *>(&cols), sizeof(cols));
+
+        std::vector<float> host_data(rows * cols);
+        in_file.read(reinterpret_cast<char *>(host_data.data()), host_data.size() * sizeof(float));
+
+        return Matrix(rows, cols, std::move(host_data), exec_target);
+    }
+
     std::size_t getRows() const { return pimpl->getRows(); }
     std::size_t getCols() const { return pimpl->getCols(); }
+    Execution_Target getTarget() { return current_target; }
     std::vector<float> getData() const { return pimpl->getData(); }
     Matrix operator*(const Matrix &other) const { return Matrix(pimpl->matmul(other.pimpl), current_target); }
     Matrix operator/(const Matrix &other) const { return Matrix(pimpl->matdiv(other.pimpl), current_target); }
@@ -140,6 +165,16 @@ public:
     Matrix softmax() const { return Matrix(pimpl->softmax(), current_target); }
     Matrix softmaxBackward(const Matrix &gradient) const { return Matrix(pimpl->softmaxBackward(gradient.pimpl), current_target); }
     void sgdUpdate(const Matrix &gradient, float learning_rate, float max_gradient = 0.0f) { pimpl->sgdUpdate(gradient.pimpl, learning_rate, max_gradient); }
+    void adamUpdate(
+        const Matrix &gradient,
+        const Matrix &m_matrix,
+        const Matrix &v_matrix,
+        float learning_rate,
+        float beta1,
+        float beta2,
+        float epsilon,
+        std::size_t timestep,
+        float max_gradient = 1.0f) { pimpl->adamUpdate(gradient.pimpl, m_matrix.pimpl, v_matrix.pimpl, learning_rate, beta1, beta2, epsilon, timestep, max_gradient); }
     Matrix matmulAdd(const Matrix &other, const Matrix &biases) { return Matrix(pimpl->matmulAdd(other.pimpl, biases.pimpl), current_target); }
     Matrix matmulTransA(const Matrix &other) const { return Matrix(pimpl->matmulTransA(other.pimpl), current_target); }
     Matrix matmulTransB(const Matrix &other) const { return Matrix(pimpl->matmulTransB(other.pimpl), current_target); }

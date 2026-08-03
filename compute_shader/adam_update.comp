@@ -1,0 +1,48 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) restrict buffer ParamBuffer {
+    float params[];
+};
+
+layout(std430, set = 0, binding = 1) readonly restrict buffer GradBuffer {
+    float grads[];
+};
+
+layout(std430, set = 0, binding = 2) restrict buffer MBuffer {
+    float m_vec[];
+};
+
+layout(std430, set = 0, binding = 3) restrict buffer VBuffer {
+    float v_vec[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint total_size;
+    float lr;
+    float beta1;
+    float beta2;
+    float eps;
+    float max_grad;
+    float correction1;
+    float correction2;
+} pc;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.total_size) return;
+
+    float g = clamp(grads[idx], -pc.max_grad, pc.max_grad);
+
+    float m_val = pc.beta1 * m_vec[idx] + (1.0 - pc.beta1) * g;
+    float v_val = pc.beta2 * v_vec[idx] + (1.0 - pc.beta2) * (g * g);
+
+    m_vec[idx] = m_val;
+    v_vec[idx] = v_val;
+
+    float m_hat = m_val / pc.correction1;
+    float v_hat = v_val / pc.correction2;
+
+    params[idx] -= pc.lr * (m_hat / (sqrt(v_hat) + pc.eps));
+}

@@ -9,6 +9,14 @@
 #include <utility>
 #include <windows.h>
 
+#include "batch_norm_layer.h"
+#include "conv2d_layer.h"
+#include "layer.h"
+#include "maxpool2d_layer.h"
+#include "relu.h"
+#include "gelu.h"
+#include "softmax.h"
+#include "globalavgpool2d_layer.h"
 #include "learning_rate.h"
 #include "ilayer.h"
 #include "cost_function.h"
@@ -92,18 +100,18 @@ public:
         return gradient_matrix;
     }
 
-    void update(float learning_rate, float max_gradient)
+    std::vector<std::pair<Matrix *, Matrix *>> getParamsAndGrads()
     {
-        if (layers.empty())
+        std::vector<std::pair<Matrix *, Matrix *>> param_grad_pairs;
+        for (auto &layer : layers)
         {
-            Logger::logMessage("Neural_Network::update: Neural network has no layers to update parameters", LOG_ERROR);
-            throw std::logic_error("Neural network has no layers to update parameters");
+            if (layer->hasParameters())
+            {
+                auto pairs = layer->getParamsAndGrads();
+                param_grad_pairs.insert(param_grad_pairs.end(), pairs.begin(), pairs.end());
+            }
         }
-
-        for (const auto &layer : layers)
-        {
-            layer->update(learning_rate, max_gradient);
-        }
+        return param_grad_pairs;
     }
 
     void reset()
@@ -121,22 +129,19 @@ public:
         last_prediction = Matrix(0, 0, target);
     }
 
-    float trainStep(const Matrix &input_matrix, const Matrix &target_matrix, const ICostFunction &cost_fn, float learning_rate, float max_gradient = 1.0f, bool return_loss = false)
+    void trainStep(const Matrix &input_matrix, const Matrix &target_matrix, const ICostFunction &cost_fn, float learning_rate, IOptimizer &optimizer, float max_gradient = 1.0f, bool return_loss = false)
     {
+
+        optimizer.setLearningRate(learning_rate);
         Matrix pred = forward(input_matrix);
         backward(target_matrix, cost_fn);
-        update(learning_rate, max_gradient);
 
+        optimizer.step(getParamsAndGrads());
         reset();
         if (target == Execution_Target::VULKAN_GPU)
         {
             Execution_Engine::getInstance().executeGraph();
         }
-        float loss = 0.0f;
-        if (return_loss)
-            loss = cost_fn.computeLoss(pred, target_matrix);
-
-        return loss;
     }
 
     float evaluate(const Matrix &input_matrix, const Matrix &target_matrix, const ICostFunction &cost_fn)
@@ -159,22 +164,141 @@ public:
         const char magic[4] = {'N', 'N', 'M', '1'};
         out_file.write(magic, 4);
 
-        std::uint32_t parameter_layer_count = 0;
+        std::uint32_t total_layer_count = static_cast<std::uint32_t>(layers.size());
+        out_file.write(reinterpret_cast<const char *>(&total_layer_count), sizeof(total_layer_count));
+
         for (const auto &layer : layers)
         {
-            if (layer->hasParameters())
-            {
-                ++parameter_layer_count;
-            }
+            Layer_Type type_val = layer->getLayerType();
+            out_file.write(reinterpret_cast<const char *>(&type_val), sizeof(type_val));
+            layer->saveConfig(out_file);
         }
-        out_file.write(reinterpret_cast<const char *>(&parameter_layer_count), sizeof(parameter_layer_count));
 
         for (const auto &layer : layers)
         {
             if (layer->hasParameters())
             {
-                saveMatrix(out_file, layer->getWeights());
-                saveMatrix(out_file, layer->getBiases());
+                layer->saveState(out_file);
+            }
+        }
+    }
+
+    void loadModel(const std::string &file_path, Execution_Target exec_target = Execution_Target::CPU)
+    {
+        std::ifstream in_file(file_path, std::ios::binary);
+        if (!in_file.is_open())
+        {
+            Logger::logMessage("Neural_Network::loadModel: Failed to open file for loading model: " + file_path, LOG_ERROR);
+            throw std::runtime_error("Failed to open file for loading model");
+        }
+
+        char magic[4];
+        in_file.read(magic, 4);
+        if (magic[0] != 'N' || magic[1] != 'N' || magic[2] != 'M' || magic[3] != '1')
+        {
+            Logger::logMessage("Neural_Network::loadModel: Invalid file format or magic header", LOG_ERROR);
+            throw std::runtime_error("Invalid file format or magic header");
+        }
+
+        std::uint32_t total_layer_count = 0;
+        in_file.read(reinterpret_cast<char *>(&total_layer_count), sizeof(total_layer_count));
+
+        layers.clear();
+        layers.reserve(total_layer_count);
+
+        for (std::uint32_t i = 0; i < total_layer_count; ++i)
+        {
+            Layer_Type type_val;
+            in_file.read(reinterpret_cast<char *>(&type_val), sizeof(type_val));
+
+            switch (type_val)
+            {
+            case Layer_Type::LINEAR:
+            {
+                std::uint32_t in_dim = 0;
+                std::uint32_t out_dim = 0;
+                in_file.read(reinterpret_cast<char *>(&in_dim), sizeof(in_dim));
+                in_file.read(reinterpret_cast<char *>(&out_dim), sizeof(out_dim));
+                layers.push_back(std::make_unique<Layer>(in_dim, out_dim, exec_target));
+                break;
+            }
+            case Layer_Type::CONV2D:
+            {
+                std::uint32_t in_h = 0;
+                std::uint32_t in_w = 0;
+                std::uint32_t in_c = 0;
+                std::uint32_t out_c = 0;
+                std::uint32_t kernel_size = 0;
+                std::uint32_t stride = 0;
+                std::uint32_t padding = 0;
+                in_file.read(reinterpret_cast<char *>(&in_h), sizeof(in_h));
+                in_file.read(reinterpret_cast<char *>(&in_w), sizeof(in_w));
+                in_file.read(reinterpret_cast<char *>(&in_c), sizeof(in_c));
+                in_file.read(reinterpret_cast<char *>(&out_c), sizeof(out_c));
+                in_file.read(reinterpret_cast<char *>(&kernel_size), sizeof(kernel_size));
+                in_file.read(reinterpret_cast<char *>(&stride), sizeof(stride));
+                in_file.read(reinterpret_cast<char *>(&padding), sizeof(padding));
+                layers.push_back(std::make_unique<Conv2d_Layer>(in_h, in_w, in_c, out_c, kernel_size, stride, padding, exec_target));
+                break;
+            }
+            case Layer_Type::BATCH_NORM:
+            {
+                std::uint32_t num_features = 0;
+                float epsilon = 0.0f;
+                float momentum = 0.0f;
+                in_file.read(reinterpret_cast<char *>(&num_features), sizeof(num_features));
+                in_file.read(reinterpret_cast<char *>(&epsilon), sizeof(epsilon));
+                in_file.read(reinterpret_cast<char *>(&momentum), sizeof(momentum));
+                layers.push_back(std::make_unique<Batch_Norm_Layer>(num_features, epsilon, momentum, exec_target));
+                break;
+            }
+            case Layer_Type::GLOBAL_AVG_POOL_2D:
+            {
+                std::uint32_t in_h = 0;
+                std::uint32_t in_w = 0;
+                std::uint32_t channels = 0;
+                in_file.read(reinterpret_cast<char *>(&in_h), sizeof(in_h));
+                in_file.read(reinterpret_cast<char *>(&in_w), sizeof(in_w));
+                in_file.read(reinterpret_cast<char *>(&channels), sizeof(channels));
+                layers.push_back(std::make_unique<GlobalAvgPool2d_Layer>(in_h, in_w, channels, exec_target));
+                break;
+            }
+            case Layer_Type::MAX_POOL_2D:
+            {
+                std::uint32_t in_h = 0;
+                std::uint32_t in_w = 0;
+                std::uint32_t channels = 0;
+                std::uint32_t kernel_size = 0;
+                std::uint32_t stride = 0;
+                std::uint32_t padding = 0;
+                in_file.read(reinterpret_cast<char *>(&in_h), sizeof(in_h));
+                in_file.read(reinterpret_cast<char *>(&in_w), sizeof(in_w));
+                in_file.read(reinterpret_cast<char *>(&channels), sizeof(channels));
+                in_file.read(reinterpret_cast<char *>(&kernel_size), sizeof(kernel_size));
+                in_file.read(reinterpret_cast<char *>(&stride), sizeof(stride));
+                in_file.read(reinterpret_cast<char *>(&padding), sizeof(padding));
+                layers.push_back(std::make_unique<MaxPool2d_Layer>(in_h, in_w, channels, kernel_size, stride, padding, exec_target));
+                break;
+            }
+            case Layer_Type::SOFTMAX:
+            {
+                std::uint8_t fused_val = 0;
+                in_file.read(reinterpret_cast<char *>(&fused_val), sizeof(fused_val));
+                bool fused = (fused_val != 0);
+                layers.push_back(std::make_unique<Softmax>(fused, exec_target));
+                break;
+            }
+            default:
+                Logger::logMessage("Neural_Network::loadModel: Unsupported or unknown layer type", LOG_ERROR);
+                throw std::runtime_error("Unsupported or unknown layer type");
+            }
+        }
+
+        for (auto &layer : layers)
+        {
+            if (layer->hasParameters())
+            {
+                layer->loadState(in_file);
             }
         }
     }

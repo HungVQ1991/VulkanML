@@ -2,11 +2,13 @@
 
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <random>
 #include <stdexcept>
 #include <vector>
 #include <utility>
 #include <algorithm>
+#include <fstream>
 
 #include "learning_rate.h"
 #include "ilayer.h"
@@ -114,12 +116,6 @@ public:
         return gradient_output.matmulTransB(weights);
     }
 
-    void update(float learning_rate, float max_gradient = 1.0f) override
-    {
-        weights.sgdUpdate(weights_gradient, learning_rate, max_gradient);
-        biases.sgdUpdate(biases_gradient, learning_rate, max_gradient);
-    }
-
     Matrix getWeights() const override
     {
         return weights;
@@ -158,15 +154,31 @@ public:
         outputs = Matrix(0, 0, target);
     }
 
-    bool hasParameters() const override
-    {
-        return true;
-    }
-
-    Matrix getWeightsGradient() override
-    {
-        return weights_gradient;
-    }
-
+    bool hasParameters() const override { return true; }
+    Matrix getWeightsGradient() override { return weights_gradient; }
     Matrix getInput() override { return inputs; }
+
+    Layer_Type getLayerType() const override { return Layer_Type::LINEAR; }
+
+    void saveConfig(std::ofstream &out_file) const override
+    {
+        std::uint32_t in_dim_val = static_cast<std::uint32_t>(input_dim);
+        std::uint32_t out_dim_val = static_cast<std::uint32_t>(output_dim);
+        out_file.write(reinterpret_cast<const char *>(&in_dim_val), sizeof(in_dim_val));
+        out_file.write(reinterpret_cast<const char *>(&out_dim_val), sizeof(out_dim_val));
+    }
+
+    void saveState(std::ofstream &out_file) const override
+    {
+        weights.saveMatrix(out_file);
+        biases.saveMatrix(out_file);
+    }
+
+    void loadState(std::ifstream &in_file) override
+    {
+        weights = Matrix::loadMatrix(in_file, target);
+        biases = Matrix::loadMatrix(in_file, target);
+    }
+
+    std::vector<std::pair<Matrix *, Matrix *>> getParamsAndGrads() override { return {{&weights, &weights_gradient}, {&biases, &biases_gradient}}; }
 };
