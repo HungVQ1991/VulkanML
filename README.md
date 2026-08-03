@@ -101,7 +101,7 @@ model.saveModel("output/cifar100_model.bin");
 | Optimizer / Scheduler | Adam Optimizer + Cosine Annealing(0.01 -> 1e-5)                                                |
 | Data Augmentation     | Random Shift + Padding                                                                         |
 | Backend               | Vulkan Compute                                                                                 |
-| Epochs / Batch Size   | 20 epochs | Batch size 512                                                                     |
+| Epochs / Batch Size   | 20 epochs / Batch size 512                                                                     |
 
 ### Results
 
@@ -125,7 +125,7 @@ model.saveModel("output/cifar100_model.bin");
 | Optimizer / Scheduler | Adam + Cosine Annealing (0.015 → 1e-5)                                                                                                 |
 | Data Augmentation     | Random Crop (Padding = 4), Random Horizontal Flip                                                                                      |
 | Backend               | Vulkan Compute                                                                                                                         |
-| Epochs / Batch size   | 100 epochs | Batch size 256                                                                                                            |
+| Epochs / Batch size   | 100 epochs / Batch size 256                                                                                                            |
 
 ### Results
 
