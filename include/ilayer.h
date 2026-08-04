@@ -1,5 +1,6 @@
 #pragma once
 
+#include "math/execution_engine.h"
 #include "math/matrix.h"
 #include "learning_rate.h"
 #include <fstream>
@@ -35,4 +36,5 @@ public:
     virtual void saveConfig(std::ofstream &out_file) const = 0;
     virtual void saveState(std::ofstream &out_file) const = 0;
     virtual void loadState(std::ifstream &in_file) = 0;
+    virtual void setTarget(Execution_Target _target) = 0;
 }; 

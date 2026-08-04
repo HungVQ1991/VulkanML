@@ -145,4 +145,15 @@ public:
     }
 
     std::vector<std::pair<Matrix *, Matrix *>> getParamsAndGrads() override { return {{&weights, &weights_gradient}, {&biases, &biases_gradient}}; }
+    void setTarget(Execution_Target new_target) override
+    {
+        if (target == new_target)
+            return;
+        target = new_target;
+
+        weights.setExecutionTarget(new_target);
+        biases.setExecutionTarget(new_target);
+        weights_gradient.setExecutionTarget(new_target);
+        biases_gradient.setExecutionTarget(new_target);
+    }
 };

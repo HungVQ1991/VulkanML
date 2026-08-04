@@ -146,6 +146,14 @@ public:
     std::size_t getRows() const { return pimpl->getRows(); }
     std::size_t getCols() const { return pimpl->getCols(); }
     Execution_Target getTarget() { return current_target; }
+    void setExecutionTarget(Execution_Target new_target)
+    {
+        if (current_target == new_target) return;
+        std::vector<float> current_data = getData();
+        std::size_t r = getRows();
+        std::size_t c = getCols();
+        *this = Matrix(r, c, current_data, new_target);
+    }
     std::vector<float> getData() const { return pimpl->getData(); }
     Matrix operator*(const Matrix &other) const { return Matrix(pimpl->matmul(other.pimpl), current_target); }
     Matrix operator/(const Matrix &other) const { return Matrix(pimpl->matdiv(other.pimpl), current_target); }

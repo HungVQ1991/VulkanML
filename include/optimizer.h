@@ -33,6 +33,7 @@ public:
     }
 
     float getLearningRate() { return learning_rate; }
+    float getMaxGradient() { return max_gradient; }
     void setLearningRate(float lr) override { learning_rate = lr; }
 };
 
@@ -66,7 +67,7 @@ public:
         : learning_rate(lr.getCurrentRate()), beta1(b1), beta2(b2), epsilon(eps), max_gradient(max_grad) {}
 
     ~Adam_Optimizer() override = default;
-    
+
     void step(const std::vector<std::pair<Matrix *, Matrix *>> &param_grad_pairs) override
     {
         ++timestep;
@@ -92,5 +93,6 @@ public:
     }
 
     float getLearningRate() { return learning_rate; }
+    float getMaxGradient() { return max_gradient; }
     void setLearningRate(float lr) override { learning_rate = lr; }
 };

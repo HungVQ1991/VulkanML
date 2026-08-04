@@ -32,6 +32,7 @@ private:
     Matrix last_prediction;
     Execution_Target target = Execution_Target::CPU;
 
+    bool is_target_synced = false;
     bool is_graph_built = false;
     Matrix persistent_input;
     Matrix persistent_target;
@@ -129,9 +130,13 @@ public:
         last_prediction = Matrix(0, 0, target);
     }
 
-    void trainStep(const Matrix &input_matrix, const Matrix &target_matrix, const ICostFunction &cost_fn, float learning_rate, IOptimizer &optimizer, float max_gradient = 1.0f, bool return_loss = false)
+    void trainStep(const Matrix &input_matrix, const Matrix &target_matrix, const ICostFunction &cost_fn, float learning_rate, IOptimizer &optimizer)
     {
-
+        if (!is_target_synced)
+        {
+            for (std::unique_ptr<ILayer> &layer : layers) layer->setTarget(target);
+            is_target_synced = true;
+        }
         optimizer.setLearningRate(learning_rate);
         Matrix pred = forward(input_matrix);
         backward(target_matrix, cost_fn);
@@ -139,9 +144,7 @@ public:
         optimizer.step(getParamsAndGrads());
         reset();
         if (target == Execution_Target::VULKAN_GPU)
-        {
             Execution_Engine::getInstance().executeGraph();
-        }
     }
 
     float evaluate(const Matrix &input_matrix, const Matrix &target_matrix, const ICostFunction &cost_fn)

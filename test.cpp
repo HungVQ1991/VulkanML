@@ -168,10 +168,13 @@ bool testNeuralNetworkPipeline(Execution_Target exec_target)
     Matrix input_mat(1, 2, {1.0f, 2.0f}, exec_target);
     Matrix target_mat(1, 1, {1.0f}, exec_target);
     MSE_Cost cost_fn;
+    Learning_Rate lr(0.01, Decay_Mode::NO_DECAY);
+    Adam_Optimizer optimizer(lr);
 
-    float initial_loss = net_inst.trainStep(input_mat, target_mat, cost_fn, 0.01f, true);
-    float second_loss = net_inst.trainStep(input_mat, target_mat, cost_fn, 0.01f, true);
-
+    net_inst.trainStep(input_mat, target_mat, cost_fn, lr.getCurrentRate(), optimizer);
+    float initial_loss = net_inst.evaluate(input_mat, target_mat, cost_fn);
+    net_inst.trainStep(input_mat, target_mat, cost_fn, lr.getCurrentRate(), optimizer);
+    float second_loss = net_inst.evaluate(input_mat, target_mat, cost_fn);
     return !std::isnan(initial_loss) && !std::isnan(second_loss) && (second_loss <= initial_loss);
 }
 

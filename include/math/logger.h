@@ -84,11 +84,8 @@ private:
             logs.erase(logs.begin());
         }
 
-        const auto base_name = std::format("log_{}",
-                                           std::chrono::duration_cast<std::chrono::milliseconds>(
-                                               std::chrono::system_clock::now().time_since_epoch())
-                                               .count());
-
+        const std::string base_name = std::format("log_{:%Y%m%d_%H%M%S}",
+                                           std::chrono::zoned_time{std::chrono::current_zone(), std::chrono::system_clock::now()});
         current_log_file = log_directory / (base_name + ".log");
         std::size_t suffix = 1;
 

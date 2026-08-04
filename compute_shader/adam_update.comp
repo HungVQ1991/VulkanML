@@ -25,8 +25,8 @@ layout(push_constant) uniform PushConstants {
     float beta2;
     float eps;
     float max_grad;
-    float correction1;
-    float correction2;
+    float inv_correction1;      // = 1.0 / (1 - beta1^t), precomputed on host
+    float inv_sqrt_correction2; // = 1.0 / sqrt(1 - beta2^t), precomputed on host
 } pc;
 
 void main() {
@@ -35,14 +35,16 @@ void main() {
 
     float g = clamp(grads[idx], -pc.max_grad, pc.max_grad);
 
-    float m_val = pc.beta1 * m_vec[idx] + (1.0 - pc.beta1) * g;
-    float v_val = pc.beta2 * v_vec[idx] + (1.0 - pc.beta2) * (g * g);
+    float m_val = fma(pc.beta1, m_vec[idx], (1.0 - pc.beta1) * g);
+    float v_val = fma(pc.beta2, v_vec[idx], (1.0 - pc.beta2) * (g * g));
 
     m_vec[idx] = m_val;
     v_vec[idx] = v_val;
 
-    float m_hat = m_val / pc.correction1;
-    float v_hat = v_val / pc.correction2;
+    // m_hat = m_val / correction1  ->  m_val * inv_correction1 (division removed)
+    // sqrt(v_hat) = sqrt(v_val / correction2) = sqrt(v_val) * inv_sqrt_correction2
+    float m_hat = m_val * pc.inv_correction1;
+    float v_hat_sqrt = sqrt(v_val) * pc.inv_sqrt_correction2;
 
-    params[idx] -= pc.lr * (m_hat / (sqrt(v_hat) + pc.eps));
+    params[idx] -= pc.lr * m_hat / (v_hat_sqrt + pc.eps);
 }

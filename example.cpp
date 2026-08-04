@@ -26,8 +26,8 @@
 
 constexpr std::size_t INPUT_DIM = 784;
 constexpr std::size_t OUTPUT_DIM = 10;
-constexpr std::size_t BATCH_SIZE = 512;
-constexpr std::size_t EPOCHS = 20;
+constexpr std::size_t BATCH_SIZE = 1024;
+constexpr std::size_t EPOCHS = 10;
 
 uint32_t swapEndian(uint32_t val)
 {
@@ -182,7 +182,7 @@ double runBenchmark(Execution_Target target,
 
             input_mat.uploadData(batch_x);
             target_mat.uploadData(batch_y);
-            nn.trainStep(input_mat, target_mat, cost_function, current_rate, optimizer, 1.0f);
+            nn.trainStep(input_mat, target_mat, cost_function, current_rate, optimizer);
         }
         learning_rate.step();
     }
@@ -196,7 +196,7 @@ double runBenchmark(Execution_Target target,
 
 int main()
 {
-    Learning_Rate learning_rate(0.001f, Decay_Mode::COSINE_ANNEALING, 0.1f, 10, static_cast<int>(EPOCHS), 1e-4f);
+    Learning_Rate learning_rate(0.001f, Decay_Mode::COSINE_ANNEALING, 0.1f, 10, static_cast<int>(EPOCHS), 1e-5f);
     Adam_Optimizer optimizer(learning_rate, 0.9, 0.999, 1e-8, 1.0f);
     std::vector<float> images_data;
     std::vector<float> labels_data;
@@ -207,21 +207,32 @@ int main()
     Execution_Target target = Execution_Target::VULKAN_GPU;
     Neural_Network nn(target);
 
-    nn.addLayer(std::make_unique<Conv2d_Layer>(28, 28, 1, 16, 3, 1, 1, target));
-    nn.addLayer(std::make_unique<Batch_Norm_Layer>(28 * 28 * 16, 1e-5f, 0.1f, target));
-    nn.addLayer(std::make_unique<GeLU>(target));
-    nn.addLayer(std::make_unique<MaxPool2d_Layer>(28, 28, 16, 2, 2, 0, target));
+    nn.addLayer(std::make_unique<Conv2d_Layer>(28, 28, 1, 32, 3, 1, 1));
+    nn.addLayer(std::make_unique<Batch_Norm_Layer>(28 * 28 * 32, 1e-5f, 0.1f));
+    nn.addLayer(std::make_unique<GeLU>());
 
-    nn.addLayer(std::make_unique<Conv2d_Layer>(14, 14, 16, 32, 3, 1, 1, target));
-    nn.addLayer(std::make_unique<Batch_Norm_Layer>(14 * 14 * 32, 1e-5f, 0.1f, target));
-    nn.addLayer(std::make_unique<GeLU>(target));
+    nn.addLayer(std::make_unique<Conv2d_Layer>(28, 28, 32, 32, 3, 1, 1));
+    nn.addLayer(std::make_unique<Batch_Norm_Layer>(28 * 28 * 32, 1e-5f, 0.1f));
+    nn.addLayer(std::make_unique<GeLU>());
 
-    nn.addLayer(std::make_unique<Layer>(6272, 128, target));
-    nn.addLayer(std::make_unique<Batch_Norm_Layer>(128, 1e-5f, 0.1f, target));
-    nn.addLayer(std::make_unique<GeLU>(target));
+    nn.addLayer(std::make_unique<MaxPool2d_Layer>(28, 28, 32, 2, 2, 0));
 
-    nn.addLayer(std::make_unique<Layer>(128, 10, target));
-    nn.addLayer(std::make_unique<Softmax>(true, target));
+    nn.addLayer(std::make_unique<Conv2d_Layer>(14, 14, 32, 64, 3, 1, 1));
+    nn.addLayer(std::make_unique<Batch_Norm_Layer>(14 * 14 * 64, 1e-5f, 0.1f));
+    nn.addLayer(std::make_unique<GeLU>());
+
+    nn.addLayer(std::make_unique<Conv2d_Layer>(14, 14, 64, 64, 3, 1, 1));
+    nn.addLayer(std::make_unique<Batch_Norm_Layer>(14 * 14 * 64, 1e-5f, 0.1f));
+    nn.addLayer(std::make_unique<GeLU>());
+
+    nn.addLayer(std::make_unique<MaxPool2d_Layer>(14, 14, 64, 2, 2, 0));
+
+    nn.addLayer(std::make_unique<Layer>(3136, 128));
+    nn.addLayer(std::make_unique<Batch_Norm_Layer>(128, 1e-5f, 0.1f));
+    nn.addLayer(std::make_unique<GeLU>());
+
+    nn.addLayer(std::make_unique<Layer>(128, 10));
+    nn.addLayer(std::make_unique<Softmax>(true));
 
     Logger::logMessage("Starting training benchmark with Data Augmentation...", LOG_INFO, true);
     double duration = runBenchmark(target, images_data, labels_data, num_images, nn, CCE_Cost(), learning_rate, optimizer);

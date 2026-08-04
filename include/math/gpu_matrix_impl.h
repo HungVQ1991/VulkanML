@@ -432,6 +432,9 @@ public:
         float correction1 = 1.0f - std::pow(beta1, static_cast<float>(timestep));
         float correction2 = 1.0f - std::pow(beta2, static_cast<float>(timestep));
 
+        float inv_correction1 = 1.0f / correction1;
+        float inv_sqrt_correction2 = 1.0f / std::sqrt(correction2);
+
         struct Adam_Push_Constants
         {
             std::uint32_t total_elements;
@@ -440,8 +443,8 @@ public:
             float beta2;
             float epsilon;
             float max_gradient;
-            float correction1;
-            float correction2;
+            float inv_correction1;
+            float inv_sqrt_correction2;
         } constants{
             total_elements,
             learning_rate,
@@ -449,8 +452,8 @@ public:
             beta2,
             epsilon,
             max_gradient,
-            correction1,
-            correction2};
+            inv_correction1,
+            inv_sqrt_correction2};
 
         pushToGraph(
             ADAM_UPDATE,
@@ -458,7 +461,7 @@ public:
             constants,
             (total_elements + 255) / 256);
     }
-
+    
     std::shared_ptr<Impl> matdiv(const std::shared_ptr<Impl> &other_impl) const override { return matmul(other_impl->inverse()); }
 
     std::shared_ptr<Impl> matmulAdd(const std::shared_ptr<Impl> &other, const std::shared_ptr<Impl> &bias) const override

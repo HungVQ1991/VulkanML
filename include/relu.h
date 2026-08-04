@@ -57,4 +57,5 @@ public:
     void saveConfig(std::ofstream &out_file) const override {}
     void saveState(std::ofstream &out_file) const override {}
     void loadState(std::ifstream &in_file) override {}
+    void setTarget(Execution_Target _target) override { target = _target; }
 };

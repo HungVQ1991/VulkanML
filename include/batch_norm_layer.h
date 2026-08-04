@@ -182,4 +182,17 @@ public:
     }
 
     std::vector<std::pair<Matrix *, Matrix *>> getParamsAndGrads() override { return {{&gamma, &grad_gamma}, {&beta, &grad_beta}}; }
+    void setTarget(Execution_Target new_target) override
+    {
+        if (target == new_target)
+            return;
+        target = new_target;
+
+        gamma.setExecutionTarget(new_target);
+        beta.setExecutionTarget(new_target);
+        grad_gamma.setExecutionTarget(new_target);
+        grad_beta.setExecutionTarget(new_target);
+        running_mean.setExecutionTarget(new_target);
+        running_var.setExecutionTarget(new_target);
+    }
 };
