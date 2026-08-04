@@ -1,11 +1,12 @@
 #pragma once
 
-#include "math/matrix.h"
-#include "ilayer.h"
-#include "math/logger.h"
-#include "math/execution_engine.h"
-
 #include <fstream>
+#include <stdexcept>
+
+#include "engine/execution_engine.h"
+#include "helper/logger.h"
+#include "layer/ilayer.h"
+#include "math/matrix.h"
 
 class GeLU : public ILayer
 {
@@ -52,10 +53,32 @@ public:
         outputs = Matrix(0, 0, target);
         has_forward = false;
     }
-    
-    Layer_Type getLayerType() const override { return Layer_Type::GELU; }
+
+    bool hasParameters() const override
+    {
+        return false;
+    }
+
+    Layer_Type getLayerType() const override
+    {
+        return Layer_Type::GELU;
+    }
+
     void saveConfig(std::ofstream &out_file) const override {}
-    void saveState(std::ofstream &out_file) const override {}
-    void loadState(std::ifstream &in_file) override {}
-    void setTarget(Execution_Target _target) override { target = _target; }
+
+    void saveInference(std::ofstream &out_file) const override {}
+    void loadInference(std::ifstream &in_file) override {}
+
+    void saveCheckpoint(std::ofstream &out_file) const override {}
+    void loadCheckpoint(std::ifstream &in_file) override {}
+
+    void setTarget(Execution_Target new_target) override
+    {
+        if (target == new_target)
+            return;
+        target = new_target;
+
+        inputs.setExecutionTarget(new_target);
+        outputs.setExecutionTarget(new_target);
+    }
 };

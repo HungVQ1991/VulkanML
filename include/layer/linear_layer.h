@@ -1,21 +1,20 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <fstream>
 #include <random>
 #include <stdexcept>
-#include <vector>
 #include <utility>
-#include <algorithm>
-#include <fstream>
+#include <vector>
 
-#include "learning_rate.h"
+#include "helper/logger.h"
 #include "ilayer.h"
 #include "math/matrix.h"
-#include "math/logger.h"
 
-class Layer : public ILayer
+class Linear_Layer : public ILayer
 {
 public:
     Matrix weights;
@@ -46,7 +45,7 @@ private:
     }
 
 public:
-    Layer()
+    Linear_Layer()
         : weights(0, 0),
           biases(0, 0),
           inputs(0, 0),
@@ -54,7 +53,7 @@ public:
           weights_gradient(0, 0),
           biases_gradient(0, 0) {}
 
-    Layer(std::size_t input_dimension, std::size_t output_dimension, Execution_Target exec_target = Execution_Target::CPU, float init_gain = 2.0f)
+    Linear_Layer(std::size_t input_dimension, std::size_t output_dimension, Execution_Target exec_target = Execution_Target::CPU, float init_gain = 2.0f)
         : weights(0, 0, exec_target),
           biases(0, 0, exec_target),
           inputs(0, 0, exec_target),
@@ -82,13 +81,13 @@ public:
         biases = Matrix(1, output_dimension, std::move(bias_data), target);
     }
 
-    ~Layer() override = default;
+    ~Linear_Layer() override = default;
 
     Matrix forward(const Matrix &input_matrix) override
     {
         if (input_matrix.getCols() != input_dim)
         {
-            Logger::logMessage("Layer::forward: Input dimension mismatch", LOG_ERROR);
+            Logger::logMessage("Linear_Layer::forward: Input dimension mismatch", LOG_ERROR);
             throw std::invalid_argument("Input dimension mismatch");
         }
 
@@ -101,7 +100,7 @@ public:
     {
         if (gradient_output.getCols() != output_dim || gradient_output.getRows() != inputs.getRows())
         {
-            Logger::logMessage("Layer::backward: Gradient output dimension mismatch", LOG_ERROR);
+            Logger::logMessage("Linear_Layer::backward: Gradient output dimension mismatch", LOG_ERROR);
             throw std::invalid_argument("Gradient output dimension mismatch");
         }
 
@@ -116,21 +115,15 @@ public:
         return gradient_output.matmulTransB(weights);
     }
 
-    Matrix getWeights() const override
-    {
-        return weights;
-    }
+    Matrix getWeights() const override { return weights; }
 
-    Matrix getBiases() const override
-    {
-        return biases;
-    }
+    Matrix getBiases() const override { return biases; }
 
     void setWeights(const Matrix &new_weights)
     {
         if (new_weights.getRows() != input_dim || new_weights.getCols() != output_dim)
         {
-            Logger::logMessage("Layer::setWeights: Dimension size of weight must match", LOG_ERROR);
+            Logger::logMessage("Linear_Layer::setWeights: Dimension size of weight must match", LOG_ERROR);
             throw std::invalid_argument("Dimension size of weight must match");
         }
         weights = new_weights;
@@ -140,7 +133,7 @@ public:
     {
         if (new_biases.getRows() != 1 || new_biases.getCols() != output_dim)
         {
-            Logger::logMessage("Layer::setBiases: Dimension size of bias must match", LOG_ERROR);
+            Logger::logMessage("Linear_Layer::setBiases: Dimension size of bias must match", LOG_ERROR);
             throw std::invalid_argument("Dimension size of bias must match");
         }
         biases = new_biases;
@@ -168,22 +161,40 @@ public:
         out_file.write(reinterpret_cast<const char *>(&out_dim_val), sizeof(out_dim_val));
     }
 
-    void saveState(std::ofstream &out_file) const override
+    void saveInference(std::ofstream &out_file) const override
     {
         weights.saveMatrix(out_file);
         biases.saveMatrix(out_file);
     }
 
-    void loadState(std::ifstream &in_file) override
+    void loadInference(std::ifstream &in_file) override
     {
         weights = Matrix::loadMatrix(in_file, target);
         biases = Matrix::loadMatrix(in_file, target);
     }
 
+    void saveCheckpoint(std::ofstream &out_file) const override
+    {
+        weights.saveMatrix(out_file);
+        biases.saveMatrix(out_file);
+        weights_gradient.saveMatrix(out_file);
+        biases_gradient.saveMatrix(out_file);
+    }
+
+    void loadCheckpoint(std::ifstream &in_file) override
+    {
+        weights = Matrix::loadMatrix(in_file, target);
+        biases = Matrix::loadMatrix(in_file, target);
+        weights_gradient = Matrix::loadMatrix(in_file, target);
+        biases_gradient = Matrix::loadMatrix(in_file, target);
+    }
+
     std::vector<std::pair<Matrix *, Matrix *>> getParamsAndGrads() override { return {{&weights, &weights_gradient}, {&biases, &biases_gradient}}; }
+
     void setTarget(Execution_Target new_target) override
     {
-        if (target == new_target) return;
+        if (target == new_target)
+            return;
         target = new_target;
 
         weights.setExecutionTarget(new_target);

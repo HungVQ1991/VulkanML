@@ -9,8 +9,8 @@
 #include <cctype>
 
 #include "vulkan_context.h"
-#include "magic_enum.hpp"
-#include "logger.h"
+#include "helper/magic_enum.hpp"
+#include "helper/logger.h"
 
 const int BINDING_SIZE = 8;
 

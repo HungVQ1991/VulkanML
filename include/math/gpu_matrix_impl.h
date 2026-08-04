@@ -10,9 +10,9 @@
 #include <string>
 
 #include "impl.h"
-#include "logger.h"
-#include "gpu_vector.h"
-#include "execution_engine.h"
+#include "helper/logger.h"
+#include "engine/gpu_vector.h"
+#include "engine/execution_engine.h"
 
 struct Matrix_Dimensions
 {

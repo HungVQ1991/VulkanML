@@ -9,25 +9,26 @@
 #include <random>
 #include <format>
 
-#include "optimizer.h"
-#include "learning_rate.h"
-#include "batch_norm_layer.h"
+#include "optimizer/adam_optimizer.h"
+#include "learning_rate/cosine_annealing.h"
+#include "layer/batch_norm_layer.h"
 #include "neural_network.h"
-#include "layer.h"
-#include "relu.h"
-#include "gelu.h"
-#include "cost_function.h"
+#include "layer/linear_layer.h"
+#include "layer/relu.h"
+#include "layer/gelu.h"
+#include "cost_function/cce_cost.h"
+#include "cost_function/icost_function.h"
 #include "math/matrix.h"
-#include "math/logger.h"
-#include "softmax.h"
-#include "conv2d_layer.h"
-#include "maxpool2d_layer.h"
-#include "globalavgpool2d_layer.h"
+#include "helper/logger.h"
+#include "layer/softmax.h"
+#include "layer/conv2d_layer.h"
+#include "layer/maxpool2d_layer.h"
+#include "layer/globalavgpool2d_layer.h"
 
 constexpr std::size_t INPUT_DIM = 784;
 constexpr std::size_t OUTPUT_DIM = 10;
-constexpr std::size_t BATCH_SIZE = 1024;
-constexpr std::size_t EPOCHS = 10;
+constexpr std::size_t BATCH_SIZE = 512;
+constexpr std::size_t EPOCHS = 2;
 
 uint32_t swapEndian(uint32_t val)
 {
@@ -142,8 +143,8 @@ double runBenchmark(Execution_Target target,
                     const std::vector<float> &labels_data,
                     uint32_t num_images,
                     Neural_Network &nn,
-                    const ICostFunction &cost_function,
-                    Learning_Rate learning_rate,
+                    const ICost_Function &cost_function,
+                    ILearning_Rate &learning_rate,
                     IOptimizer &optimizer)
 {
     std::size_t num_batches = num_images / BATCH_SIZE;
@@ -185,6 +186,9 @@ double runBenchmark(Execution_Target target,
             nn.trainStep(input_mat, target_mat, cost_function, current_rate, optimizer);
         }
         learning_rate.step();
+
+        nn.saveTrainingCheckpoint(std::format("output/mnist/checkpoint_mnist_epoch_{}.nnck", epoch), epoch, cost_function, learning_rate, optimizer);
+        Logger::logMessage(std::format("Checkpoint saved for epoch {}", epoch + 1), LOG_INFO, true);
     }
 
     auto end_time = std::chrono::high_resolution_clock::now();
@@ -193,11 +197,12 @@ double runBenchmark(Execution_Target target,
     return duration.count();
 }
 
-
 int main()
 {
-    Learning_Rate learning_rate(0.001f, Decay_Mode::COSINE_ANNEALING, 0.1f, 10, static_cast<int>(EPOCHS), 1e-5f);
-    Adam_Optimizer optimizer(learning_rate, 0.9, 0.999, 1e-8, 1.0f);
+    Cosine_Annealing learning_rate(0.001f, 0.0f, static_cast<int>(EPOCHS));
+    Adam_Optimizer optimizer(learning_rate, 0.9f, 0.999f, 1e-8f, 1.0f);
+    CCE_Cost cost_function;
+
     std::vector<float> images_data;
     std::vector<float> labels_data;
     uint32_t num_images = 0;
@@ -227,17 +232,17 @@ int main()
 
     nn.addLayer(std::make_unique<MaxPool2d_Layer>(14, 14, 64, 2, 2, 0));
 
-    nn.addLayer(std::make_unique<Layer>(3136, 128));
+    nn.addLayer(std::make_unique<Linear_Layer>(3136, 128));
     nn.addLayer(std::make_unique<Batch_Norm_Layer>(128, 1e-5f, 0.1f));
     nn.addLayer(std::make_unique<GeLU>());
 
-    nn.addLayer(std::make_unique<Layer>(128, 10));
+    nn.addLayer(std::make_unique<Linear_Layer>(128, 10));
     nn.addLayer(std::make_unique<Softmax>(true));
 
     Logger::logMessage("Starting training benchmark with Data Augmentation...", LOG_INFO, true);
-    double duration = runBenchmark(target, images_data, labels_data, num_images, nn, CCE_Cost(), learning_rate, optimizer);
-    Logger::logMessage("Training completed in " + std::to_string(duration / 1000) + " s", LOG_INFO, true);
+    double duration = runBenchmark(target, images_data, labels_data, num_images, nn, cost_function, learning_rate, optimizer);
+    Logger::logMessage("Training completed in " + std::to_string(duration / 1000.0) + " s", LOG_INFO, true);
 
-    nn.saveModel("output/model_weights.bin");
-    Logger::logMessage("Model exported to model_weights.bin", LOG_INFO, true);
+    nn.saveInference("output/model.bin");
+    Logger::logMessage("Inference model exported to model.bin", LOG_INFO, true);
 }

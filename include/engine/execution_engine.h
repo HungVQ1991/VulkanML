@@ -7,7 +7,7 @@
 
 #include "vulkan_context.h"
 #include "vulkan_network.h"
-#include "logger.h"
+#include "helper/logger.h"
 #include "compute_graph.h"
 #include "graph_executor.h"
 

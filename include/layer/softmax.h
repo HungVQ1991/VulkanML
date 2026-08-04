@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <fstream>
 
-#include "layer.h"
+#include "layer/ilayer.h"
 #include "math/matrix.h"
 
 class Softmax : public ILayer
@@ -11,7 +11,7 @@ class Softmax : public ILayer
 private:
     Matrix cached_output;
     bool is_fused_with_loss;
-    Execution_Target target = Execution_Target::CPU;
+    Execution_Target target;
 
 public:
     explicit Softmax(bool fused = false, Execution_Target exec_target = Execution_Target::CPU)
@@ -32,11 +32,20 @@ public:
         return cached_output.softmaxBackward(gradient_output);
     }
 
-    void resetGradient() override { cached_output = Matrix(0, 0, target); }
+    void resetGradient() override
+    {
+        cached_output = Matrix(0, 0, target);
+    }
 
-    bool hasParameters() const override { return false; }
+    bool hasParameters() const override
+    {
+        return false;
+    }
 
-    Layer_Type getLayerType() const override { return Layer_Type::SOFTMAX; }
+    Layer_Type getLayerType() const override
+    {
+        return Layer_Type::SOFTMAX;
+    }
 
     void saveConfig(std::ofstream &out_file) const override
     {
@@ -44,7 +53,18 @@ public:
         out_file.write(reinterpret_cast<const char *>(&fused_val), sizeof(fused_val));
     }
 
-    void saveState(std::ofstream &out_file) const override {}
-    void loadState(std::ifstream &in_file) override {}
-    void setTarget(Execution_Target _target) override { target = _target; }
+    void saveInference(std::ofstream &out_file) const override {}
+    void loadInference(std::ifstream &in_file) override {}
+
+    void saveCheckpoint(std::ofstream &out_file) const override {}
+    void loadCheckpoint(std::ifstream &in_file) override {}
+
+    void setTarget(Execution_Target new_target) override
+    {
+        if (target == new_target)
+            return;
+        target = new_target;
+
+        cached_output.setExecutionTarget(new_target);
+    }
 };

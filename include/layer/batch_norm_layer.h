@@ -3,13 +3,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
-#include <vector>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
+#include "helper/logger.h"
 #include "ilayer.h"
 #include "math/matrix.h"
-#include "math/logger.h"
 
 class Batch_Norm_Layer : public ILayer
 {
@@ -165,7 +165,7 @@ public:
         out_file.write(reinterpret_cast<const char *>(&momentum), sizeof(momentum));
     }
 
-    void saveState(std::ofstream &out_file) const override
+    void saveInference(std::ofstream &out_file) const override
     {
         gamma.saveMatrix(out_file);
         beta.saveMatrix(out_file);
@@ -173,7 +173,7 @@ public:
         running_var.saveMatrix(out_file);
     }
 
-    void loadState(std::ifstream &in_file) override
+    void loadInference(std::ifstream &in_file) override
     {
         gamma = Matrix::loadMatrix(in_file, target);
         beta = Matrix::loadMatrix(in_file, target);
@@ -181,7 +181,31 @@ public:
         running_var = Matrix::loadMatrix(in_file, target);
     }
 
-    std::vector<std::pair<Matrix *, Matrix *>> getParamsAndGrads() override { return {{&gamma, &grad_gamma}, {&beta, &grad_beta}}; }
+    void saveCheckpoint(std::ofstream &out_file) const override
+    {
+        gamma.saveMatrix(out_file);
+        beta.saveMatrix(out_file);
+        running_mean.saveMatrix(out_file);
+        running_var.saveMatrix(out_file);
+        grad_gamma.saveMatrix(out_file);
+        grad_beta.saveMatrix(out_file);
+    }
+
+    void loadCheckpoint(std::ifstream &in_file) override
+    {
+        gamma = Matrix::loadMatrix(in_file, target);
+        beta = Matrix::loadMatrix(in_file, target);
+        running_mean = Matrix::loadMatrix(in_file, target);
+        running_var = Matrix::loadMatrix(in_file, target);
+        grad_gamma = Matrix::loadMatrix(in_file, target);
+        grad_beta = Matrix::loadMatrix(in_file, target);
+    }
+
+    std::vector<std::pair<Matrix *, Matrix *>> getParamsAndGrads() override
+    {
+        return {{&gamma, &grad_gamma}, {&beta, &grad_beta}};
+    }
+
     void setTarget(Execution_Target new_target) override
     {
         if (target == new_target)

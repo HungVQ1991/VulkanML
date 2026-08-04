@@ -11,7 +11,7 @@
 #include "impl.h"
 #include "cpu_matrix_impl.h"
 #include "gpu_matrix_impl.h"
-#include "logger.h"
+#include "helper/logger.h"
 
 enum class Execution_Target
 {
@@ -146,6 +146,7 @@ public:
     std::size_t getRows() const { return pimpl->getRows(); }
     std::size_t getCols() const { return pimpl->getCols(); }
     Execution_Target getTarget() { return current_target; }
+    
     void setExecutionTarget(Execution_Target new_target)
     {
         if (current_target == new_target) return;

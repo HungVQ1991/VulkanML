@@ -9,7 +9,7 @@
 #include <functional>
 #include <vulkan/vulkan.h>
 
-#include "logger.h"
+#include "helper/logger.h"
 
 const bool DEBUG_VALIDATION = false;
 

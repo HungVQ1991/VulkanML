@@ -9,7 +9,7 @@
 #include <utility>
 
 #include "impl.h"
-#include "logger.h"
+#include "helper/logger.h"
 
 class Cpu_Matrix_Impl : public Impl
 {

@@ -68,10 +68,10 @@ model.addLayer(std::make_unique<Batch_Norm_Layer>(32 * 32 * 32, 1e-5f, 0.1f));
 model.addLayer(std::make_unique<GeLU>());
 model.addLayer(std::make_unique<MaxPool2d_Layer>(32, 32, 32, 2, 2, 0));
 
-model.addLayer(std::make_unique<Layer>(2048, 512));
+model.addLayer(std::make_unique<Linear_Layer>(2048, 512));
 model.addLayer(std::make_unique<Batch_Norm_Layer>(512, 1e-5f, 0.1f));
 model.addLayer(std::make_unique<GeLU>());
-model.addLayer(std::make_unique<Layer>(512, 100));
+model.addLayer(std::make_unique<Linear_Layer>(512, 100));
 model.addLayer(std::make_unique<Softmax>(true));
 
 // Configure Learning Rate Scheduler

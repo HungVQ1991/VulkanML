@@ -5,13 +5,12 @@
 #include <cstdint>
 #include <fstream>
 #include <random>
-#include <vector>
 #include <stdexcept>
+#include <vector>
 
-#include "learning_rate.h"
+#include "helper/logger.h"
 #include "ilayer.h"
 #include "math/matrix.h"
-#include "math/logger.h"
 
 class Conv2d_Layer : public ILayer
 {
@@ -90,7 +89,6 @@ public:
         return gradient_output.conv2dBackwardInput(weights, in_h, in_w, in_c, out_h, out_w, out_c, kernel_size, stride, padding);
     }
 
-
     void resetGradient() override
     {
         std::size_t num_weights = kernel_size * kernel_size * in_c * out_c;
@@ -132,19 +130,39 @@ public:
         out_file.write(reinterpret_cast<const char *>(&padding), sizeof(padding));
     }
 
-    void saveState(std::ofstream &out_file) const override
+    void saveInference(std::ofstream &out_file) const override
     {
         weights.saveMatrix(out_file);
         biases.saveMatrix(out_file);
     }
 
-    void loadState(std::ifstream &in_file) override
+    void loadInference(std::ifstream &in_file) override
     {
         weights = Matrix::loadMatrix(in_file, target);
         biases = Matrix::loadMatrix(in_file, target);
     }
 
-    std::vector<std::pair<Matrix *, Matrix *>> getParamsAndGrads() override { return {{&weights, &weights_gradient}, {&biases, &biases_gradient}}; }
+    void saveCheckpoint(std::ofstream &out_file) const override
+    {
+        weights.saveMatrix(out_file);
+        biases.saveMatrix(out_file);
+        weights_gradient.saveMatrix(out_file);
+        biases_gradient.saveMatrix(out_file);
+    }
+
+    void loadCheckpoint(std::ifstream &in_file) override
+    {
+        weights = Matrix::loadMatrix(in_file, target);
+        biases = Matrix::loadMatrix(in_file, target);
+        weights_gradient = Matrix::loadMatrix(in_file, target);
+        biases_gradient = Matrix::loadMatrix(in_file, target);
+    }
+
+    std::vector<std::pair<Matrix *, Matrix *>> getParamsAndGrads() override
+    {
+        return {{&weights, &weights_gradient}, {&biases, &biases_gradient}};
+    }
+
     void setTarget(Execution_Target new_target) override
     {
         if (target == new_target)

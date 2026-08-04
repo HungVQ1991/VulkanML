@@ -4,9 +4,9 @@
 #include <fstream>
 #include <stdexcept>
 
+#include "helper/logger.h"
 #include "ilayer.h"
 #include "math/matrix.h"
-#include "math/logger.h"
 
 class GlobalAvgPool2d_Layer : public ILayer
 {
@@ -23,7 +23,7 @@ private:
 
 public:
     GlobalAvgPool2d_Layer(std::uint32_t h, std::uint32_t w, std::uint32_t c, Execution_Target exec_target = Execution_Target::CPU)
-        : in_h(h), in_w(w), channels(c), target(exec_target), has_forward(false) {}
+        : in_h(h), in_w(w), channels(c), target(exec_target), inputs(0, 0, exec_target), outputs(0, 0, exec_target), has_forward(false) {}
 
     ~GlobalAvgPool2d_Layer() override = default;
 
@@ -53,6 +53,11 @@ public:
         has_forward = false;
     }
 
+    bool hasParameters() const override
+    {
+        return false;
+    }
+
     Layer_Type getLayerType() const override
     {
         return Layer_Type::GLOBAL_AVG_POOL_2D;
@@ -65,7 +70,19 @@ public:
         out_file.write(reinterpret_cast<const char *>(&channels), sizeof(channels));
     }
 
-    void saveState(std::ofstream &out_file) const override {}
-    void loadState(std::ifstream &in_file) override {}
-    void setTarget(Execution_Target _target) override { target = _target; }
+    void saveInference(std::ofstream &out_file) const override {}
+    void loadInference(std::ifstream &in_file) override {}
+
+    void saveCheckpoint(std::ofstream &out_file) const override {}
+    void loadCheckpoint(std::ifstream &in_file) override {}
+
+    void setTarget(Execution_Target new_target) override
+    {
+        if (target == new_target)
+            return;
+        target = new_target;
+
+        inputs.setExecutionTarget(new_target);
+        outputs.setExecutionTarget(new_target);
+    }
 };

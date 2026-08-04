@@ -4,9 +4,9 @@
 #include <fstream>
 #include <stdexcept>
 
+#include "helper/logger.h"
 #include "ilayer.h"
 #include "math/matrix.h"
-#include "math/logger.h"
 
 class MaxPool2d_Layer : public ILayer
 {
@@ -29,7 +29,7 @@ private:
 
 public:
     MaxPool2d_Layer(std::uint32_t h, std::uint32_t w, std::uint32_t c, std::uint32_t k, std::uint32_t s, std::uint32_t p, Execution_Target exec_target = Execution_Target::CPU)
-        : in_h(h), in_w(w), channels(c), kernel_size(k), stride(s), padding(p), target(exec_target), has_forward(false)
+        : in_h(h), in_w(w), channels(c), kernel_size(k), stride(s), padding(p), target(exec_target), inputs(0, 0, exec_target), outputs(0, 0, exec_target), mask(0, 0, exec_target), has_forward(false)
     {
         out_h = (in_h + 2 * padding - kernel_size) / stride + 1;
         out_w = (in_w + 2 * padding - kernel_size) / stride + 1;
@@ -66,7 +66,15 @@ public:
         has_forward = false;
     }
 
-    Layer_Type getLayerType() const override { return Layer_Type::MAX_POOL_2D; }
+    bool hasParameters() const override
+    {
+        return false;
+    }
+
+    Layer_Type getLayerType() const override
+    {
+        return Layer_Type::MAX_POOL_2D;
+    }
 
     void saveConfig(std::ofstream &out_file) const override
     {
@@ -78,7 +86,20 @@ public:
         out_file.write(reinterpret_cast<const char *>(&padding), sizeof(padding));
     }
 
-    void saveState(std::ofstream &out_file) const override {}
-    void loadState(std::ifstream &in_file) override {}
-    void setTarget(Execution_Target _target) override { target = _target; }
+    void saveInference(std::ofstream &out_file) const override {}
+    void loadInference(std::ifstream &in_file) override {}
+
+    void saveCheckpoint(std::ofstream &out_file) const override {}
+    void loadCheckpoint(std::ifstream &in_file) override {}
+
+    void setTarget(Execution_Target new_target) override
+    {
+        if (target == new_target)
+            return;
+        target = new_target;
+
+        inputs.setExecutionTarget(new_target);
+        outputs.setExecutionTarget(new_target);
+        mask.setExecutionTarget(new_target);
+    }
 };

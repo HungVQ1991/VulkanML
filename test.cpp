@@ -1,17 +1,15 @@
-#include <iostream>
-#include <cmath>
-#include <vector>
 #include <cassert>
+#include <cmath>
+#include <iostream>
+#include <memory>
+#include <vector>
 
-#include "optimizer.h"
-#include "batch_norm_layer.h"
-#include "layer.h"
-#include "relu.h"
-#include "softmax.h"
-#include "cost_function.h"
-#include "neural_network.h"
-#include "learning_rate.h"
+#include "helper/cost_function.h"
+#include "helper/layer.h"
+#include "helper/learning_rate.h"
+#include "helper/optimizer.h"
 #include "math/matrix.h"
+#include "neural_network.h"
 
 bool nearlyEqual(float a, float b, float eps = 1e-4f)
 {
@@ -146,18 +144,17 @@ bool testNormalizeAndActivations(Execution_Target exec_target)
     return norm_ok && relu_ok && softmax_ok;
 }
 
-
 bool testNeuralNetworkPipeline(Execution_Target exec_target)
 {
     Neural_Network net_inst(exec_target);
 
-    auto layer_1 = std::make_unique<Layer>(2, 2, exec_target);
+    auto layer_1 = std::make_unique<Linear_Layer>(2, 2, exec_target);
     layer_1->setWeights(Matrix(2, 2, {0.5f, -0.5f, 0.5f, 0.5f}, exec_target));
     layer_1->setBiases(Matrix(1, 2, {0.1f, 0.1f}, exec_target));
 
     auto relu_layer = std::make_unique<ReLU>(exec_target);
 
-    auto layer_2 = std::make_unique<Layer>(2, 1, exec_target);
+    auto layer_2 = std::make_unique<Linear_Layer>(2, 1, exec_target);
     layer_2->setWeights(Matrix(2, 1, {1.0f, 2.0f}, exec_target));
     layer_2->setBiases(Matrix(1, 1, {0.0f}, exec_target));
 
@@ -168,7 +165,7 @@ bool testNeuralNetworkPipeline(Execution_Target exec_target)
     Matrix input_mat(1, 2, {1.0f, 2.0f}, exec_target);
     Matrix target_mat(1, 1, {1.0f}, exec_target);
     MSE_Cost cost_fn;
-    Learning_Rate lr(0.01, Decay_Mode::NO_DECAY);
+    Step_Decay lr(0.01f, 1e-6f, 0.1f, 10);
     Adam_Optimizer optimizer(lr);
 
     net_inst.trainStep(input_mat, target_mat, cost_fn, lr.getCurrentRate(), optimizer);
@@ -319,17 +316,7 @@ bool testGlobalAvgPool2dBackward(Execution_Target exec_target)
 
 bool testLearningRate()
 {
-    Learning_Rate lr_no_decay(0.01f, Decay_Mode::NO_DECAY);
-    for (int epoch = 0; epoch < 5; ++epoch)
-    {
-        if (!nearlyEqual(lr_no_decay.getCurrentRate(), 0.01f))
-        {
-            return false;
-        }
-        lr_no_decay.step();
-    }
-
-    Learning_Rate lr_step(0.01f, Decay_Mode::STEP_DECAY, 0.1f, 5);
+    Step_Decay lr_step(0.01f, 1e-6f, 0.1f, 5);
     if (!nearlyEqual(lr_step.getCurrentRate(), 0.01f))
     {
         return false;
@@ -343,21 +330,7 @@ bool testLearningRate()
         return false;
     }
 
-    Learning_Rate lr_multi(0.01f, Decay_Mode::MULTI_STEP_DECAY, 0.1f, std::vector<float>{3.0f, 7.0f});
-    if (!nearlyEqual(lr_multi.getCurrentRate(), 0.01f))
-    {
-        return false;
-    }
-    for (int epoch = 0; epoch < 3; ++epoch)
-    {
-        lr_multi.step();
-    }
-    if (!nearlyEqual(lr_multi.getCurrentRate(), 0.001f))
-    {
-        return false;
-    }
-
-    Learning_Rate lr_exp(0.1f, Decay_Mode::EXPONENTIAL_DECAY, 0.9f);
+    Exponential_Decay lr_exp(0.1f, 1e-6f, 0.9f);
     if (!nearlyEqual(lr_exp.getCurrentRate(), 0.1f))
     {
         return false;
@@ -368,7 +341,7 @@ bool testLearningRate()
         return false;
     }
 
-    Learning_Rate lr_cos(0.1f, Decay_Mode::COSINE_ANNEALING, 0.1f, 10, 10, 0.0f);
+    Cosine_Annealing lr_cos(0.1f, 0.0f, 10);
     if (!nearlyEqual(lr_cos.getCurrentRate(), 0.1f))
     {
         return false;
@@ -382,39 +355,13 @@ bool testLearningRate()
         return false;
     }
 
-    Learning_Rate lr_poly(0.1f, Decay_Mode::POLYNOMIAL_DECAY, 0.1f, 10, 10, 0.0f);
-    if (!nearlyEqual(lr_poly.getCurrentRate(), 0.1f))
-    {
-        return false;
-    }
-    for (int epoch = 0; epoch < 5; ++epoch)
-    {
-        lr_poly.step();
-    }
-    if (!nearlyEqual(lr_poly.getCurrentRate(), 0.05f))
-    {
-        return false;
-    }
-
-    Learning_Rate lr_plateau(0.01f, Decay_Mode::REDUCE_ON_PLATEAU, 0.5f, 3, 1e-5f, true);
-    lr_plateau.step(50.0f);
-    lr_plateau.step(50.0f);
-    lr_plateau.step(50.0f);
-    if (!nearlyEqual(lr_plateau.getCurrentRate(), 0.01f))
-    {
-        return false;
-    }
-    lr_plateau.step(50.0f);
-    if (!nearlyEqual(lr_plateau.getCurrentRate(), 0.005f))
-    {
-        return false;
-    }
     return true;
 }
 
 bool testSgdOptimizer(Execution_Target exec_target)
 {
-    SGD_Optimizer optimizer(0.1f, 100.0f);
+    Step_Decay lr(0.1f, 1e-6f, 1.0f, 1);
+    SGD_Optimizer optimizer(lr);
 
     Matrix param_mat(2, 2, {1.0f, 2.0f, 3.0f, 4.0f}, exec_target);
     Matrix grad_mat(2, 2, {0.5f, -1.0f, 2.0f, -3.0f}, exec_target);
@@ -429,7 +376,8 @@ bool testSgdOptimizer(Execution_Target exec_target)
 
 bool testAdamOptimizer(Execution_Target exec_target)
 {
-    Adam_Optimizer optimizer(0.001f, 0.9f, 0.999f, 1e-8f, 100.0f);
+    Step_Decay lr(0.001f, 1e-6f, 1.0f, 1);
+    Adam_Optimizer optimizer(lr, 0.9f, 0.999f, 1e-8f, 100.0f);
 
     Matrix param_mat(1, 2, {1.0f, 2.0f}, exec_target);
     Matrix grad_mat(1, 2, {0.1f, -0.2f}, exec_target);
