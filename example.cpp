@@ -11,24 +11,17 @@
 
 #include "optimizer/adam_optimizer.h"
 #include "learning_rate/cosine_annealing.h"
-#include "layer/batch_norm_layer.h"
 #include "neural_network.h"
-#include "layer/linear_layer.h"
-#include "layer/relu.h"
-#include "layer/gelu.h"
+#include "helper/layer.h"
 #include "cost_function/cce_cost.h"
 #include "cost_function/icost_function.h"
 #include "math/matrix.h"
 #include "helper/logger.h"
-#include "layer/softmax.h"
-#include "layer/conv2d_layer.h"
-#include "layer/maxpool2d_layer.h"
-#include "layer/globalavgpool2d_layer.h"
 
 constexpr std::size_t INPUT_DIM = 784;
 constexpr std::size_t OUTPUT_DIM = 10;
 constexpr std::size_t BATCH_SIZE = 512;
-constexpr std::size_t EPOCHS = 2;
+constexpr std::size_t EPOCHS = 1;
 
 uint32_t swapEndian(uint32_t val)
 {
@@ -142,10 +135,7 @@ double runBenchmark(Execution_Target target,
                     const std::vector<float> &images_data,
                     const std::vector<float> &labels_data,
                     uint32_t num_images,
-                    Neural_Network &nn,
-                    const ICost_Function &cost_function,
-                    ILearning_Rate &learning_rate,
-                    IOptimizer &optimizer)
+                    Neural_Network &nn)
 {
     std::size_t num_batches = num_images / BATCH_SIZE;
 
@@ -160,9 +150,11 @@ double runBenchmark(Execution_Target target,
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
+    nn.getLearningRate().setMaxEpoch(static_cast<int>(EPOCHS));
+
     for (std::size_t epoch = 0; epoch < EPOCHS; ++epoch)
     {
-        float current_rate = learning_rate.getCurrentRate();
+        float current_rate = nn.getLearningRate().getCurrentRate();
         Logger::logMessage(std::format("Epoch {}: Current LR = {:.6f}", epoch, current_rate), LOG_INFO, true);
 
         for (std::size_t b = 0; b < num_batches; ++b)
@@ -183,12 +175,15 @@ double runBenchmark(Execution_Target target,
 
             input_mat.uploadData(batch_x);
             target_mat.uploadData(batch_y);
-            nn.trainStep(input_mat, target_mat, cost_function, current_rate, optimizer);
-        }
-        learning_rate.step();
 
-        nn.saveTrainingCheckpoint(std::format("output/mnist/checkpoint_mnist_epoch_{}.nnck", epoch), epoch, cost_function, learning_rate, optimizer);
-        Logger::logMessage(std::format("Checkpoint saved for epoch {}", epoch + 1), LOG_INFO, true);
+            nn.trainStep(input_mat, target_mat);
+        }
+
+        nn.getLearningRate().step();
+        nn.getContext().setCurrentEpoch(epoch + 1);
+
+        nn.saveTrainingCheckpoint(std::format("output/mnist/checkpoint_mnist_epoch_{}.nnck", epoch), epoch + 1);
+        Logger::logMessage(std::format("Checkpoint saved for epoch {}", epoch), LOG_INFO, true);
     }
 
     auto end_time = std::chrono::high_resolution_clock::now();
@@ -199,18 +194,19 @@ double runBenchmark(Execution_Target target,
 
 int main()
 {
-    Cosine_Annealing learning_rate(0.001f, 0.0f, static_cast<int>(EPOCHS));
-    Adam_Optimizer optimizer(learning_rate, 0.9f, 0.999f, 1e-8f, 1.0f);
-    CCE_Cost cost_function;
-
     std::vector<float> images_data;
     std::vector<float> labels_data;
     uint32_t num_images = 0;
+
     loadMnistImages("data/train-images.idx3-ubyte", images_data, num_images);
     loadMnistLabels("data/train-labels.idx1-ubyte", labels_data, num_images);
 
     Execution_Target target = Execution_Target::VULKAN_GPU;
     Neural_Network nn(target);
+
+    nn.setLearningRate(std::make_unique<Cosine_Annealing>(0.001f, 1e-5f, static_cast<int>(EPOCHS)));
+    nn.setOptimizer(std::make_unique<Adam_Optimizer>(nn.getLearningRate(), 0.9f, 0.999f, 1e-8f, 1.0f));
+    nn.setCostFunction(std::make_unique<CCE_Cost>());
 
     nn.addLayer(std::make_unique<Conv2d_Layer>(28, 28, 1, 32, 3, 1, 1));
     nn.addLayer(std::make_unique<Batch_Norm_Layer>(28 * 28 * 32, 1e-5f, 0.1f));
@@ -240,9 +236,11 @@ int main()
     nn.addLayer(std::make_unique<Softmax>(true));
 
     Logger::logMessage("Starting training benchmark with Data Augmentation...", LOG_INFO, true);
-    double duration = runBenchmark(target, images_data, labels_data, num_images, nn, cost_function, learning_rate, optimizer);
+    double duration = runBenchmark(target, images_data, labels_data, num_images, nn);
     Logger::logMessage("Training completed in " + std::to_string(duration / 1000.0) + " s", LOG_INFO, true);
 
-    nn.saveInference("output/model.bin");
+    nn.saveInference("output/mnist/model.bin");
     Logger::logMessage("Inference model exported to model.bin", LOG_INFO, true);
+
+    return 0;
 }

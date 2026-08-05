@@ -69,6 +69,14 @@ public:
     void setMaxEpoch(int total_epochs) override
     {
         max_epoch = total_epochs;
+        if (current_epoch >= max_epoch)
+        {
+            current_rate = min_learning_rate;
+            return;
+        }
+        constexpr float pi_val = 3.14159265358979323846f;
+        float cosine_decay = 0.5f * (1.0f + std::cos(pi_val * static_cast<float>(current_epoch) / static_cast<float>(max_epoch)));
+        current_rate = min_learning_rate + (learning_rate - min_learning_rate) * cosine_decay;
     }
 
     float getLearningRate() const override

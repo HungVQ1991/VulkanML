@@ -62,7 +62,10 @@ Unlike production frameworks that hide implementation details behind large abstr
 Execution_Target exec_target = Execution_Target::VULKAN_GPU;
 Neural_Network model(exec_target);
 
-// Build CNN with Batch Normalization
+model.setLearningRate(std::make_unique<Cosine_Annealing>(0.015f, 1e-5f, 30));
+model.setOptimizer(std::make_unique<Adam_Optimizer>(model.getLearningRate(), 0.9f, 0.999f, 1e-8f, 1.0f));
+model.setCostFunction(std::make_unique<CCE_Cost>());
+
 model.addLayer(std::make_unique<Conv2d_Layer>(32, 32, 3, 32, 3, 1, 1));
 model.addLayer(std::make_unique<Batch_Norm_Layer>(32 * 32 * 32, 1e-5f, 0.1f));
 model.addLayer(std::make_unique<GeLU>());
@@ -74,16 +77,11 @@ model.addLayer(std::make_unique<GeLU>());
 model.addLayer(std::make_unique<Linear_Layer>(512, 100));
 model.addLayer(std::make_unique<Softmax>(true));
 
-// Configure Learning Rate Scheduler
-Learning_Rate lr_scheduler( 0.015f, Decay_Mode::COSINE_ANNEALING, 0.1f, 10, 30, 1e-5f);
-Adam_Optimizer optimizer(lr_scheduler, 0.9f, 0.999f, 1.0f);
+model.trainStep(input_mat, target_mat);
+model.getLearningRate().step();
 
-// Train with dynamic learning rate
-model.trainStep(input_mat, target_mat, CCE_Cost(), lr_scheduler.getCurrentRate());
-lr_scheduler.step();
-
-// Save model (topology + weights)
-model.saveModel("output/model.bin");
+model.saveTrainingCheckpoint("output/checkpoint_epoch_0.nnck", 0);
+model.saveInference("output/model.bin");
 ```
 
 ---
@@ -101,14 +99,14 @@ model.saveModel("output/model.bin");
 | Optimizer / Scheduler | Adam Optimizer + Cosine Annealing(0.01 -> 1e-5)                                                |
 | Data Augmentation     | Random Shift + Padding                                                                         |
 | Backend               | Vulkan Compute                                                                                 |
-| Epochs / Batch Size   | 20 epochs / Batch size 512                                                                     |
+| Epochs / Batch Size   | 1 epochs / Batch size 512                                                                      |
 
 ### Results
 
 | Metric        |                    Value |
 | ------------- | -----------------------: |
-| Accuracy      |               **99.40%** |
-| Wrong / Total |          **60 / 10,000** |
+| Accuracy      |               **99.51%** |
+| Wrong / Total |          **49 / 10,000** |
 | Training Time |              **~12.8 s** |
 | Hardware      | **AMD Radeon 860M iGPU** |
 
