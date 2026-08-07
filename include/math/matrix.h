@@ -185,9 +185,6 @@ public:
         std::size_t timestep,
         float max_gradient = 1.0f) { pimpl->adamUpdate(gradient.pimpl, m_matrix.pimpl, v_matrix.pimpl, learning_rate, beta1, beta2, epsilon, timestep, max_gradient); }
     Matrix matmulAdd(const Matrix &other, const Matrix &biases) { return Matrix(pimpl->matmulAdd(other.pimpl, biases.pimpl), current_target); }
-    Matrix matmulTransA(const Matrix &other) const { return Matrix(pimpl->matmulTransA(other.pimpl), current_target); }
-    Matrix matmulTransB(const Matrix &other) const { return Matrix(pimpl->matmulTransB(other.pimpl), current_target); }
-
     Matrix conv2d(const Matrix &weights, const Matrix &bias,
                   std::uint32_t in_h, std::uint32_t in_w, std::uint32_t in_c,
                   std::uint32_t out_c, std::uint32_t kernel_size,
@@ -213,6 +210,7 @@ public:
         return {Matrix(out_impl, current_target), Matrix(mask_impl, current_target)};
     }
 
+    
     Matrix maxpool2dBackward(const Matrix &mask,
                              std::uint32_t in_h, std::uint32_t in_w, std::uint32_t channels,
                              std::uint32_t out_h, std::uint32_t out_w,
@@ -252,5 +250,29 @@ public:
     }
 
     Execution_Target getTarget() const { return current_target; }
+
+    void linearForward(
+        const Matrix &weights_w,
+        const Matrix &biases_b,
+        Matrix &output_y) const
+    {
+        pimpl->linearForward(*weights_w.pimpl, *biases_b.pimpl, *output_y.pimpl);
+    }
+
+    void linearBackwardInput(
+        const Matrix &weights_w,
+        Matrix &grad_x) const
+    {
+        pimpl->linearBackwardInput(*weights_w.pimpl, *grad_x.pimpl);
+    }
+
+    void linearBackwardWeightBias(
+        const Matrix &grad_y,
+        Matrix &grad_w,
+        Matrix &grad_b) const
+    {
+        pimpl->linearBackwardWeightBias(*grad_y.pimpl, *grad_w.pimpl, *grad_b.pimpl);
+    }
+
     void uploadData(const std::vector<float> &host_data) { pimpl->uploadData(host_data); }
 };

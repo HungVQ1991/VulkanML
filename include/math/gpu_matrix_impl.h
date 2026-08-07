@@ -492,68 +492,6 @@ public:
         return result;
     }
 
-    std::shared_ptr<Impl> matmulTransA(const std::shared_ptr<Impl> &other) const override
-    {
-        auto other_gpu = castToGpuMatrix(other, "Invalid matrix type for matmulTransA");
-        if (rows != other_gpu->rows)
-        {
-            Logger::logMessage("Gpu_Matrix_Impl::matmulTransA: Rows mismatch", LOG_ERROR, true);
-            throw std::invalid_argument("Rows mismatch in matmulTransA");
-        }
-
-        auto result = std::make_shared<Gpu_Matrix_Impl>(cols, other_gpu->cols);
-
-        struct Push_Constants
-        {
-            std::uint32_t rows_a;
-            std::uint32_t cols_a;
-            std::uint32_t cols_b;
-            std::uint32_t pad;
-        } constants{
-            static_cast<std::uint32_t>(rows),
-            static_cast<std::uint32_t>(cols),
-            static_cast<std::uint32_t>(other_gpu->cols),
-            0};
-
-        std::uint32_t group_x = (constants.cols_b + 15) / 16;
-        std::uint32_t group_y = (constants.cols_a + 15) / 16;
-
-        pushToGraph(MATMUL_TRANS_A, {storage, other_gpu->storage, result->storage}, constants, group_x, group_y, 1);
-
-        return result;
-    }
-
-    std::shared_ptr<Impl> matmulTransB(const std::shared_ptr<Impl> &other) const override
-    {
-        auto other_gpu = castToGpuMatrix(other, "Invalid matrix type for matmulTransB");
-        if (cols != other_gpu->cols)
-        {
-            Logger::logMessage("Gpu_Matrix_Impl::matmulTransB: Cols mismatch", LOG_ERROR, true);
-            throw std::invalid_argument("Cols mismatch in matmulTransB");
-        }
-
-        auto result = std::make_shared<Gpu_Matrix_Impl>(rows, other_gpu->rows);
-
-        struct Push_Constants
-        {
-            std::uint32_t rows_a;
-            std::uint32_t cols_a;
-            std::uint32_t rows_b;
-            std::uint32_t pad;
-        } constants{
-            static_cast<std::uint32_t>(rows),
-            static_cast<std::uint32_t>(cols),
-            static_cast<std::uint32_t>(other_gpu->rows),
-            0};
-
-        std::uint32_t group_x = (constants.rows_b + 15) / 16;
-        std::uint32_t group_y = (constants.rows_a + 15) / 16;
-
-        pushToGraph(MATMUL_TRANS_B, {storage, other_gpu->storage, result->storage}, constants, group_x, group_y, 1);
-
-        return result;
-    }
-
     std::shared_ptr<Impl> conv2d(
         const std::shared_ptr<Impl> &weights,
         const std::shared_ptr<Impl> &bias,
@@ -880,6 +818,98 @@ public:
         pushToGraph(BATCH_NORM_TRANSFORM_BACKWARD, {dout_gpu->storage, x_hat_gpu->storage, gamma_gpu->storage, g_gamma_gpu->storage, g_beta_gpu->storage, b_var_gpu->storage, dx->storage}, b_trans_consts, (n * d + 255) / 256, 1, 1);
 
         return dx;
+    }
+
+    void linearForward(
+        const Impl &weights_w,
+        const Impl &biases_b,
+        Impl &output_y) const override
+    {
+        const auto &w_gpu = static_cast<const Gpu_Matrix_Impl &>(weights_w);
+        const auto &b_gpu = static_cast<const Gpu_Matrix_Impl &>(biases_b);
+        auto &y_gpu = static_cast<Gpu_Matrix_Impl &>(output_y);
+
+        struct Push_Constants
+        {
+            std::uint32_t rows_x;
+            std::uint32_t cols_x;
+            std::uint32_t cols_w;
+            std::uint32_t pad;
+        } constants{
+            static_cast<std::uint32_t>(rows),
+            static_cast<std::uint32_t>(cols),
+            static_cast<std::uint32_t>(w_gpu.cols),
+            0};
+
+        std::uint32_t group_x = (constants.cols_w + 15) / 16;
+        std::uint32_t group_y = (constants.rows_x + 15) / 16;
+
+        pushToGraph(MATMUL_ADD, {storage, w_gpu.storage, b_gpu.storage, y_gpu.storage}, constants, group_x, group_y, 1);
+    }
+
+    void linearBackwardInput(
+        const Impl &weights_w,
+        Impl &grad_x) const override
+    {
+        const auto &w_gpu = static_cast<const Gpu_Matrix_Impl &>(weights_w);
+        auto &dx_gpu = static_cast<Gpu_Matrix_Impl &>(grad_x);
+
+        struct Push_Constants
+        {
+            std::uint32_t rows_a;
+            std::uint32_t cols_a;
+            std::uint32_t rows_b;
+            std::uint32_t pad;
+        } constants{
+            static_cast<std::uint32_t>(rows),
+            static_cast<std::uint32_t>(cols),
+            static_cast<std::uint32_t>(w_gpu.rows),
+            0};
+
+        std::uint32_t group_x = (constants.rows_b + 15) / 16;
+        std::uint32_t group_y = (constants.rows_a + 15) / 16;
+
+        pushToGraph(LINEAR_BACKWARD_INPUT, {storage, w_gpu.storage, dx_gpu.storage}, constants, group_x, group_y, 1);
+    }
+
+    void linearBackwardWeightBias(
+        const Impl &grad_y,
+        Impl &grad_w,
+        Impl &grad_b) const override
+    {
+        const auto &dy_gpu = static_cast<const Gpu_Matrix_Impl &>(grad_y);
+        auto &dw_gpu = static_cast<Gpu_Matrix_Impl &>(grad_w);
+        auto &db_gpu = static_cast<Gpu_Matrix_Impl &>(grad_b);
+
+        struct Conv2d_Push_Constants
+        {
+            std::uint32_t batch_size;
+            std::uint32_t in_h;
+            std::uint32_t in_w;
+            std::uint32_t in_c;
+            std::uint32_t out_h;
+            std::uint32_t out_w;
+            std::uint32_t out_c;
+            std::uint32_t kernel_size;
+            std::uint32_t stride;
+            std::uint32_t padding;
+        } constants{
+            static_cast<std::uint32_t>(rows),
+            1,
+            1,
+            static_cast<std::uint32_t>(cols),
+            1,
+            1,
+            static_cast<std::uint32_t>(dy_gpu.cols),
+            1,
+            1,
+            0};
+
+        std::uint32_t group_x = (constants.out_c + 15) / 16;
+        std::uint32_t group_y = (constants.in_c + 15) / 16;
+        std::uint32_t group_z = 1;
+
+        pushToGraph(LINEAR_BACKWARD_WEIGHT_BIAS, {storage, dy_gpu.storage, dw_gpu.storage, db_gpu.storage}, constants, group_x, group_y, group_z);
     }
 
     void uploadData(const std::vector<float> &host_data) override { storage->uploadData(host_data); }

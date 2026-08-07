@@ -1,0 +1,42 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer InputX {
+    float x_data[];
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer WeightsW {
+    float w_data[];
+};
+
+layout(std430, set = 0, binding = 2) readonly buffer BiasesB {
+    float b_data[];
+};
+
+layout(std430, set = 0, binding = 3) writeonly buffer OutputY {
+    float y_data[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint batch_size;
+    uint in_dim;
+    uint out_dim;
+} params;
+
+void main() {
+    uint row = gl_GlobalInvocationID.y;
+    uint col = gl_GlobalInvocationID.x;
+
+    if (row >= params.batch_size || col >= params.out_dim) {
+        return;
+    }
+
+    float sum = 0.0;
+    for (uint k = 0; k < params.in_dim; ++k) {
+        sum += x_data[row * params.in_dim + k] * w_data[k * params.out_dim + col];
+    }
+
+    sum += b_data[col];
+    y_data[row * params.out_dim + col] = sum;
+}

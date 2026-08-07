@@ -1,0 +1,51 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer InputX {
+    float x_data[];
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer GradY {
+    float dy_data[];
+};
+
+layout(std430, set = 0, binding = 2) writeonly buffer GradW {
+    float dw_data[];
+};
+
+layout(std430, set = 0, binding = 3) writeonly buffer GradB {
+    float db_data[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint batch_size;
+    uint in_dim;
+    uint out_dim;
+} params;
+
+void main() {
+    uint row = gl_GlobalInvocationID.y;
+    uint col = gl_GlobalInvocationID.x;
+
+    if (row >= params.in_dim || col >= params.out_dim) {
+        return;
+    }
+
+    float dw_sum = 0.0;
+    float db_sum = 0.0;
+
+    for (uint i = 0; i < params.batch_size; ++i) {
+        float dy_val = dy_data[i * params.out_dim + col];
+        dw_sum += x_data[i * params.in_dim + row] * dy_val;
+        if (row == 0) {
+            db_sum += dy_val;
+        }
+    }
+
+    dw_data[row * params.out_dim + col] = dw_sum;
+
+    if (row == 0) {
+        db_data[col] = db_sum;
+    }
+}

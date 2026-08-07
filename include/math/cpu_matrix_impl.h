@@ -541,63 +541,6 @@ public:
         return std::make_shared<Cpu_Matrix_Impl>(out_rows, out_cols, std::move(result_data));
     }
 
-    std::shared_ptr<Impl> matmulTransA(const std::shared_ptr<Impl> &other) const override
-    {
-        const auto &b_cpu = static_cast<const Cpu_Matrix_Impl &>(*other);
-        if (rows != b_cpu.rows)
-        {
-            Logger::logMessage("Cpu_Matrix_Impl::matmulTransA: Rows mismatch", LOG_ERROR, true);
-            throw std::invalid_argument("Rows mismatch in matmulTransA");
-        }
-
-        std::size_t out_rows = cols;
-        std::size_t out_cols = b_cpu.cols;
-        std::vector<float> result_data(out_rows * out_cols, 0.0f);
-
-        for (std::size_t i = 0; i < out_rows; ++i)
-        {
-            for (std::size_t k = 0; k < rows; ++k)
-            {
-                float a_val = data[k * cols + i];
-                for (std::size_t j = 0; j < out_cols; ++j)
-                {
-                    result_data[i * out_cols + j] += a_val * b_cpu.data[k * out_cols + j];
-                }
-            }
-        }
-
-        return std::make_shared<Cpu_Matrix_Impl>(out_rows, out_cols, std::move(result_data));
-    }
-
-    std::shared_ptr<Impl> matmulTransB(const std::shared_ptr<Impl> &other) const override
-    {
-        const auto &b_cpu = static_cast<const Cpu_Matrix_Impl &>(*other);
-        if (cols != b_cpu.cols)
-        {
-            Logger::logMessage("Cpu_Matrix_Impl::matmulTransB: Cols mismatch", LOG_ERROR, true);
-            throw std::invalid_argument("Cols mismatch in matmulTransB");
-        }
-
-        std::size_t out_rows = rows;
-        std::size_t out_cols = b_cpu.rows;
-        std::vector<float> result_data(out_rows * out_cols);
-
-        for (std::size_t i = 0; i < out_rows; ++i)
-        {
-            for (std::size_t j = 0; j < out_cols; ++j)
-            {
-                float sum = 0.0f;
-                for (std::size_t k = 0; k < cols; ++k)
-                {
-                    sum += data[i * cols + k] * b_cpu.data[j * cols + k];
-                }
-                result_data[i * out_cols + j] = sum;
-            }
-        }
-
-        return std::make_shared<Cpu_Matrix_Impl>(out_rows, out_cols, std::move(result_data));
-    }
-
     std::shared_ptr<Impl> conv2d(
         const std::shared_ptr<Impl> &weights,
         const std::shared_ptr<Impl> &bias,
@@ -1097,7 +1040,92 @@ public:
 
         return std::make_shared<Cpu_Matrix_Impl>(n, d, std::move(dx_data));
     }
+    void linearForward(
+        const Impl &weights_w,
+        const Impl &biases_b,
+        Impl &output_y) const override
+    {
+        const auto &w_cpu = static_cast<const Cpu_Matrix_Impl &>(weights_w);
+        const auto &b_cpu = static_cast<const Cpu_Matrix_Impl &>(biases_b);
+        auto &y_cpu = static_cast<Cpu_Matrix_Impl &>(output_y);
 
+        std::size_t batch_size = rows;
+        std::size_t in_dim = cols;
+        std::size_t out_dim = w_cpu.cols;
+
+        for (std::size_t i = 0; i < batch_size; ++i)
+        {
+            for (std::size_t j = 0; j < out_dim; ++j)
+            {
+                float bias_val = (b_cpu.rows == 1) ? b_cpu.data[j] : b_cpu.data[i * out_dim + j];
+                y_cpu.data[i * out_dim + j] = bias_val;
+            }
+
+            for (std::size_t k = 0; k < in_dim; ++k)
+            {
+                float x_val = data[i * in_dim + k];
+                for (std::size_t j = 0; j < out_dim; ++j)
+                {
+                    y_cpu.data[i * out_dim + j] += x_val * w_cpu.data[k * out_dim + j];
+                }
+            }
+        }
+    }
+
+    void linearBackwardInput(
+        const Impl &weights_w,
+        Impl &grad_x) const override
+    {
+        const auto &w_cpu = static_cast<const Cpu_Matrix_Impl &>(weights_w);
+        auto &dx_cpu = static_cast<Cpu_Matrix_Impl &>(grad_x);
+
+        std::size_t batch_size = rows;
+        std::size_t out_dim = cols;
+        std::size_t in_dim = w_cpu.rows;
+
+        for (std::size_t i = 0; i < batch_size; ++i)
+        {
+            for (std::size_t j = 0; j < in_dim; ++j)
+            {
+                float sum = 0.0f;
+                for (std::size_t k = 0; k < out_dim; ++k)
+                {
+                    sum += data[i * out_dim + k] * w_cpu.data[j * out_dim + k];
+                }
+                dx_cpu.data[i * in_dim + j] = sum;
+            }
+        }
+    }
+
+    void linearBackwardWeightBias(
+        const Impl &grad_y,
+        Impl &grad_w,
+        Impl &grad_b) const override
+    {
+        const auto &dy_cpu = static_cast<const Cpu_Matrix_Impl &>(grad_y);
+        auto &dw_cpu = static_cast<Cpu_Matrix_Impl &>(grad_w);
+        auto &db_cpu = static_cast<Cpu_Matrix_Impl &>(grad_b);
+
+        std::size_t batch_size = rows;
+        std::size_t in_dim = cols;
+        std::size_t out_dim = dy_cpu.cols;
+
+        std::fill(dw_cpu.data.begin(), dw_cpu.data.end(), 0.0f);
+        std::fill(db_cpu.data.begin(), db_cpu.data.end(), 0.0f);
+
+        for (std::size_t i = 0; i < batch_size; ++i)
+        {
+            for (std::size_t j = 0; j < out_dim; ++j)
+            {
+                float dy_val = dy_cpu.data[i * out_dim + j];
+                db_cpu.data[j] += dy_val;
+                for (std::size_t k = 0; k < in_dim; ++k)
+                {
+                    dw_cpu.data[k * out_dim + j] += data[i * in_dim + k] * dy_val;
+                }
+            }
+        }
+    }
     void uploadData(const std::vector<float> &host_data) override
     {
         if (host_data.size() != data.size())

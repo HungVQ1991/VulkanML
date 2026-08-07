@@ -92,7 +92,8 @@ public:
         }
 
         inputs = input_matrix;
-        outputs = inputs.matmulAdd(weights, biases);
+        outputs = Matrix(inputs.getRows(), output_dim, target);
+        inputs.linearForward(weights, biases, outputs);
         return outputs;
     }
 
@@ -107,12 +108,13 @@ public:
         std::size_t batch_size = inputs.getRows();
         float inv_batch_size = 1.0f / static_cast<float>(batch_size);
 
-        std::vector<float> ones_data(batch_size, 1.0f);
-        Matrix ones_t(1, batch_size, std::move(ones_data), target);
+        inputs.linearBackwardWeightBias(gradient_output, weights_gradient, biases_gradient);
+        weights_gradient = weights_gradient * inv_batch_size;
+        biases_gradient = biases_gradient * inv_batch_size;
 
-        weights_gradient = (inputs.matmulTransA(gradient_output)) * inv_batch_size;
-        biases_gradient = (ones_t * gradient_output) * inv_batch_size;
-        return gradient_output.matmulTransB(weights);
+        Matrix grad_input(batch_size, input_dim, target);
+        gradient_output.linearBackwardInput(weights, grad_input);
+        return grad_input;
     }
 
     Matrix getWeights() const override { return weights; }

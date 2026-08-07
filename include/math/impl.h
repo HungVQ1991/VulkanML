@@ -81,8 +81,6 @@ public:
         std::size_t timestep,
         float max_gradient = 1.0f) = 0;
     virtual std::shared_ptr<Impl> matmulAdd(const std::shared_ptr<Impl> &other, const std::shared_ptr<Impl> &bias) const = 0;
-    virtual std::shared_ptr<Impl> matmulTransA(const std::shared_ptr<Impl> &other) const = 0;
-    virtual std::shared_ptr<Impl> matmulTransB(const std::shared_ptr<Impl> &other) const = 0;
     virtual void uploadData(const std::vector<float> &host_data) = 0;
     virtual std::shared_ptr<Impl> conv2d(
         const std::shared_ptr<Impl> &weights,
@@ -137,4 +135,17 @@ public:
         std::shared_ptr<Impl> &grad_gamma,
         std::shared_ptr<Impl> &grad_beta,
         float epsilon) const = 0;
+    virtual void linearForward(
+        const Impl &weights_w,
+        const Impl &biases_b,
+        Impl &output_y) const = 0;
+
+    virtual void linearBackwardInput(
+        const Impl &weights_w,
+        Impl &grad_x) const = 0;
+
+    virtual void linearBackwardWeightBias(
+        const Impl &grad_y,
+        Impl &grad_w,
+        Impl &grad_b) const = 0;
 };

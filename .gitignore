@@ -13,3 +13,4 @@ cifar_train.cpp
 main.cpp
 include/math/magic_enum.hpp
 reload_model.cpp
+compile.bat
