@@ -3,8 +3,8 @@
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
-#include <fstream>
 #include <format>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -25,10 +25,15 @@ class Logger
 private:
     static constexpr std::size_t MAX_LOG_FILES = 15;
 
+#ifdef ENABLE_DEBUG_LOG
+    static constexpr bool enable_debug_log = true;
+#else
+    static constexpr bool enable_debug_log = false;
+#endif
+
     std::filesystem::path log_directory;
     std::filesystem::path current_log_file;
     std::ofstream file;
-
 
     Logger() : log_directory("logs") { openNewLogFile(); }
 
@@ -41,7 +46,9 @@ private:
                 file << std::format("[{}] [INFO] END OF LOG INSTANCE\n", timestamp());
                 file.flush();
             }
-            catch (...) {}
+            catch (...)
+            {
+            }
         }
     }
 
@@ -56,8 +63,9 @@ private:
 
     static std::string timestamp()
     {
-        auto now = std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now());
-        return std::format("{:%Y-%m-%d %H:%M:%S}", std::chrono::zoned_time{std::chrono::current_zone(), now});
+        const auto now = std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now());
+        const std::chrono::zoned_time zt{std::chrono::locate_zone("Asia/Ho_Chi_Minh"), now};
+        return std::format("{:%Y-%m-%d %H:%M:%S %Z}", zt);
     }
 
     void openNewLogFile()
@@ -84,8 +92,10 @@ private:
             logs.erase(logs.begin());
         }
 
-        const std::string base_name = std::format("log_{:%Y%m%d_%H%M%S}",
-                                           std::chrono::zoned_time{std::chrono::current_zone(), std::chrono::system_clock::now()});
+        const auto now = std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now());
+        const std::chrono::zoned_time zt{std::chrono::current_zone(), now};
+        const std::string base_name = std::format("log_{:%Y%m%d_%H%M%S}", zt);
+
         current_log_file = log_directory / (base_name + ".log");
         std::size_t suffix = 1;
 
@@ -117,6 +127,12 @@ public:
 
     static void logMessage(const std::string &message, Log_Level level = LOG_INFO, bool print_terminal = false)
     {
+        if constexpr (!enable_debug_log)
+        {
+            if (level == LOG_DEBUG)
+                return;
+        }
+
         Logger &instance = getInstance();
 
         if (!instance.file.is_open())

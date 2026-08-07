@@ -8,6 +8,11 @@
 #include <cmath>
 #include <random>
 #include <format>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
+#include <array>
 
 #include "optimizer/adam_optimizer.h"
 #include "learning_rate/cosine_annealing.h"
@@ -17,11 +22,12 @@
 #include "cost_function/icost_function.h"
 #include "math/matrix.h"
 #include "helper/logger.h"
+#include "engine/async_data_pipeline.h"
 
 constexpr std::size_t INPUT_DIM = 784;
 constexpr std::size_t OUTPUT_DIM = 10;
 constexpr std::size_t BATCH_SIZE = 512;
-constexpr std::size_t EPOCHS = 1;
+constexpr std::size_t EPOCHS = 10;
 
 uint32_t swapEndian(uint32_t val)
 {
@@ -131,60 +137,72 @@ void loadMnistLabels(const std::string &file_path, std::vector<float> &labels_da
     }
 }
 
+class Mnist_Data_Pipeline : public Async_Data_Pipeline
+{
+private:
+    const std::vector<float> &images_data;
+    const std::vector<float> &labels_data;
+    uint32_t num_images;
+    std::size_t batch_size;
+    Execution_Target target;
+
+    Batch_Data prepareBatch(std::size_t batch_step) override
+    {
+        std::size_t num_batches = num_images / batch_size;
+        std::size_t b = batch_step % num_batches;
+
+        std::size_t offset_x = b * batch_size * INPUT_DIM;
+        std::size_t offset_y = b * batch_size * OUTPUT_DIM;
+
+        std::vector<float> batch_x(batch_size * INPUT_DIM);
+        std::vector<float> batch_y(batch_size * OUTPUT_DIM);
+
+        thread_local std::random_device rd;
+        thread_local std::mt19937 rng(rd());
+
+        for (std::size_t i = 0; i < batch_size; ++i)
+        {
+            augmentMnistImage(images_data.data() + offset_x + i * INPUT_DIM,
+                              batch_x.data() + i * INPUT_DIM,
+                              rng);
+        }
+
+        std::copy(labels_data.begin() + offset_y,
+                  labels_data.begin() + offset_y + (batch_size * OUTPUT_DIM),
+                  batch_y.begin());
+
+        return {
+            Matrix(batch_size, INPUT_DIM, std::move(batch_x), target),
+            Matrix(batch_size, OUTPUT_DIM, std::move(batch_y), target)};
+    }
+
+public:
+    Mnist_Data_Pipeline(const std::vector<float> &imgs,
+                        const std::vector<float> &lbls,
+                        uint32_t n_imgs,
+                        std::size_t b_size,
+                        Execution_Target exec_target)
+        : images_data(imgs),
+          labels_data(lbls),
+          num_images(n_imgs),
+          batch_size(b_size),
+          target(exec_target) {}
+};
+
 double runBenchmark(Execution_Target target,
                     const std::vector<float> &images_data,
                     const std::vector<float> &labels_data,
                     uint32_t num_images,
                     Neural_Network &nn)
 {
-    std::size_t num_batches = num_images / BATCH_SIZE;
+    std::size_t steps_per_epoch = num_images / BATCH_SIZE;
+    nn.getLearningRate().setMaxEpoch(static_cast<int>(EPOCHS));
 
-    Matrix input_mat(BATCH_SIZE, INPUT_DIM, target);
-    Matrix target_mat(BATCH_SIZE, OUTPUT_DIM, target);
-
-    std::vector<float> batch_x(BATCH_SIZE * INPUT_DIM);
-    std::vector<float> batch_y(BATCH_SIZE * OUTPUT_DIM);
-
-    std::random_device rd;
-    std::mt19937 rng(rd());
+    Mnist_Data_Pipeline pipeline(images_data, labels_data, num_images, BATCH_SIZE, target);
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    nn.getLearningRate().setMaxEpoch(static_cast<int>(EPOCHS));
-
-    for (std::size_t epoch = 0; epoch < EPOCHS; ++epoch)
-    {
-        float current_rate = nn.getLearningRate().getCurrentRate();
-        Logger::logMessage(std::format("Epoch {}: Current LR = {:.6f}", epoch, current_rate), LOG_INFO, true);
-
-        for (std::size_t b = 0; b < num_batches; ++b)
-        {
-            std::size_t offset_x = b * BATCH_SIZE * INPUT_DIM;
-            std::size_t offset_y = b * BATCH_SIZE * OUTPUT_DIM;
-
-            for (std::size_t i = 0; i < BATCH_SIZE; ++i)
-            {
-                augmentMnistImage(images_data.data() + offset_x + i * INPUT_DIM,
-                                  batch_x.data() + i * INPUT_DIM,
-                                  rng);
-            }
-
-            std::copy(labels_data.begin() + offset_y,
-                      labels_data.begin() + offset_y + (BATCH_SIZE * OUTPUT_DIM),
-                      batch_y.begin());
-
-            input_mat.uploadData(batch_x);
-            target_mat.uploadData(batch_y);
-
-            nn.trainStep(input_mat, target_mat);
-        }
-
-        nn.getLearningRate().step();
-        nn.getContext().setCurrentEpoch(epoch + 1);
-
-        nn.saveTrainingCheckpoint(std::format("output/mnist/checkpoint_mnist_epoch_{}.nnck", epoch), epoch + 1);
-        Logger::logMessage(std::format("Checkpoint saved for epoch {}", epoch), LOG_INFO, true);
-    }
+    nn.fit(pipeline, EPOCHS, steps_per_epoch);
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;

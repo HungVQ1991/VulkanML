@@ -14,6 +14,7 @@
 #include "helper/layer.h"
 #include "helper/logger.h"
 #include "math/matrix.h"
+#include "engine/async_data_pipeline.h"
 #include "training_context.h"
 
 class Neural_Network
@@ -37,7 +38,22 @@ public:
             Execution_Engine::getInstance().waitIdle();
     }
 
-    void addLayer(std::unique_ptr<ILayer> layer) { layers.push_back(std::move(layer)); }
+    void addLayer(std::unique_ptr<ILayer> layer)
+    {
+        layers.push_back(std::move(layer));
+        is_target_synced = false;
+    }
+
+    void setTarget(Execution_Target new_target)
+    {
+        target = new_target;
+        last_prediction.setExecutionTarget(new_target);
+        for (auto &layer : layers)
+        {
+            layer->setTarget(new_target);
+        }
+        is_target_synced = true;
+    }
 
     Matrix forward(const Matrix &input_matrix)
     {
@@ -100,29 +116,74 @@ public:
 
     void trainStep(const Matrix &input_matrix, const Matrix &target_matrix)
     {
-        IOptimizer &optimizer = context.getOptimizer();
-        if (!is_target_synced)
+        auto start_gpu = std::chrono::high_resolution_clock::now();
+        if (input_matrix.getTarget() != target)
         {
-            for (std::unique_ptr<ILayer> &layer : layers)
-                layer->setTarget(target);
-            is_target_synced = true;
+            setTarget(input_matrix.getTarget());
         }
+        else if (!is_target_synced)
+        {
+            setTarget(target);
+        }
+
+        IOptimizer &optimizer = context.getOptimizer();
         optimizer.setLearningRate(context.getLearningRate().getCurrentRate());
-        Matrix pred = forward(input_matrix);
+
+        forward(input_matrix);
         backward(target_matrix);
 
         optimizer.step(getParamsAndGrads());
         reset();
+
         if (target == Execution_Target::VULKAN_GPU)
             Execution_Engine::getInstance().executeGraph();
+        auto end_gpu = std::chrono::high_resolution_clock::now();
+        Logger::logMessage(std::format("[Thread Main {}] Finished GPU TrainStep in {:.2f} ms",
+                                       std::this_thread::get_id(),
+                                       std::chrono::duration<double, std::milli>(end_gpu - start_gpu).count()),
+                           LOG_DEBUG, true);
+    }
+
+    void fit(Async_Data_Pipeline &data_pipeline, std::size_t total_epochs, std::size_t steps_per_epoch)
+    {
+        data_pipeline.start();
+
+        for (std::size_t epoch = context.getCurrentEpoch(); epoch < total_epochs; ++epoch)
+        {
+            context.setCurrentEpoch(epoch);
+
+            for (std::size_t step = 0; step < steps_per_epoch; ++step)
+            {
+                Batch_Data batch = data_pipeline.nextBatch();
+
+                if (batch.inputs.getTarget() != target)
+                {
+                    batch.inputs.setExecutionTarget(target);
+                    batch.targets.setExecutionTarget(target);
+                }
+
+                trainStep(batch.inputs, batch.targets);
+            }
+
+            context.getLearningRate().step();
+        }
+
+        data_pipeline.stop();
     }
 
     float evaluate(const Matrix &input_matrix, const Matrix &target_matrix)
     {
+        if (input_matrix.getTarget() != target)
+        {
+            setTarget(input_matrix.getTarget());
+        }
+
         const ICost_Function &cost_fn = context.getCostFunction();
         Matrix pred = forward(input_matrix);
+
         if (target == Execution_Target::VULKAN_GPU)
             Execution_Engine::getInstance().executeGraph();
+
         return cost_fn.computeLoss(pred, target_matrix);
     }
 
@@ -195,6 +256,8 @@ public:
                 layer->loadInference(in_file);
             }
         }
+
+        setTarget(exec_target);
     }
 
     void saveTrainingCheckpoint(const std::string &file_path, std::size_t current_epoch) const
@@ -287,6 +350,8 @@ public:
             Logger::logMessage("Neural_Network::loadTrainingCheckpoint: The total epoch is currently smaller than epochs that the network trained", LOG_WARNING, true);
         }
         context.getLearningRate().setMaxEpoch(static_cast<int>(total_epochs));
+
+        setTarget(exec_target);
     }
 
     const Matrix &getLastPrediction() const { return last_prediction; }
