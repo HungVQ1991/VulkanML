@@ -2,6 +2,17 @@
 
 #include <cstdint>
 #include <fstream>
+#include "helper/logger.h"
+
+#ifndef ENABLE_LR_DEBUG_LOGS
+#define ENABLE_LR_DEBUG_LOGS 0
+#endif
+
+#if ENABLE_LR_DEBUG_LOGS
+#define LR_LOG_DEBUG(msg) Logger::logMessage(msg, LOG_DEBUG)
+#else
+#define LR_LOG_DEBUG(msg) ((void)0)
+#endif
 
 enum class Decay_Mode : std::uint32_t
 {

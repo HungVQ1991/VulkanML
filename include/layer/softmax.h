@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <fstream>
+#include <string>
 
 #include "layer/ilayer.h"
 #include "math/matrix.h"
@@ -21,12 +22,16 @@ public:
 
     Matrix forward(const Matrix &input_matrix) override
     {
+        LAYER_LOG_DEBUG("Softmax::forward: rows=" + std::to_string(input_matrix.getRows()) + ", cols=" + std::to_string(input_matrix.getCols()));
+
         cached_output = input_matrix.softmax();
         return cached_output;
     }
 
     Matrix backward(const Matrix &gradient_output) override
     {
+        LAYER_LOG_DEBUG("Softmax::backward: grad_output rows=" + std::to_string(gradient_output.getRows()) + ", cols=" + std::to_string(gradient_output.getCols()) + ", fused=" + (is_fused_with_loss ? "true" : "false"));
+
         if (is_fused_with_loss)
             return gradient_output;
         return cached_output.softmaxBackward(gradient_output);
@@ -63,8 +68,11 @@ public:
     {
         if (target == new_target)
             return;
-        target = new_target;
 
+
+        Logger::logMessage("Softmax::setTarget: Changing execution target from " + static_cast<std::string>(magic_enum::enum_name<Execution_Target>(target)) + " to " + static_cast<std::string>(magic_enum::enum_name<Execution_Target>(new_target)), LOG_WARNING);
+
+        target = new_target;
         cached_output.setExecutionTarget(new_target);
     }
 };

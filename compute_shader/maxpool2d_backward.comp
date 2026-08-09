@@ -2,11 +2,20 @@
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-layout(set = 0, binding = 0) readonly buffer Grad_Output_Buffer { float grad_output[]; };
-layout(set = 0, binding = 1) readonly buffer Mask_Buffer { uint mask_data[]; };
-layout(set = 0, binding = 2) writeonly buffer Grad_Input_Buffer { float grad_input[]; };
+layout(std430, set = 0, binding = 0) readonly restrict buffer Grad_Output_Buffer {
+    float grad_output[];
+};
 
-layout(push_constant) uniform Push_Constants {
+// Sửa kiểu dữ liệu từ uint sang float
+layout(std430, set = 0, binding = 1) readonly restrict buffer Mask_Buffer {
+    float mask_data[];
+};
+
+layout(std430, set = 0, binding = 2) writeonly restrict buffer Grad_Input_Buffer {
+    float grad_input[];
+};
+
+layout(push_constant) uniform PushConstants {
     uint batch_size;
     uint in_h;
     uint in_w;
@@ -16,45 +25,45 @@ layout(push_constant) uniform Push_Constants {
     uint kernel_size;
     uint stride;
     uint padding;
-} params;
+} pc;
 
 void main() {
     uint c_idx = gl_GlobalInvocationID.x;
     uint in_w_idx = gl_GlobalInvocationID.y;
     uint n_in_h_idx = gl_GlobalInvocationID.z;
 
-    if (c_idx >= params.channels || in_w_idx >= params.in_w || n_in_h_idx >= params.batch_size * params.in_h) {
-        return;
-    }
+    if (c_idx >= pc.channels || in_w_idx >= pc.in_w) return;
 
-    uint n_idx = n_in_h_idx / params.in_h;
-    uint in_h_idx = n_in_h_idx % params.in_h;
+    uint n_idx = n_in_h_idx / pc.in_h;
+    uint in_h_idx = n_in_h_idx % pc.in_h;
 
-    uint in_idx = n_idx * params.in_h * params.in_w * params.channels +
-                  in_h_idx * params.in_w * params.channels +
-                  in_w_idx * params.channels +
-                  c_idx;
+    if (n_idx >= pc.batch_size) return;
+
+    uint in_idx = n_idx * (pc.in_h * pc.in_w * pc.channels) +
+                  in_h_idx * (pc.in_w * pc.channels) +
+                  in_w_idx * pc.channels + c_idx;
 
     float grad = 0.0;
 
-    for (uint ky = 0; ky < params.kernel_size; ky++) {
-        for (uint kx = 0; kx < params.kernel_size; kx++) {
-            int out_y_calc = int(in_h_idx + params.padding - ky);
-            int out_x_calc = int(in_w_idx + params.padding - kx);
+    for (uint ky = 0; ky < pc.kernel_size; ++ky) {
+        for (uint kx = 0; kx < pc.kernel_size; ++kx) {
+            int out_y_calc = int(in_h_idx + pc.padding - ky);
+            int out_x_calc = int(in_w_idx + pc.padding - kx);
 
-            if (out_y_calc >= 0 && out_y_calc % int(params.stride) == 0 &&
-                out_x_calc >= 0 && out_x_calc % int(params.stride) == 0) {
+            if (out_y_calc >= 0 && out_y_calc % int(pc.stride) == 0 &&
+                out_x_calc >= 0 && out_x_calc % int(pc.stride) == 0) {
                 
-                uint out_y = uint(out_y_calc) / params.stride;
-                uint out_x = uint(out_x_calc) / params.stride;
+                uint out_y = uint(out_y_calc) / pc.stride;
+                uint out_x = uint(out_x_calc) / pc.stride;
 
-                if (out_y < params.out_h && out_x < params.out_w) {
-                    uint out_idx = n_idx * params.out_h * params.out_w * params.channels +
-                                   out_y * params.out_w * params.channels +
-                                   out_x * params.channels +
-                                   c_idx;
-                    
-                    if (mask_data[out_idx] == in_idx) {
+                if (out_y < pc.out_h && out_x < pc.out_w) {
+                    uint out_idx = n_idx * (pc.out_h * pc.out_w * pc.channels) +
+                                   out_y * (pc.out_w * pc.channels) +
+                                   out_x * pc.channels + c_idx;
+
+                    // Chuyển đổi từ float về uint bằng ép kiểu số học
+                    uint target_in_idx = uint(mask_data[out_idx]);
+                    if (target_in_idx == in_idx) {
                         grad += grad_output[out_idx];
                     }
                 }

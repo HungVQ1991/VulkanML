@@ -1,0 +1,40 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer InputX { float X[]; };
+layout(std430, binding = 1) writeonly buffer BatchMean { float batch_mean[]; };
+layout(std430, binding = 2) writeonly buffer BatchVar { float batch_var[]; };
+layout(std430, binding = 3) buffer RunningMean { float running_mean[]; };
+layout(std430, binding = 4) buffer RunningVar { float running_var[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint total_elements;
+    uint channels;
+    uint spatial_count;
+    float momentum;
+} pc;
+
+void main() {
+    uint c = gl_GlobalInvocationID.x;
+    if (c >= pc.channels) return;
+
+    float sum = 0.0;
+    for (uint i = 0; i < pc.spatial_count; ++i) {
+        sum += X[i * pc.channels + c];
+    }
+    float mean = sum / float(pc.spatial_count);
+
+    float sq_sum = 0.0;
+    for (uint i = 0; i < pc.spatial_count; ++i) {
+        float diff = X[i * pc.channels + c] - mean;
+        sq_sum += diff * diff;
+    }
+    float var = sq_sum / float(pc.spatial_count);
+
+    batch_mean[c] = mean;
+    batch_var[c] = var;
+
+    running_mean[c] = (1.0 - pc.momentum) * running_mean[c] + pc.momentum * mean;
+    running_var[c] = (1.0 - pc.momentum) * running_var[c] + pc.momentum * var;
+}

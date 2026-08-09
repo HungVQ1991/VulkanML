@@ -4,7 +4,9 @@
 #include <cmath>
 #include <fstream>
 #include <stdexcept>
+#include <string>
 
+#include "helper/logger.h"
 #include "ilearning_rate.h"
 
 class Exponential_Decay : public ILearning_Rate
@@ -19,11 +21,20 @@ private:
     void validateParameters() const
     {
         if (learning_rate <= 0.0f)
+        {
+            Logger::logMessage("Exponential_Decay::validateParameters: Initial learning rate must be greater than 0.", LOG_ERROR, true);
             throw std::invalid_argument("Initial learning rate must be greater than 0.");
+        }
         if (min_learning_rate < 0.0f || min_learning_rate > learning_rate)
+        {
+            Logger::logMessage("Exponential_Decay::validateParameters: min_learning_rate is out of valid bounds.", LOG_ERROR, true);
             throw std::invalid_argument("min_learning_rate is out of valid bounds.");
+        }
         if (decay_rate <= 0.0f || decay_rate >= 1.0f)
+        {
+            Logger::logMessage("Exponential_Decay::validateParameters: decay_rate should be in range (0, 1).", LOG_ERROR, true);
             throw std::invalid_argument("decay_rate should be in range (0, 1).");
+        }
     }
 
 public:
@@ -42,7 +53,13 @@ public:
 
     float updateRate() override
     {
-        current_rate = std::max(min_learning_rate, learning_rate * std::pow(decay_rate, static_cast<float>(current_epoch)));
+        float calculated_rate = learning_rate * std::pow(decay_rate, static_cast<float>(current_epoch));
+        if (calculated_rate < min_learning_rate)
+        {
+            Logger::logMessage("Exponential_Decay::updateRate: Learning rate decayed below min_learning_rate, clamped.", LOG_WARNING);
+        }
+        current_rate = std::max(min_learning_rate, calculated_rate);
+        LR_LOG_DEBUG("Exponential_Decay::updateRate: epoch=" + std::to_string(current_epoch) + ", current_rate=" + std::to_string(current_rate));
         return current_rate;
     }
 

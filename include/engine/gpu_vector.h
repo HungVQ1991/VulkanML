@@ -1,26 +1,37 @@
 #pragma once
 
-#include <vector>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <stdexcept>
+#include <string>
+#include <vector>
 #include <vulkan/vulkan.hpp>
 
-#include "vulkan_context.h"
 #include "helper/logger.h"
+#include "vulkan_context.h"
+#include "vulkan_sub_allocator.h"
 
+#ifndef ENABLE_GVECTOR_DEBUG_LOGS
+#define ENABLE_GVECTOR_DEBUG_LOGS 0
+#endif
+
+#if ENABLE_GVECTOR_DEBUG_LOGS
+#define GVECTOR_LOG_DEBUG(msg) Logger::logMessage(msg, LOG_DEBUG)
+#else
+#define GVECTOR_LOG_DEBUG(msg) ((void)0)
+#endif
 
 class GVector
 {
 private:
     const Vulkan_Context &context;
     VkBuffer buffer = VK_NULL_HANDLE;
-    VkDeviceMemory buffer_memory = VK_NULL_HANDLE;
+    Memory_Allocation allocation{};
     std::size_t buffer_size = 0;
     std::uint32_t used_frame = 0;
 
-    void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer &target_buffer, VkDeviceMemory &target_memory) const
+    void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties)
     {
         VkDevice device = context.getDevice();
 
@@ -29,33 +40,22 @@ private:
         buffer_info.usage = usage;
         buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-        if (vkCreateBuffer(device, &buffer_info, nullptr, &target_buffer) != VK_SUCCESS)
+        if (vkCreateBuffer(device, &buffer_info, nullptr, &buffer) != VK_SUCCESS)
         {
             Logger::logMessage("GVector::createBuffer: Failed to create buffer", LOG_ERROR, true);
             throw std::runtime_error("Failed to create buffer");
         }
 
         VkMemoryRequirements mem_requirements;
-        vkGetBufferMemoryRequirements(device, target_buffer, &mem_requirements);
+        vkGetBufferMemoryRequirements(device, buffer, &mem_requirements);
 
-        VkMemoryAllocateInfo alloc_info{.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-        alloc_info.allocationSize = mem_requirements.size;
-        alloc_info.memoryTypeIndex = context.findMemoryType(mem_requirements.memoryTypeBits, properties);
+        allocation = context.allocateMemory(mem_requirements, properties);
 
-        if (vkAllocateMemory(device, &alloc_info, nullptr, &target_memory) != VK_SUCCESS)
+        if (vkBindBufferMemory(device, buffer, allocation.memory, allocation.offset) != VK_SUCCESS)
         {
-            vkDestroyBuffer(device, target_buffer, nullptr);
-            target_buffer = VK_NULL_HANDLE;
-            Logger::logMessage("GVector::createBuffer: Failed to allocate buffer memory", LOG_ERROR, true);
-            throw std::runtime_error("Failed to allocate buffer memory");
-        }
-
-        if (vkBindBufferMemory(device, target_buffer, target_memory, 0) != VK_SUCCESS)
-        {
-            vkFreeMemory(device, target_memory, nullptr);
-            target_memory = VK_NULL_HANDLE;
-            vkDestroyBuffer(device, target_buffer, nullptr);
-            target_buffer = VK_NULL_HANDLE;
+            vkDestroyBuffer(device, buffer, nullptr);
+            buffer = VK_NULL_HANDLE;
+            context.deferDestruction(used_frame, VK_NULL_HANDLE, allocation);
             Logger::logMessage("GVector::createBuffer: Failed to bind buffer memory", LOG_ERROR, true);
             throw std::runtime_error("Failed to bind buffer memory");
         }
@@ -96,9 +96,21 @@ private:
 
         VkFenceCreateInfo fence_info{.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
         VkFence fence = VK_NULL_HANDLE;
-        vkCreateFence(device, &fence_info, nullptr, &fence);
+        if (vkCreateFence(device, &fence_info, nullptr, &fence) != VK_SUCCESS)
+        {
+            vkFreeCommandBuffers(device, command_pool, 1, &cmd_buffer);
+            Logger::logMessage("GVector::copyBuffer: Failed to create fence", LOG_ERROR, true);
+            throw std::runtime_error("Failed to create fence");
+        }
 
-        vkQueueSubmit(compute_queue, 1, &submit_info, fence);
+        if (vkQueueSubmit(compute_queue, 1, &submit_info, fence) != VK_SUCCESS)
+        {
+            vkDestroyFence(device, fence, nullptr);
+            vkFreeCommandBuffers(device, command_pool, 1, &cmd_buffer);
+            Logger::logMessage("GVector::copyBuffer: Failed to submit copy command to queue", LOG_ERROR, true);
+            throw std::runtime_error("Failed to submit copy command");
+        }
+
         vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
 
         vkDestroyFence(device, fence, nullptr);
@@ -122,6 +134,7 @@ public:
     {
         if (host_data.empty())
         {
+            Logger::logMessage("GVector::GVector: Host data vector is empty during construction", LOG_WARNING);
             return;
         }
         allocateMemory(host_data.size());
@@ -137,10 +150,10 @@ public:
     GVector &operator=(const GVector &) = delete;
 
     GVector(GVector &&other) noexcept
-        : context(other.context), buffer(other.buffer), buffer_memory(other.buffer_memory), buffer_size(other.buffer_size)
+        : context(other.context), buffer(other.buffer), allocation(other.allocation), buffer_size(other.buffer_size), used_frame(other.used_frame)
     {
         other.buffer = VK_NULL_HANDLE;
-        other.buffer_memory = VK_NULL_HANDLE;
+        other.allocation = Memory_Allocation{};
         other.buffer_size = 0;
         other.used_frame = 0;
     }
@@ -152,12 +165,12 @@ public:
             freeMemory();
 
             buffer = other.buffer;
-            buffer_memory = other.buffer_memory;
+            allocation = other.allocation;
             buffer_size = other.buffer_size;
             used_frame = other.used_frame;
 
             other.buffer = VK_NULL_HANDLE;
-            other.buffer_memory = VK_NULL_HANDLE;
+            other.allocation = Memory_Allocation{};
             other.buffer_size = 0;
             other.used_frame = 0;
         }
@@ -168,6 +181,7 @@ public:
     {
         if (num_elements * sizeof(float) == buffer_size)
         {
+            GVECTOR_LOG_DEBUG("GVector::allocateMemory: Requested allocation size matches current buffer size, skipping");
             return;
         }
 
@@ -175,25 +189,27 @@ public:
 
         if (num_elements == 0)
         {
+            Logger::logMessage("GVector::allocateMemory: Requested allocation size is 0", LOG_WARNING);
             return;
         }
 
         buffer_size = num_elements * sizeof(float);
+        GVECTOR_LOG_DEBUG("GVector::allocateMemory: Allocating " + std::to_string(num_elements) + " elements (" + std::to_string(buffer_size) + " bytes)");
+
         createBuffer(buffer_size,
                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
-                     buffer,
-                     buffer_memory);
+                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
     }
 
     void freeMemory()
     {
-        if (buffer != VK_NULL_HANDLE || buffer_memory != VK_NULL_HANDLE)
+        if (buffer != VK_NULL_HANDLE || allocation.memory != VK_NULL_HANDLE)
         {
-            context.deferDestruction(used_frame, buffer, buffer_memory);
+            GVECTOR_LOG_DEBUG("GVector::freeMemory: Deferring destruction for buffer of size " + std::to_string(buffer_size) + " bytes");
+            context.deferDestruction(used_frame, buffer, allocation);
 
             buffer = VK_NULL_HANDLE;
-            buffer_memory = VK_NULL_HANDLE;
+            allocation = Memory_Allocation{};
             buffer_size = 0;
         }
     }
@@ -202,16 +218,19 @@ public:
     {
         if (host_data.empty() || buffer_size == 0)
         {
+            Logger::logMessage("GVector::uploadData: Empty host data or zero GPU buffer size", LOG_WARNING);
             return;
         }
 
         if (host_data.size() * sizeof(float) != buffer_size)
         {
+            Logger::logMessage("GVector::uploadData: Host data size mismatch with GPU buffer size", LOG_ERROR, true);
             throw std::runtime_error("size mismatch");
         }
 
-        std::uint32_t frame = context.getCurrentFrame();
+        GVECTOR_LOG_DEBUG("GVector::uploadData: Uploading " + std::to_string(host_data.size()) + " elements to GPU");
 
+        std::uint32_t frame = context.getCurrentFrame();
         context.prepareFrame();
 
         VkBuffer staging_buf = VK_NULL_HANDLE;
@@ -227,8 +246,11 @@ public:
     {
         if (buffer_size == 0)
         {
+            Logger::logMessage("GVector::downloadData: Attempted download from zero-sized buffer", LOG_WARNING);
             return;
         }
+
+        GVECTOR_LOG_DEBUG("GVector::downloadData: Downloading " + std::to_string(getSize()) + " elements from GPU");
 
         context.flush();
         vkDeviceWaitIdle(context.getDevice());
@@ -240,7 +262,6 @@ public:
 
         VkDevice device = context.getDevice();
         VkBuffer staging_buf = VK_NULL_HANDLE;
-        VkDeviceMemory staging_memory = VK_NULL_HANDLE;
 
         VkBufferCreateInfo buffer_info{.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         buffer_info.size = buffer_size;
@@ -249,44 +270,38 @@ public:
 
         if (vkCreateBuffer(device, &buffer_info, nullptr, &staging_buf) != VK_SUCCESS)
         {
+            Logger::logMessage("GVector::downloadData: Failed to create staging buffer", LOG_ERROR, true);
             throw std::runtime_error("GVector::downloadData: Failed to create staging buffer");
         }
 
         VkMemoryRequirements mem_reqs;
         vkGetBufferMemoryRequirements(device, staging_buf, &mem_reqs);
 
-        VkMemoryAllocateInfo alloc_info{.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-        alloc_info.allocationSize = mem_reqs.size;
-        alloc_info.memoryTypeIndex = context.findMemoryType(mem_reqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        Memory_Allocation staging_alloc = context.allocateMemory(mem_reqs, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
-        if (vkAllocateMemory(device, &alloc_info, nullptr, &staging_memory) != VK_SUCCESS)
+        if (vkBindBufferMemory(device, staging_buf, staging_alloc.memory, staging_alloc.offset) != VK_SUCCESS)
         {
             vkDestroyBuffer(device, staging_buf, nullptr);
-            throw std::runtime_error("GVector::downloadData: Failed to allocate staging memory");
-        }
-
-        if (vkBindBufferMemory(device, staging_buf, staging_memory, 0) != VK_SUCCESS)
-        {
-            vkFreeMemory(device, staging_memory, nullptr);
-            vkDestroyBuffer(device, staging_buf, nullptr);
+            context.deferDestruction(context.getCurrentFrame(), VK_NULL_HANDLE, staging_alloc);
+            Logger::logMessage("GVector::downloadData: Failed to bind staging memory", LOG_ERROR, true);
             throw std::runtime_error("GVector::downloadData: Failed to bind staging memory");
         }
 
         copyBuffer(buffer, staging_buf, buffer_size);
 
         void *mapped_ptr = nullptr;
-        if (vkMapMemory(device, staging_memory, 0, buffer_size, 0, &mapped_ptr) != VK_SUCCESS)
+        if (vkMapMemory(device, staging_alloc.memory, staging_alloc.offset, buffer_size, 0, &mapped_ptr) != VK_SUCCESS)
         {
-            vkFreeMemory(device, staging_memory, nullptr);
             vkDestroyBuffer(device, staging_buf, nullptr);
+            context.deferDestruction(context.getCurrentFrame(), VK_NULL_HANDLE, staging_alloc);
+            Logger::logMessage("GVector::downloadData: Failed to map staging memory", LOG_ERROR, true);
             throw std::runtime_error("GVector::downloadData: Failed to map memory");
         }
 
         std::memcpy(host_data.data(), mapped_ptr, buffer_size);
 
-        vkUnmapMemory(device, staging_memory);
-        vkDestroyBuffer(device, staging_buf, nullptr);
-        vkFreeMemory(device, staging_memory, nullptr);
+        vkUnmapMemory(device, staging_alloc.memory);
+        context.deferDestruction(context.getCurrentFrame(), staging_buf, staging_alloc);
     }
 
     VkBuffer getBuffer() const

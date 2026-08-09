@@ -4,7 +4,9 @@
 #include <cmath>
 #include <fstream>
 #include <stdexcept>
+#include <string>
 
+#include "helper/logger.h"
 #include "ilearning_rate.h"
 
 class Step_Decay : public ILearning_Rate
@@ -20,13 +22,25 @@ private:
     void validateParameters() const
     {
         if (learning_rate <= 0.0f)
+        {
+            Logger::logMessage("Step_Decay::validateParameters: Initial learning rate must be greater than 0.", LOG_ERROR, true);
             throw std::invalid_argument("Initial learning rate must be greater than 0.");
+        }
         if (min_learning_rate < 0.0f || min_learning_rate > learning_rate)
+        {
+            Logger::logMessage("Step_Decay::validateParameters: min_learning_rate is out of valid bounds.", LOG_ERROR, true);
             throw std::invalid_argument("min_learning_rate is out of valid bounds.");
+        }
         if (step_size <= 0)
+        {
+            Logger::logMessage("Step_Decay::validateParameters: step_size must be greater than 0.", LOG_ERROR, true);
             throw std::invalid_argument("step_size must be greater than 0.");
+        }
         if (decay_rate <= 0.0f || decay_rate >= 1.0f)
+        {
+            Logger::logMessage("Step_Decay::validateParameters: decay_rate should be in range (0, 1).", LOG_ERROR, true);
             throw std::invalid_argument("decay_rate should be in range (0, 1).");
+        }
     }
 
 public:
@@ -46,7 +60,13 @@ public:
     float updateRate() override
     {
         int steps = current_epoch / step_size;
-        current_rate = std::max(min_learning_rate, learning_rate * std::pow(decay_rate, static_cast<float>(steps)));
+        float calculated_rate = learning_rate * std::pow(decay_rate, static_cast<float>(steps));
+        if (calculated_rate < min_learning_rate)
+        {
+            Logger::logMessage("Step_Decay::updateRate: Learning rate decayed below min_learning_rate, clamped.", LOG_WARNING);
+        }
+        current_rate = std::max(min_learning_rate, calculated_rate);
+        LR_LOG_DEBUG("Step_Decay::updateRate: epoch=" + std::to_string(current_epoch) + ", steps_taken=" + std::to_string(steps) + ", current_rate=" + std::to_string(current_rate));
         return current_rate;
     }
 

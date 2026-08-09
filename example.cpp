@@ -27,7 +27,7 @@
 constexpr std::size_t INPUT_DIM = 784;
 constexpr std::size_t OUTPUT_DIM = 10;
 constexpr std::size_t BATCH_SIZE = 512;
-constexpr std::size_t EPOCHS = 10;
+constexpr std::size_t EPOCHS = 1;
 
 uint32_t swapEndian(uint32_t val)
 {
@@ -221,32 +221,23 @@ int main()
 
     Execution_Target target = Execution_Target::VULKAN_GPU;
     Neural_Network nn(target);
+    nn.setTrainingMode(true);
 
     nn.setLearningRate(std::make_unique<Cosine_Annealing>(0.001f, 1e-5f, static_cast<int>(EPOCHS)));
     nn.setOptimizer(std::make_unique<Adam_Optimizer>(nn.getLearningRate(), 0.9f, 0.999f, 1e-8f, 1.0f));
     nn.setCostFunction(std::make_unique<CCE_Cost>());
 
-    nn.addLayer(std::make_unique<Conv2d_Layer>(28, 28, 1, 32, 3, 1, 1));
-    nn.addLayer(std::make_unique<Batch_Norm_Layer>(28 * 28 * 32, 1e-5f, 0.1f));
+    nn.addLayer(std::make_unique<Conv2d_Layer>(28, 28, 1, 16, 3, 1, 1));
+    nn.addLayer(std::make_unique<Batch_Norm2d_Layer>(28, 28, 16, 1e-5f, 0.1f));
     nn.addLayer(std::make_unique<GeLU>());
+    nn.addLayer(std::make_unique<MaxPool2d_Layer>(28, 28, 16, 2, 2, 0));
 
-    nn.addLayer(std::make_unique<Conv2d_Layer>(28, 28, 32, 32, 3, 1, 1));
-    nn.addLayer(std::make_unique<Batch_Norm_Layer>(28 * 28 * 32, 1e-5f, 0.1f));
+    nn.addLayer(std::make_unique<Conv2d_Layer>(14, 14, 16, 32, 3, 1, 1));
+    nn.addLayer(std::make_unique<Batch_Norm2d_Layer>(14, 14, 32, 1e-5f, 0.1f));
     nn.addLayer(std::make_unique<GeLU>());
+    nn.addLayer(std::make_unique<MaxPool2d_Layer>(14, 14, 32, 2, 2, 0));
 
-    nn.addLayer(std::make_unique<MaxPool2d_Layer>(28, 28, 32, 2, 2, 0));
-
-    nn.addLayer(std::make_unique<Conv2d_Layer>(14, 14, 32, 64, 3, 1, 1));
-    nn.addLayer(std::make_unique<Batch_Norm_Layer>(14 * 14 * 64, 1e-5f, 0.1f));
-    nn.addLayer(std::make_unique<GeLU>());
-
-    nn.addLayer(std::make_unique<Conv2d_Layer>(14, 14, 64, 64, 3, 1, 1));
-    nn.addLayer(std::make_unique<Batch_Norm_Layer>(14 * 14 * 64, 1e-5f, 0.1f));
-    nn.addLayer(std::make_unique<GeLU>());
-
-    nn.addLayer(std::make_unique<MaxPool2d_Layer>(14, 14, 64, 2, 2, 0));
-
-    nn.addLayer(std::make_unique<Linear_Layer>(3136, 128));
+    nn.addLayer(std::make_unique<Linear_Layer>(1568, 128));
     nn.addLayer(std::make_unique<Batch_Norm_Layer>(128, 1e-5f, 0.1f));
     nn.addLayer(std::make_unique<GeLU>());
 
@@ -257,6 +248,7 @@ int main()
     double duration = runBenchmark(target, images_data, labels_data, num_images, nn);
     Logger::logMessage("Training completed in " + std::to_string(duration / 1000.0) + " s", LOG_INFO, true);
 
+    Execution_Engine::getInstance().waitIdle();
     nn.saveInference("output/mnist/model.bin");
     Logger::logMessage("Inference model exported to model.bin", LOG_INFO, true);
 

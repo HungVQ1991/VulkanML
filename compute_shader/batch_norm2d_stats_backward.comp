@@ -1,0 +1,32 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer GradOutput { float dY[]; };
+layout(std430, binding = 1) readonly buffer XHat { float x_hat[]; };
+layout(std430, binding = 2) writeonly buffer GradGamma { float dgamma[]; };
+layout(std430, binding = 3) writeonly buffer GradBeta { float dbeta[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint total_elements;
+    uint channels;
+    uint spatial_count;
+} pc;
+
+void main() {
+    uint c = gl_GlobalInvocationID.x;
+    if (c >= pc.channels) return;
+
+    float sum_dgamma = 0.0;
+    float sum_dbeta = 0.0;
+
+    for (uint i = 0; i < pc.spatial_count; ++i) {
+        uint idx = i * pc.channels + c;
+        float dy = dY[idx];
+        sum_dgamma += dy * x_hat[idx];
+        sum_dbeta += dy;
+    }
+
+    dgamma[c] = sum_dgamma;
+    dbeta[c] = sum_dbeta;
+}

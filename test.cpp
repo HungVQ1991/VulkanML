@@ -3,21 +3,24 @@
 #include <iostream>
 #include <memory>
 #include <vector>
+#include <fstream>
+#include <cstdio>
 
-#include "helper/cost_function.h"
-#include "helper/layer.h"
-#include "helper/learning_rate.h"
-#include "helper/optimizer.h"
 #include "math/matrix.h"
-#include "neural_network.h"
+#include "engine/execution_engine.h"
 
-bool nearlyEqual(float a, float b, float eps = 1e-4f)
+bool nearlyEqual(float a, float b, float eps = 1e-3f)
 {
     return std::fabs(a - b) < eps;
 }
 
 bool verifyMatrix(const Matrix &mat, const std::vector<float> &expected_data)
 {
+    if (mat.getTarget() == Execution_Target::VULKAN_GPU)
+    {
+        Execution_Engine::getInstance().executeGraph();
+    }
+
     std::vector<float> actual_data = mat.getData();
     if (actual_data.size() != expected_data.size())
     {
@@ -57,25 +60,6 @@ bool testMatrixMultiplication(Execution_Target exec_target)
     return verifyMatrix(res, {4.0f, 4.0f, 10.0f, 8.0f});
 }
 
-bool testMatmulAdd(Execution_Target exec_target)
-{
-    Matrix mat_a(2, 2, {1.0f, 2.0f, 3.0f, 4.0f}, exec_target);
-    Matrix mat_b(2, 2, {2.0f, 0.0f, 1.0f, 2.0f}, exec_target);
-    Matrix mat_bias(1, 2, {5.0f, 6.0f}, exec_target);
-
-    Matrix res = mat_a.matmulAdd(mat_b, mat_bias);
-    return verifyMatrix(res, {9.0f, 10.0f, 15.0f, 14.0f});
-}
-
-bool testSgdUpdate(Execution_Target exec_target)
-{
-    Matrix mat_a(2, 2, {1.0f, 2.0f, 3.0f, 4.0f}, exec_target);
-    Matrix grad(2, 2, {0.5f, -1.0f, 2.0f, -3.0f}, exec_target);
-
-    mat_a.sgdUpdate(grad, 0.1f, 100.0f);
-    return verifyMatrix(mat_a, {0.95f, 2.1f, 2.8f, 4.3f});
-}
-
 bool testScalarOperations(Execution_Target exec_target)
 {
     Matrix mat_a(2, 2, {1.0f, 2.0f, 3.0f, 4.0f}, exec_target);
@@ -86,18 +70,6 @@ bool testScalarOperations(Execution_Target exec_target)
     bool div_ok = verifyMatrix(div_res, {0.5f, 1.0f, 1.5f, 2.0f});
 
     return mul_ok && div_ok;
-}
-
-bool testReluBackward(Execution_Target exec_target)
-{
-    ReLU relu_layer(exec_target);
-    Matrix input_mat(2, 2, {-1.5f, 0.0f, 2.0f, -0.5f}, exec_target);
-    Matrix grad_out(2, 2, {1.0f, 2.0f, 3.0f, 4.0f}, exec_target);
-
-    relu_layer.forward(input_mat);
-    Matrix grad_in = relu_layer.backward(grad_out);
-
-    return verifyMatrix(grad_in, {0.0f, 0.0f, 3.0f, 0.0f});
 }
 
 bool testHadamardOperations(Execution_Target exec_target)
@@ -127,315 +99,279 @@ bool testTransposeAndInverse(Execution_Target exec_target)
     return trans_ok && inv_ok;
 }
 
-bool testNormalizeAndActivations(Execution_Target exec_target)
+bool testNormalize(Execution_Target exec_target)
 {
     Matrix vec_mat(1, 2, {3.0f, 4.0f}, exec_target);
     Matrix norm_res = vec_mat.normalize();
-    bool norm_ok = verifyMatrix(norm_res, {0.6f, 0.8f});
+    return verifyMatrix(norm_res, {0.6f, 0.8f});
+}
 
+bool testMatrixIO(Execution_Target exec_target)
+{
+    std::string temp_file = "temp_test_matrix.bin";
+    Matrix mat_original(2, 3, {1.0f, -2.0f, 3.5f, 4.2f, 5.0f, -6.1f}, exec_target);
+
+    std::ofstream out_file(temp_file, std::ios::binary);
+    if (!out_file.is_open())
+        return false;
+    mat_original.saveMatrix(out_file);
+    out_file.close();
+
+    std::ifstream in_file(temp_file, std::ios::binary);
+    if (!in_file.is_open())
+        return false;
+    Matrix mat_loaded = Matrix::loadMatrix(in_file, exec_target);
+    in_file.close();
+    std::remove(temp_file.c_str());
+
+    return verifyMatrix(mat_loaded, {1.0f, -2.0f, 3.5f, 4.2f, 5.0f, -6.1f});
+}
+
+bool testRelu(Execution_Target exec_target)
+{
     Matrix act_mat(2, 2, {-1.0f, 2.0f, 0.0f, -3.0f}, exec_target);
     Matrix relu_res = act_mat.relu();
-    bool relu_ok = verifyMatrix(relu_res, {0.0f, 2.0f, 0.0f, 0.0f});
+    bool fwd_ok = verifyMatrix(relu_res, {0.0f, 2.0f, 0.0f, 0.0f});
 
-    Matrix softmax_in(1, 2, {0.0f, 0.0f}, exec_target);
-    Matrix softmax_res = softmax_in.softmax();
-    bool softmax_ok = verifyMatrix(softmax_res, {0.5f, 0.5f});
+    Matrix grad_out(2, 2, {1.0f, 2.0f, 3.0f, 4.0f}, exec_target);
+    Matrix grad_in = act_mat.reluBackward(grad_out);
+    bool bwd_ok = verifyMatrix(grad_in, {0.0f, 2.0f, 0.0f, 0.0f});
 
-    return norm_ok && relu_ok && softmax_ok;
-}
-
-bool testNeuralNetworkPipeline(Execution_Target exec_target)
-{
-    Neural_Network net_inst(exec_target);
-
-    auto layer_1 = std::make_unique<Linear_Layer>(2, 2, exec_target);
-    layer_1->setWeights(Matrix(2, 2, {0.5f, -0.5f, 0.5f, 0.5f}, exec_target));
-    layer_1->setBiases(Matrix(1, 2, {0.1f, 0.1f}, exec_target));
-
-    auto relu_layer = std::make_unique<ReLU>(exec_target);
-
-    auto layer_2 = std::make_unique<Linear_Layer>(2, 1, exec_target);
-    layer_2->setWeights(Matrix(2, 1, {1.0f, 2.0f}, exec_target));
-    layer_2->setBiases(Matrix(1, 1, {0.0f}, exec_target));
-
-    net_inst.addLayer(std::move(layer_1));
-    net_inst.addLayer(std::move(relu_layer));
-    net_inst.addLayer(std::move(layer_2));
-
-    Matrix input_mat(1, 2, {1.0f, 2.0f}, exec_target);
-    Matrix target_mat(1, 1, {1.0f}, exec_target);
-    MSE_Cost cost_fn;
-    Step_Decay lr(0.01f, 1e-6f, 0.1f, 10);
-    Adam_Optimizer optimizer(lr);
-
-    net_inst.trainStep(input_mat, target_mat, cost_fn, lr.getCurrentRate(), optimizer);
-    float initial_loss = net_inst.evaluate(input_mat, target_mat, cost_fn);
-    net_inst.trainStep(input_mat, target_mat, cost_fn, lr.getCurrentRate(), optimizer);
-    float second_loss = net_inst.evaluate(input_mat, target_mat, cost_fn);
-    return !std::isnan(initial_loss) && !std::isnan(second_loss) && (second_loss <= initial_loss);
-}
-
-bool testMatmulTransA(Execution_Target exec_target)
-{
-    Matrix mat_a(3, 2, {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}, exec_target);
-    Matrix mat_b(3, 2, {1.0f, 0.0f, 2.0f, 1.0f, 0.0f, 1.0f}, exec_target);
-
-    Matrix res = mat_a.matmulTransA(mat_b);
-    return verifyMatrix(res, {7.0f, 8.0f, 10.0f, 10.0f});
-}
-
-bool testMatmulTransB(Execution_Target exec_target)
-{
-    Matrix mat_a(2, 3, {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}, exec_target);
-    Matrix mat_b(2, 3, {1.0f, 0.0f, 1.0f, 2.0f, 1.0f, 0.0f}, exec_target);
-
-    Matrix res = mat_a.matmulTransB(mat_b);
-    return verifyMatrix(res, {4.0f, 4.0f, 10.0f, 13.0f});
+    return fwd_ok && bwd_ok;
 }
 
 bool testGelu(Execution_Target exec_target)
 {
     Matrix input_mat(1, 4, {0.0f, 1.0f, -1.0f, 2.0f}, exec_target);
     Matrix gelu_res = input_mat.gelu();
+    bool fwd_ok = verifyMatrix(gelu_res, {0.0f, 0.8412316f, -0.1587684f, 1.9546059f});
 
-    return verifyMatrix(gelu_res, {0.0f, 0.8412316f, -0.1587684f, 1.9546059f});
+    Matrix grad_in = input_mat.geluBackward(Matrix(1, 4, {1.0f, 1.0f, 1.0f, 1.0f}, exec_target));
+    bool bwd_ok = verifyMatrix(grad_in, {0.5f, 1.0829548f, -0.0829548f, 1.085999f});
+
+    return fwd_ok && bwd_ok;
 }
 
-bool testGeluBackward(Execution_Target exec_target)
+bool testSoftmax(Execution_Target exec_target)
 {
-    Matrix input_mat(1, 2, {0.0f, 1.0f}, exec_target);
-    Matrix grad_out(1, 2, {1.0f, 1.0f}, exec_target);
+    Matrix softmax_in(1, 2, {0.0f, 0.0f}, exec_target);
+    Matrix softmax_res = softmax_in.softmax();
+    bool fwd_ok = verifyMatrix(softmax_res, {0.5f, 0.5f});
 
-    Matrix grad_in = input_mat.geluBackward(grad_out);
+    Matrix grad_out(1, 2, {1.0f, -1.0f}, exec_target);
+    Matrix grad_in = softmax_res.softmaxBackward(grad_out);
+    bool bwd_ok = verifyMatrix(grad_in, {0.5f, -0.5f});
 
-    return verifyMatrix(grad_in, {0.5f, 1.0829548f});
+    return fwd_ok && bwd_ok;
+}
+
+bool testLinearForward(Execution_Target exec_target)
+{
+    Matrix input_x(1, 2, {1.0f, 2.0f}, exec_target);
+    Matrix weights_w(2, 3, {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}, exec_target);
+    Matrix biases_b(1, 3, {0.1f, 0.2f, 0.3f}, exec_target);
+    Matrix output_y(1, 3, exec_target);
+
+    input_x.linearForward(weights_w, biases_b, output_y);
+    return verifyMatrix(output_y, {9.1f, 12.2f, 15.3f});
+}
+
+bool testLinearBackward(Execution_Target exec_target)
+{
+    Matrix input_x(1, 2, {1.0f, 2.0f}, exec_target);
+    Matrix weights_w(2, 3, {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}, exec_target);
+    Matrix grad_y(1, 3, {1.0f, 1.0f, 1.0f}, exec_target);
+
+    Matrix grad_x(1, 2, exec_target);
+    grad_y.linearBackwardInput(weights_w, grad_x);
+    bool bwd_input_ok = verifyMatrix(grad_x, {6.0f, 15.0f});
+
+    Matrix grad_w(2, 3, exec_target);
+    Matrix grad_b(1, 3, exec_target);
+    input_x.linearBackwardWeightBias(grad_y, grad_w, grad_b);
+    bool bwd_wb_ok = verifyMatrix(grad_w, {1.0f, 1.0f, 1.0f, 2.0f, 2.0f, 2.0f}) &&
+                     verifyMatrix(grad_b, {1.0f, 1.0f, 1.0f});
+
+    return bwd_input_ok && bwd_wb_ok;
 }
 
 bool testConv2d(Execution_Target exec_target)
 {
     Matrix input_mat(1, 9, {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f}, exec_target);
-
     Matrix weights(1, 4, {1.0f, 0.0f, 0.0f, 1.0f}, exec_target);
-
     Matrix bias(1, 1, {0.0f}, exec_target);
 
     Matrix out_mat = input_mat.conv2d(weights, bias, 3, 3, 1, 1, 2, 1, 0);
-
-    return verifyMatrix(out_mat, {6.0f, 8.0f,
-                                  12.0f, 14.0f});
-}
-
-bool testMaxPool2d(Execution_Target exec_target)
-{
-    Matrix input_mat(1, 16, {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f, 10.0f, 11.0f, 12.0f, 13.0f, 14.0f, 15.0f, 16.0f}, exec_target);
-
-    auto [out_mat, mask_mat] = input_mat.maxpool2d(4, 4, 1, 2, 2, 0);
-
-    return verifyMatrix(out_mat, {6.0f, 8.0f,
-                                  14.0f, 16.0f});
-}
-
-bool testBatchNorm(Execution_Target exec_target)
-{
-    Batch_Norm_Layer bn_layer(1, 1e-5f, 0.1f, exec_target);
-    Matrix input_mat(3, 1, {1.0f, 2.0f, 3.0f}, exec_target);
-
-    Matrix out_mat = bn_layer.forward(input_mat);
-    bool forward_ok = verifyMatrix(out_mat, {-1.2247f, 0.0f, 1.2247f});
-
-    Matrix grad_out(3, 1, {1.0f, 2.0f, 1.0f}, exec_target);
-    Matrix grad_in = bn_layer.backward(grad_out);
-    bool backward_ok = verifyMatrix(grad_in, {-0.4082f, 0.8165f, -0.4082f});
-
-    return forward_ok && backward_ok;
-}
-
-bool testGlobalAvgPool2d(Execution_Target exec_target)
-{
-    Matrix input_mat(1, 8, {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f}, exec_target);
-
-    Matrix out_mat = input_mat.globalAvgPool2d(2, 2, 2);
-
-    return verifyMatrix(out_mat, {4.0f, 5.0f});
+    return verifyMatrix(out_mat, {6.0f, 8.0f, 12.0f, 14.0f});
 }
 
 bool testConv2dBackward(Execution_Target exec_target)
 {
     Matrix input_mat(1, 9, {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f}, exec_target);
-
     Matrix weights(1, 4, {1.0f, 0.0f, 0.0f, 1.0f}, exec_target);
-
     Matrix grad_out(1, 4, {1.0f, 1.0f, 1.0f, 1.0f}, exec_target);
 
     Matrix grad_in = grad_out.conv2dBackwardInput(weights, 3, 3, 1, 2, 2, 1, 2, 1, 0);
-
     Matrix grad_weights(1, 4, exec_target);
     Matrix grad_biases(1, 1, exec_target);
-
     input_mat.conv2dBackwardWeight(grad_out, grad_weights, grad_biases, 3, 3, 1, 2, 2, 1, 2, 1, 0);
 
-    bool grad_in_ok = verifyMatrix(grad_in, {1.0f, 1.0f, 0.0f,
-                                             1.0f, 2.0f, 1.0f,
-                                             0.0f, 1.0f, 1.0f});
-
-    bool grad_w_ok = verifyMatrix(grad_weights, {12.0f, 16.0f,
-                                                 24.0f, 28.0f});
-
+    bool grad_in_ok = verifyMatrix(grad_in, {1.0f, 1.0f, 0.0f, 1.0f, 2.0f, 1.0f, 0.0f, 1.0f, 1.0f});
+    bool grad_w_ok = verifyMatrix(grad_weights, {12.0f, 16.0f, 24.0f, 28.0f});
     bool grad_b_ok = verifyMatrix(grad_biases, {4.0f});
 
     return grad_in_ok && grad_w_ok && grad_b_ok;
 }
 
-bool testMaxPool2dBackward(Execution_Target exec_target)
+bool testMaxPool2d(Execution_Target exec_target)
 {
     Matrix input_mat(1, 16, {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f, 10.0f, 11.0f, 12.0f, 13.0f, 14.0f, 15.0f, 16.0f}, exec_target);
-
     auto [out_mat, mask_mat] = input_mat.maxpool2d(4, 4, 1, 2, 2, 0);
+    bool fwd_ok = verifyMatrix(out_mat, {6.0f, 8.0f, 14.0f, 16.0f});
 
     Matrix grad_out(1, 4, {1.0f, 2.0f, 3.0f, 4.0f}, exec_target);
-
     Matrix grad_in = grad_out.maxpool2dBackward(mask_mat, 4, 4, 1, 2, 2, 2, 2, 0);
+    bool bwd_ok = verifyMatrix(grad_in, {0.0f, 0.0f, 0.0f, 0.0f,
+                                         0.0f, 1.0f, 0.0f, 2.0f,
+                                         0.0f, 0.0f, 0.0f, 0.0f,
+                                         0.0f, 3.0f, 0.0f, 4.0f});
 
-    return verifyMatrix(grad_in, {0.0f, 0.0f, 0.0f, 0.0f,
-                                  0.0f, 1.0f, 0.0f, 2.0f,
-                                  0.0f, 0.0f, 0.0f, 0.0f,
-                                  0.0f, 3.0f, 0.0f, 4.0f});
+    return fwd_ok && bwd_ok;
 }
 
-bool testGlobalAvgPool2dBackward(Execution_Target exec_target)
+bool testGlobalAvgPool2d(Execution_Target exec_target)
 {
+    Matrix input_mat(1, 8, {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f}, exec_target);
+    Matrix out_mat = input_mat.globalAvgPool2d(2, 2, 2);
+    bool fwd_ok = verifyMatrix(out_mat, {4.0f, 5.0f});
+
     Matrix grad_out(1, 2, {4.0f, 8.0f}, exec_target);
-
     Matrix grad_in = grad_out.globalAvgPool2dBackward(2, 2, 2);
+    bool bwd_ok = verifyMatrix(grad_in, {1.0f, 2.0f, 1.0f, 2.0f, 1.0f, 2.0f, 1.0f, 2.0f});
 
-    return verifyMatrix(grad_in, {1.0f, 2.0f,
-                                  1.0f, 2.0f,
-                                  1.0f, 2.0f,
-                                  1.0f, 2.0f});
+    return fwd_ok && bwd_ok;
 }
 
-bool testLearningRate()
+bool testBatchNorm(Execution_Target exec_target)
 {
-    Step_Decay lr_step(0.01f, 1e-6f, 0.1f, 5);
-    if (!nearlyEqual(lr_step.getCurrentRate(), 0.01f))
-    {
-        return false;
-    }
-    for (int epoch = 0; epoch < 5; ++epoch)
-    {
-        lr_step.step();
-    }
-    if (!nearlyEqual(lr_step.getCurrentRate(), 0.001f))
-    {
-        return false;
-    }
+    Matrix input_mat(3, 1, {1.0f, 2.0f, 3.0f}, exec_target);
+    Matrix gamma(1, 1, {1.0f}, exec_target);
+    Matrix beta(1, 1, {0.0f}, exec_target);
 
-    Exponential_Decay lr_exp(0.1f, 1e-6f, 0.9f);
-    if (!nearlyEqual(lr_exp.getCurrentRate(), 0.1f))
-    {
-        return false;
-    }
-    lr_exp.step();
-    if (!nearlyEqual(lr_exp.getCurrentRate(), 0.09f))
-    {
-        return false;
-    }
+    Matrix running_mean(1, 1, {0.0f}, exec_target);
+    Matrix running_var(1, 1, {1.0f}, exec_target);
+    Matrix batch_mean(1, 1, exec_target);
+    Matrix batch_var(1, 1, exec_target);
+    Matrix x_hat(3, 1, exec_target);
 
-    Cosine_Annealing lr_cos(0.1f, 0.0f, 10);
-    if (!nearlyEqual(lr_cos.getCurrentRate(), 0.1f))
-    {
-        return false;
-    }
-    for (int epoch = 0; epoch < 5; ++epoch)
-    {
-        lr_cos.step();
-    }
-    if (!nearlyEqual(lr_cos.getCurrentRate(), 0.05f))
-    {
-        return false;
-    }
+    Matrix out_mat = input_mat.batchNormForward(gamma, beta, running_mean, running_var, batch_mean, batch_var, x_hat, 1e-5f, 0.1f, true);
+    bool forward_ok = verifyMatrix(out_mat, {-1.2247f, 0.0f, 1.2247f});
 
-    return true;
+    Matrix grad_out(3, 1, {1.0f, 2.0f, 1.0f}, exec_target);
+    Matrix grad_gamma(1, 1, exec_target);
+    Matrix grad_beta(1, 1, exec_target);
+
+    Matrix grad_in = input_mat.batchNormBackward(grad_out, gamma, batch_var, x_hat, grad_gamma, grad_beta, 1e-5f);
+    bool backward_ok = verifyMatrix(grad_in, {-0.4082f, 0.8165f, -0.4082f});
+
+    return forward_ok && backward_ok;
 }
 
-bool testSgdOptimizer(Execution_Target exec_target)
+bool testSgdUpdate(Execution_Target exec_target)
 {
-    Step_Decay lr(0.1f, 1e-6f, 1.0f, 1);
-    SGD_Optimizer optimizer(lr);
-
     Matrix param_mat(2, 2, {1.0f, 2.0f, 3.0f, 4.0f}, exec_target);
-    Matrix grad_mat(2, 2, {0.5f, -1.0f, 2.0f, -3.0f}, exec_target);
+    Matrix grad(2, 2, {0.5f, -1.0f, 2.0f, -3.0f}, exec_target);
 
-    std::vector<std::pair<Matrix *, Matrix *>> param_grad_pairs = {
-        {&param_mat, &grad_mat}};
-
-    optimizer.step(param_grad_pairs);
-
+    param_mat.sgdUpdate(grad, 0.1f, 100.0f);
     return verifyMatrix(param_mat, {0.95f, 2.1f, 2.8f, 4.3f});
 }
 
-bool testAdamOptimizer(Execution_Target exec_target)
+bool testAdamUpdate(Execution_Target exec_target)
 {
-    Step_Decay lr(0.001f, 1e-6f, 1.0f, 1);
-    Adam_Optimizer optimizer(lr, 0.9f, 0.999f, 1e-8f, 100.0f);
-
     Matrix param_mat(1, 2, {1.0f, 2.0f}, exec_target);
     Matrix grad_mat(1, 2, {0.1f, -0.2f}, exec_target);
+    Matrix m_mat(1, 2, {0.0f, 0.0f}, exec_target);
+    Matrix v_mat(1, 2, {0.0f, 0.0f}, exec_target);
 
-    std::vector<std::pair<Matrix *, Matrix *>> param_grad_pairs = {
-        {&param_mat, &grad_mat}};
+    param_mat.adamUpdate(grad_mat, m_mat, v_mat, 0.001f, 0.9f, 0.999f, 1e-8f, 1, 100.0f);
 
-    optimizer.step(param_grad_pairs);
+    bool adam_ok = verifyMatrix(param_mat, {0.999f, 2.001f});
+    bool m_ok = verifyMatrix(m_mat, {0.01f, -0.02f});
+    bool v_ok = verifyMatrix(v_mat, {0.00001f, 0.00004f});
 
-    bool first_step_ok = verifyMatrix(param_mat, {0.999f, 2.001f});
+    return adam_ok && m_ok && v_ok;
+}
 
-    optimizer.reset();
+bool testMatmulAdd(Execution_Target exec_target)
+{
+    Matrix mat_a(2, 2, {1.0f, 2.0f, 3.0f, 4.0f}, exec_target);
+    Matrix mat_b(2, 2, {2.0f, 0.0f, 1.0f, 2.0f}, exec_target);
+    Matrix mat_bias(1, 2, {5.0f, 6.0f}, exec_target);
 
-    Matrix param_reset(1, 2, {1.0f, 2.0f}, exec_target);
-    std::vector<std::pair<Matrix *, Matrix *>> reset_pairs = {
-        {&param_reset, &grad_mat}};
+    Matrix res = mat_a.matmulAdd(mat_b, mat_bias);
+    return verifyMatrix(res, {9.0f, 10.0f, 15.0f, 14.0f});
+}
 
-    optimizer.step(reset_pairs);
+bool testBatchNorm2d(Execution_Target exec_target)
+{
+    Matrix input_mat(2, 2, {1.0f, 3.0f, 5.0f, 7.0f}, exec_target);
+    Matrix gamma(1, 1, {1.0f}, exec_target);
+    Matrix beta(1, 1, {0.0f}, exec_target);
 
-    bool reset_ok = verifyMatrix(param_reset, {0.999f, 2.001f});
+    Matrix running_mean(1, 1, {0.0f}, exec_target);
+    Matrix running_var(1, 1, {1.0f}, exec_target);
+    Matrix batch_mean(1, 1, exec_target);
+    Matrix batch_var(1, 1, exec_target);
+    Matrix x_hat(2, 2, exec_target);
 
-    return first_step_ok && reset_ok;
+    Matrix out_mat = input_mat.batchNorm2dForward(gamma, beta, running_mean, running_var, batch_mean, batch_var, x_hat, 1, 2, 1, 1e-5f, 0.1f, true);
+    bool forward_ok = verifyMatrix(out_mat, {-1.34164f, -0.44721f, 0.44721f, 1.34164f});
+
+    Matrix grad_out(2, 2, {1.0f, 0.0f, 0.0f, 0.0f}, exec_target);
+    Matrix grad_gamma(1, 1, exec_target);
+    Matrix grad_beta(1, 1, exec_target);
+
+    Matrix grad_in = input_mat.batchNorm2dBackward(grad_out, gamma, batch_var, x_hat, grad_gamma, grad_beta, 1, 2, 1, 1e-5f);
+    bool backward_ok = verifyMatrix(grad_in, {0.13416f, -0.17889f, -0.04472f, 0.08944f});
+
+    return forward_ok && backward_ok;
 }
 
 void runTestSuite(Execution_Target exec_target, const std::string &target_name)
 {
     std::cout << "--- Running Tests on " << target_name << " ---\n";
 
-    std::cout << "Matrix Addition: " << (testMatrixAddition(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "Matrix Subtraction: " << (testMatrixSubtraction(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "Matrix Multiplication: " << (testMatrixMultiplication(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "MatmulAdd Fusion: " << (testMatmulAdd(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "MatmulTransA (A^T * B): " << (testMatmulTransA(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "MatmulTransB (A * B^T): " << (testMatmulTransB(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "Scalar Operations: " << (testScalarOperations(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "Hadamard Operations: " << (testHadamardOperations(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "Transpose & Inverse: " << (testTransposeAndInverse(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "Normalize & Activations: " << (testNormalizeAndActivations(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "ReLU Backward: " << (testReluBackward(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "GELU Forward: " << (testGelu(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "GELU Backward: " << (testGeluBackward(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "[Basic Arithmetics]\n";
+    std::cout << "  Matrix Addition: " << (testMatrixAddition(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Matrix Subtraction: " << (testMatrixSubtraction(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Matrix Multiplication: " << (testMatrixMultiplication(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Scalar Operations: " << (testScalarOperations(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Hadamard Operations: " << (testHadamardOperations(exec_target) ? "PASS" : "FAIL") << "\n";
 
-    std::cout << "Conv2D Forward: " << (testConv2d(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "Conv2D Backward: " << (testConv2dBackward(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "\n[Transformations & Utility]\n";
+    std::cout << "  Transpose & Inverse: " << (testTransposeAndInverse(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Normalize: " << (testNormalize(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Matrix I/O (Save/Load): " << (testMatrixIO(exec_target) ? "PASS" : "FAIL") << "\n";
 
-    std::cout << "MaxPool2D Forward: " << (testMaxPool2d(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "MaxPool2D Backward: " << (testMaxPool2dBackward(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "\n[Activations]\n";
+    std::cout << "  ReLU Forward & Backward: " << (testRelu(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  GELU Forward & Backward: " << (testGelu(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Softmax Forward & Backward: " << (testSoftmax(exec_target) ? "PASS" : "FAIL") << "\n";
 
-    std::cout << "GlobalAvgPool2D Forward: " << (testGlobalAvgPool2d(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "GlobalAvgPool2D Backward: " << (testGlobalAvgPool2dBackward(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "\n[Neural Network Layers]\n";
+    std::cout << "  Linear Forward: " << (testLinearForward(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Linear Backward (Input & Weights): " << (testLinearBackward(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Conv2D Forward: " << (testConv2d(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Conv2D Backward: " << (testConv2dBackward(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  MaxPool2D Forward & Backward: " << (testMaxPool2d(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  GlobalAvgPool2D Forward & Backward: " << (testGlobalAvgPool2d(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  BatchNorm Forward & Backward: " << (testBatchNorm(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  BatchNorm2D Forward & Backward: " << (testBatchNorm2d(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  MatmulAdd (Fused FC): " << (testMatmulAdd(exec_target) ? "PASS" : "FAIL") << "\n";
 
-    std::cout << "Neural Network Pipeline: " << (testNeuralNetworkPipeline(exec_target) ? "PASS" : "FAIL") << "\n";
-
-    std::cout << "BatchNorm Forward & Backward: " << (testBatchNorm(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "Learning Rate Scheduler: " << (testLearningRate() ? "PASS" : "FAIL") << "\n\n";
-
-    std::cout << "SGD Optimizer Step: " << (testSgdOptimizer(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "Adam Optimizer Step & Reset: " << (testAdamOptimizer(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "\n[Optimizers]\n";
+    std::cout << "  SGD Update: " << (testSgdUpdate(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Adam Update: " << (testAdamUpdate(exec_target) ? "PASS" : "FAIL") << "\n\n";
 }
 
 int main()

@@ -1,14 +1,27 @@
 #pragma once
 
-#include <vector>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
 #include <stdexcept>
+#include <string>
+#include <vector>
 #include <vulkan/vulkan.h>
 
-#include "vulkan_context.h"
-#include "vulkan_network.h"
 #include "compute_graph.h"
 #include "helper/logger.h"
+#include "vulkan_context.h"
+#include "vulkan_network.h"
 
+#ifndef ENABLE_EXECUTOR_DEBUG_LOGS
+#define ENABLE_EXECUTOR_DEBUG_LOGS 0
+#endif
+
+#if ENABLE_EXECUTOR_DEBUG_LOGS
+#define EXECUTOR_LOG_DEBUG(msg) Logger::logMessage(msg, LOG_DEBUG)
+#else
+#define EXECUTOR_LOG_DEBUG(msg) ((void)0)
+#endif
 
 class Graph_Executor
 {
@@ -22,6 +35,8 @@ private:
 
     void initResources()
     {
+        EXECUTOR_LOG_DEBUG("Graph_Executor::initResources: Allocating command buffers and descriptor pools");
+
         VkDevice device = context.getDevice();
 
         VkCommandBufferAllocateInfo alloc_info{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
@@ -29,7 +44,11 @@ private:
         alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         alloc_info.commandBufferCount = MAX_FRAMES_IN_FLIGHT;
 
-        vkAllocateCommandBuffers(device, &alloc_info, cmd_buffers);
+        if (vkAllocateCommandBuffers(device, &alloc_info, cmd_buffers) != VK_SUCCESS)
+        {
+            Logger::logMessage("Graph_Executor::initResources: Failed to allocate command buffers", LOG_ERROR, true);
+            throw std::runtime_error("Failed to allocate command buffers");
+        }
 
         VkDescriptorPoolSize pool_sizes[] = {
             {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4000}};
@@ -42,7 +61,11 @@ private:
 
         for (std::uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
-            vkCreateDescriptorPool(device, &pool_info, nullptr, &descriptor_pools[i]);
+            if (vkCreateDescriptorPool(device, &pool_info, nullptr, &descriptor_pools[i]) != VK_SUCCESS)
+            {
+                Logger::logMessage("Graph_Executor::initResources: Failed to create descriptor pool for frame " + std::to_string(i), LOG_ERROR, true);
+                throw std::runtime_error("Failed to create descriptor pool");
+            }
         }
     }
 
@@ -63,12 +86,24 @@ private:
 
     void updateDescriptorSet(VkDescriptorSet descriptor_set, const std::vector<std::shared_ptr<GVector>> &buffers) const
     {
+        if (buffers.empty())
+        {
+            Logger::logMessage("Graph_Executor::updateDescriptorSet: Node buffers vector is empty", LOG_WARNING);
+            return;
+        }
+
         VkDevice device = context.getDevice();
         std::vector<VkDescriptorBufferInfo> buffer_infos(buffers.size());
         std::vector<VkWriteDescriptorSet> writes(buffers.size());
 
         for (std::size_t i = 0; i < buffers.size(); ++i)
         {
+            if (!buffers[i])
+            {
+                Logger::logMessage("Graph_Executor::updateDescriptorSet: Null buffer encountered in node buffers at index " + std::to_string(i), LOG_WARNING);
+                continue;
+            }
+
             buffer_infos[i].buffer = buffers[i]->getBuffer();
             buffer_infos[i].offset = 0;
             buffer_infos[i].range = VK_WHOLE_SIZE;
@@ -93,6 +128,7 @@ public:
 
     ~Graph_Executor()
     {
+        EXECUTOR_LOG_DEBUG("Graph_Executor::~Graph_Executor: Cleaning up Vulkan descriptor pools and command buffers");
         VkDevice device = context.getDevice();
         for (std::uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
@@ -106,22 +142,51 @@ public:
 
     void resetFrameState(std::uint32_t frame_index)
     {
+        if (frame_index >= MAX_FRAMES_IN_FLIGHT)
+        {
+            Logger::logMessage("Graph_Executor::resetFrameState: frame_index out of bounds (" + std::to_string(frame_index) + ")", LOG_WARNING);
+            return;
+        }
+
+        EXECUTOR_LOG_DEBUG("Graph_Executor::resetFrameState: Resetting descriptor pool for frame " + std::to_string(frame_index));
         vkResetDescriptorPool(context.getDevice(), descriptor_pools[frame_index], 0);
         descriptor_cache[frame_index].clear();
     }
 
     void compileAndExecute(const Compute_Graph &graph, const std::vector<Buffer_Transfer_Task> &transfers, std::uint32_t frame_index)
     {
+        if (frame_index >= MAX_FRAMES_IN_FLIGHT)
+        {
+            Logger::logMessage("Graph_Executor::compileAndExecute: frame_index out of bounds (" + std::to_string(frame_index) + ")", LOG_WARNING);
+            return;
+        }
+
+        const std::vector<Compute_Node> &nodes = graph.getNodes();
+        if (nodes.empty() && transfers.empty())
+        {
+            Logger::logMessage("Graph_Executor::compileAndExecute: Both compute nodes and transfer tasks are empty for frame " + std::to_string(frame_index), LOG_WARNING);
+        }
+
+        EXECUTOR_LOG_DEBUG("Graph_Executor::compileAndExecute: Frame " + std::to_string(frame_index) + ", nodes=" + std::to_string(nodes.size()) + ", transfers=" + std::to_string(transfers.size()));
+
         VkDevice device = context.getDevice();
 
         context.resetFrameFence(frame_index);
 
         VkCommandBuffer cmd_buffer = cmd_buffers[frame_index];
-        vkResetCommandBuffer(cmd_buffer, 0);
+        if (vkResetCommandBuffer(cmd_buffer, 0) != VK_SUCCESS)
+        {
+            Logger::logMessage("Graph_Executor::compileAndExecute: Failed to reset command buffer for frame " + std::to_string(frame_index), LOG_ERROR, true);
+            throw std::runtime_error("Failed to reset command buffer");
+        }
 
         VkCommandBufferBeginInfo begin_info{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
         begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vkBeginCommandBuffer(cmd_buffer, &begin_info);
+        if (vkBeginCommandBuffer(cmd_buffer, &begin_info) != VK_SUCCESS)
+        {
+            Logger::logMessage("Graph_Executor::compileAndExecute: Failed to begin command buffer for frame " + std::to_string(frame_index), LOG_ERROR, true);
+            throw std::runtime_error("Failed to begin command buffer");
+        }
 
         if (!transfers.empty())
         {
@@ -147,8 +212,6 @@ public:
                 0, nullptr);
         }
 
-        const std::vector<Compute_Node> &nodes = graph.getNodes();
-
         for (std::size_t i = 0; i < nodes.size(); ++i)
         {
             const Compute_Node &node = nodes[i];
@@ -159,6 +222,10 @@ public:
                 {
                     vec->markAsUsedInFrame(frame_index);
                 }
+                else
+                {
+                    Logger::logMessage("Graph_Executor::compileAndExecute: Null GVector buffer encountered in compute node " + std::to_string(i), LOG_WARNING);
+                }
             }
 
             VkDescriptorSetLayout layout = network.getDescriptorSetLayout();
@@ -168,7 +235,11 @@ public:
             alloc_info.pSetLayouts = &layout;
 
             VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
-            vkAllocateDescriptorSets(device, &alloc_info, &descriptor_set);
+            if (vkAllocateDescriptorSets(device, &alloc_info, &descriptor_set) != VK_SUCCESS)
+            {
+                Logger::logMessage("Graph_Executor::compileAndExecute: Failed to allocate descriptor set for node " + std::to_string(i), LOG_ERROR, true);
+                throw std::runtime_error("Failed to allocate descriptor set");
+            }
             descriptor_cache[frame_index].push_back(descriptor_set);
 
             updateDescriptorSet(descriptor_set, node.buffers);
@@ -189,12 +260,20 @@ public:
             }
         }
 
-        vkEndCommandBuffer(cmd_buffer);
+        if (vkEndCommandBuffer(cmd_buffer) != VK_SUCCESS)
+        {
+            Logger::logMessage("Graph_Executor::compileAndExecute: Failed to end command buffer for frame " + std::to_string(frame_index), LOG_ERROR, true);
+            throw std::runtime_error("Failed to end command buffer");
+        }
 
         VkSubmitInfo submit_info{.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO};
         submit_info.commandBufferCount = 1;
         submit_info.pCommandBuffers = &cmd_buffer;
 
-        vkQueueSubmit(context.getComputeQueue(), 1, &submit_info, context.getFrameFence(frame_index));
+        if (vkQueueSubmit(context.getComputeQueue(), 1, &submit_info, context.getFrameFence(frame_index)) != VK_SUCCESS)
+        {
+            Logger::logMessage("Graph_Executor::compileAndExecute: Failed to submit command buffer to compute queue for frame " + std::to_string(frame_index), LOG_ERROR, true);
+            throw std::runtime_error("Failed to submit command buffer");
+        }
     }
 };

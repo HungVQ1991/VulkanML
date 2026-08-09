@@ -2,7 +2,9 @@
 
 #include <fstream>
 #include <stdexcept>
+#include <string>
 
+#include "helper/logger.h"
 #include "ilearning_rate.h"
 
 class No_Decay : public ILearning_Rate
@@ -16,6 +18,7 @@ public:
     {
         if (learning_rate <= 0.0f)
         {
+            Logger::logMessage("No_Decay::No_Decay: Initial learning rate must be greater than 0.", LOG_ERROR, true);
             throw std::invalid_argument("Initial learning rate must be greater than 0.");
         }
     }
@@ -23,7 +26,11 @@ public:
     ~No_Decay() override = default;
 
     Decay_Mode getType() const override { return Decay_Mode::NO_DECAY; }
-    float updateRate() override { return learning_rate; }
+    float updateRate() override
+    {
+        LR_LOG_DEBUG("No_Decay::updateRate: current_rate=" + std::to_string(learning_rate));
+        return learning_rate;
+    }
     void step(float current_val = 0.0f) override {}
     float getCurrentRate() const override { return learning_rate; }
     float getLearningRate() const override { return learning_rate; }

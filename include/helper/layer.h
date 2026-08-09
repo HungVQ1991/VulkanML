@@ -8,5 +8,5 @@
 #include "layer/gelu.h"
 #include "layer/softmax.h"
 #include "layer/globalavgpool2d_layer.h"
-#include "learning_rate/ilearning_rate.h"
+#include "layer/batch_norm2d_layer.h"
 #include "layer/ilayer.h"

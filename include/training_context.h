@@ -16,6 +16,16 @@
 #include "helper/magic_enum.hpp"
 #include "helper/optimizer.h"
 
+#ifndef ENABLE_TRAINING_CONTEXT_DEBUG_LOGS
+#define ENABLE_TRAINING_CONTEXT_DEBUG_LOGS 0
+#endif
+
+#if ENABLE_TRAINING_CONTEXT_DEBUG_LOGS
+#define TRAINING_CONTEXT_LOG_DEBUG(msg) Logger::logMessage(msg, LOG_DEBUG)
+#else
+#define TRAINING_CONTEXT_LOG_DEBUG(msg) ((void)0)
+#endif
+
 class Training_Context
 {
 private:
@@ -26,6 +36,14 @@ private:
 
     void createCostFunction(Cost_Type type_val, std::ifstream &in_file)
     {
+        if (!in_file.is_open())
+        {
+            Logger::logMessage("Training_Context::createCostFunction: Input stream is not open", LOG_ERROR, true);
+            throw std::runtime_error("Input stream is not open");
+        }
+
+        TRAINING_CONTEXT_LOG_DEBUG("Training_Context::createCostFunction: Cost type = " + static_cast<std::string>(magic_enum::enum_name(type_val)));
+
         switch (type_val)
         {
         case Cost_Type::MSE:
@@ -41,7 +59,7 @@ private:
             cost_fn = std::make_unique<CCE_Cost>();
             break;
         default:
-            Logger::logMessage("createCostFunction: Unknown cost type", LOG_ERROR, true);
+            Logger::logMessage("Training_Context::createCostFunction: Unknown cost type", LOG_ERROR, true);
             throw std::runtime_error("Unknown cost type");
         }
         cost_fn->loadCheckpoint(in_file);
@@ -49,10 +67,24 @@ private:
 
     void createLRScheduler(Decay_Mode type_val, std::ifstream &in_file)
     {
+        if (!in_file.is_open())
+        {
+            Logger::logMessage("Training_Context::createLRScheduler: Input stream is not open", LOG_ERROR, true);
+            throw std::runtime_error("Input stream is not open");
+        }
+
+        TRAINING_CONTEXT_LOG_DEBUG("Training_Context::createLRScheduler: Decay mode = " + static_cast<std::string>(magic_enum::enum_name(type_val)));
+
         switch (type_val)
         {
+        case Decay_Mode::NO_DECAY:
+            learning_rate = std::make_unique<No_Decay>();
+            break;
         case Decay_Mode::STEP_DECAY:
             learning_rate = std::make_unique<Step_Decay>();
+            break;
+        case Decay_Mode::MULTI_STEP_DECAY:
+            learning_rate = std::make_unique<Multi_Step_Decay>();
             break;
         case Decay_Mode::EXPONENTIAL_DECAY:
             learning_rate = std::make_unique<Exponential_Decay>();
@@ -60,8 +92,14 @@ private:
         case Decay_Mode::COSINE_ANNEALING:
             learning_rate = std::make_unique<Cosine_Annealing>(0.001f, 0.0f, 1);
             break;
+        case Decay_Mode::POLYNOMIAL_DECAY:
+            learning_rate = std::make_unique<Polynomial_Decay>();
+            break;
+        case Decay_Mode::REDUCE_ON_PLATEAU:
+            learning_rate = std::make_unique<Reduce_On_Plateau>();
+            break;
         default:
-            Logger::logMessage("createLRScheduler: Unknown decay mode", LOG_ERROR, true);
+            Logger::logMessage("Training_Context::createLRScheduler: Unknown decay mode", LOG_ERROR, true);
             throw std::runtime_error("Unknown decay mode");
         }
         learning_rate->loadCheckpoint(in_file);
@@ -70,11 +108,19 @@ private:
 
     void createOptimizer(Optimizer_Type type_val, std::ifstream &in_file, Execution_Target exec_target = Execution_Target::CPU)
     {
+        if (!in_file.is_open())
+        {
+            Logger::logMessage("Training_Context::createOptimizer: Input stream is not open", LOG_ERROR, true);
+            throw std::runtime_error("Input stream is not open");
+        }
+
         if (!learning_rate)
         {
-            Logger::logMessage("createOptimizer: Learning rate scheduler must be created before optimizer", LOG_ERROR, true);
+            Logger::logMessage("Training_Context::createOptimizer: Learning rate scheduler must be created before optimizer", LOG_ERROR, true);
             throw std::runtime_error("Learning rate scheduler must be created before optimizer");
         }
+
+        TRAINING_CONTEXT_LOG_DEBUG("Training_Context::createOptimizer: Optimizer type = " + static_cast<std::string>(magic_enum::enum_name(type_val)));
 
         switch (type_val)
         {
@@ -85,7 +131,7 @@ private:
             optimizer = std::make_unique<Adam_Optimizer>(*learning_rate, 0.9f, 0.999f, 1e-8f, 1.0f);
             break;
         default:
-            Logger::logMessage("createOptimizer: Unknown optimizer type", LOG_ERROR, true);
+            Logger::logMessage("Training_Context::createOptimizer: Unknown optimizer type", LOG_ERROR, true);
             throw std::runtime_error("Unknown optimizer type");
         }
 
@@ -109,21 +155,39 @@ public:
 
     void setLearningRate(std::unique_ptr<ILearning_Rate> scheduler)
     {
+        if (!scheduler)
+        {
+            Logger::logMessage("Training_Context::setLearningRate: Attempted to set null learning rate scheduler", LOG_WARNING);
+        }
         learning_rate = std::move(scheduler);
     }
 
     void setOptimizer(std::unique_ptr<IOptimizer> opt)
     {
+        if (!opt)
+        {
+            Logger::logMessage("Training_Context::setOptimizer: Attempted to set null optimizer", LOG_WARNING);
+        }
         optimizer = std::move(opt);
     }
 
     void setCostFunction(std::unique_ptr<ICost_Function> fn)
     {
+        if (!fn)
+        {
+            Logger::logMessage("Training_Context::setCostFunction: Attempted to set null cost function", LOG_WARNING);
+        }
         cost_fn = std::move(fn);
     }
 
     static std::unique_ptr<ILayer> constructLayerFromConfig(std::ifstream &in_file, Layer_Type type_val, Execution_Target exec_target)
     {
+        if (!in_file.is_open())
+        {
+            Logger::logMessage("Training_Context::constructLayerFromConfig: Input stream is not open", LOG_ERROR, true);
+            throw std::runtime_error("Input stream is not open");
+        }
+
         Logger::logMessage("Training_Context::constructLayerFromConfig: Constructing layer type = " + static_cast<std::string>(magic_enum::enum_name(type_val)), LOG_INFO, true);
 
         switch (type_val)
@@ -134,6 +198,10 @@ public:
             std::uint32_t out_dim = 0;
             in_file.read(reinterpret_cast<char *>(&in_dim), sizeof(in_dim));
             in_file.read(reinterpret_cast<char *>(&out_dim), sizeof(out_dim));
+            if (in_dim == 0 || out_dim == 0)
+            {
+                Logger::logMessage("Training_Context::constructLayerFromConfig: Linear layer dimension is zero", LOG_WARNING);
+            }
             return std::make_unique<Linear_Layer>(in_dim, out_dim, exec_target);
         }
         case Layer_Type::CONV2D:
@@ -158,6 +226,18 @@ public:
             in_file.read(reinterpret_cast<char *>(&epsilon), sizeof(epsilon));
             in_file.read(reinterpret_cast<char *>(&momentum), sizeof(momentum));
             return std::make_unique<Batch_Norm_Layer>(num_features, epsilon, momentum, exec_target);
+        }
+        case Layer_Type::BATCH_NORM_2D:
+        {
+            std::uint32_t in_h = 0, in_w = 0, in_c = 0;
+            float epsilon = 0.0f;
+            float momentum = 0.0f;
+            in_file.read(reinterpret_cast<char *>(&in_h), sizeof(in_h));
+            in_file.read(reinterpret_cast<char *>(&in_w), sizeof(in_w));
+            in_file.read(reinterpret_cast<char *>(&in_c), sizeof(in_c));
+            in_file.read(reinterpret_cast<char *>(&epsilon), sizeof(epsilon));
+            in_file.read(reinterpret_cast<char *>(&momentum), sizeof(momentum));
+            return std::make_unique<Batch_Norm2d_Layer>(in_h, in_w, in_c, epsilon, momentum, exec_target);
         }
         case Layer_Type::GLOBAL_AVG_POOL_2D:
         {
@@ -202,6 +282,12 @@ public:
 
     bool loadHeader(std::ifstream &in_file, Execution_Target exec_target = Execution_Target::CPU)
     {
+        if (!in_file.is_open())
+        {
+            Logger::logMessage("Training_Context::loadHeader: Input stream is not open", LOG_ERROR, true);
+            return false;
+        }
+
         char magic[4];
         in_file.read(magic, 4);
         if (magic[0] != 'N' || magic[1] != 'N' || magic[2] != 'C' || magic[3] != 'K')

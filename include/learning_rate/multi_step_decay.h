@@ -5,8 +5,10 @@
 #include <cstdint>
 #include <fstream>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
+#include "helper/logger.h"
 #include "ilearning_rate.h"
 
 class Multi_Step_Decay : public ILearning_Rate
@@ -22,19 +24,33 @@ private:
     void validateParameters()
     {
         if (learning_rate <= 0.0f)
+        {
+            Logger::logMessage("Multi_Step_Decay::validateParameters: Initial learning rate must be greater than 0.", LOG_ERROR, true);
             throw std::invalid_argument("Initial learning rate must be greater than 0.");
+        }
         if (min_learning_rate < 0.0f || min_learning_rate > learning_rate)
+        {
+            Logger::logMessage("Multi_Step_Decay::validateParameters: min_learning_rate is out of valid bounds.", LOG_ERROR, true);
             throw std::invalid_argument("min_learning_rate is out of valid bounds.");
+        }
         if (decay_rate <= 0.0f || decay_rate >= 1.0f)
+        {
+            Logger::logMessage("Multi_Step_Decay::validateParameters: decay_rate should be in range (0, 1).", LOG_ERROR, true);
             throw std::invalid_argument("decay_rate should be in range (0, 1).");
-
+        }
         if (decay_epochs.empty())
+        {
+            Logger::logMessage("Multi_Step_Decay::validateParameters: decay_epochs cannot be empty.", LOG_ERROR, true);
             throw std::invalid_argument("decay_epochs cannot be empty.");
+        }
 
         for (float epoch : decay_epochs)
         {
             if (epoch <= 0.0f)
+            {
+                Logger::logMessage("Multi_Step_Decay::validateParameters: decay_epochs must contain positive values.", LOG_ERROR, true);
                 throw std::invalid_argument("decay_epochs must contain positive values.");
+            }
         }
         std::sort(decay_epochs.begin(), decay_epochs.end());
     }
@@ -64,7 +80,13 @@ public:
                 milestone_count++;
             }
         }
-        current_rate = std::max(min_learning_rate, learning_rate * std::pow(decay_rate, static_cast<float>(milestone_count)));
+        float calculated_rate = learning_rate * std::pow(decay_rate, static_cast<float>(milestone_count));
+        if (calculated_rate < min_learning_rate)
+        {
+            Logger::logMessage("Multi_Step_Decay::updateRate: Learning rate decayed below min_learning_rate, clamped.", LOG_WARNING);
+        }
+        current_rate = std::max(min_learning_rate, calculated_rate);
+        LR_LOG_DEBUG("Multi_Step_Decay::updateRate: epoch=" + std::to_string(current_epoch) + ", milestones_hit=" + std::to_string(milestone_count) + ", current_rate=" + std::to_string(current_rate));
         return current_rate;
     }
 

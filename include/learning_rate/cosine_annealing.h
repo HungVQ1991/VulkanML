@@ -4,7 +4,9 @@
 #include <fstream>
 #include <numbers>
 #include <stdexcept>
+#include <string>
 
+#include "helper/logger.h"
 #include "ilearning_rate.h"
 
 class Cosine_Annealing : public ILearning_Rate
@@ -19,11 +21,20 @@ private:
     void validateParameters() const
     {
         if (learning_rate <= 0.0f)
+        {
+            Logger::logMessage("Cosine_Annealing::validateParameters: Initial learning rate must be greater than 0.", LOG_ERROR, true);
             throw std::invalid_argument("Initial learning rate must be greater than 0.");
+        }
         if (min_learning_rate < 0.0f || min_learning_rate > learning_rate)
+        {
+            Logger::logMessage("Cosine_Annealing::validateParameters: min_learning_rate is out of valid bounds.", LOG_ERROR, true);
             throw std::invalid_argument("min_learning_rate is out of valid bounds.");
+        }
         if (max_epoch <= 0)
+        {
+            Logger::logMessage("Cosine_Annealing::validateParameters: max_epoch must be greater than 0.", LOG_ERROR, true);
             throw std::invalid_argument("max_epoch must be greater than 0.");
+        }
     }
 
 public:
@@ -44,6 +55,7 @@ public:
     {
         if (current_epoch >= max_epoch)
         {
+            Logger::logMessage("Cosine_Annealing::updateRate: current_epoch reached or exceeded max_epoch, rate clamped to min_learning_rate.", LOG_WARNING);
             current_rate = min_learning_rate;
         }
         else
@@ -52,6 +64,7 @@ public:
             float cos_val = std::cos(progress * std::numbers::pi_v<float>);
             current_rate = min_learning_rate + 0.5f * (learning_rate - min_learning_rate) * (1.0f + cos_val);
         }
+        LR_LOG_DEBUG("Cosine_Annealing::updateRate: epoch=" + std::to_string(current_epoch) + "/" + std::to_string(max_epoch) + ", current_rate=" + std::to_string(current_rate));
         return current_rate;
     }
 
@@ -68,15 +81,22 @@ public:
 
     void setMaxEpoch(int total_epochs) override
     {
+        if (total_epochs <= 0)
+        {
+            Logger::logMessage("Cosine_Annealing::setMaxEpoch: total_epochs must be greater than 0.", LOG_WARNING);
+            return;
+        }
         max_epoch = total_epochs;
         if (current_epoch >= max_epoch)
         {
+            Logger::logMessage("Cosine_Annealing::setMaxEpoch: current_epoch already reached or exceeded new max_epoch.", LOG_WARNING);
             current_rate = min_learning_rate;
             return;
         }
         constexpr float pi_val = 3.14159265358979323846f;
         float cosine_decay = 0.5f * (1.0f + std::cos(pi_val * static_cast<float>(current_epoch) / static_cast<float>(max_epoch)));
         current_rate = min_learning_rate + (learning_rate - min_learning_rate) * cosine_decay;
+        LR_LOG_DEBUG("Cosine_Annealing::setMaxEpoch: updated max_epoch=" + std::to_string(max_epoch) + ", current_rate=" + std::to_string(current_rate));
     }
 
     float getLearningRate() const override

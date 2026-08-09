@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <fstream>
 #include <stdexcept>
+#include <string>
 
 #include "helper/logger.h"
 #include "ilayer.h"
@@ -29,6 +30,8 @@ public:
 
     Matrix forward(const Matrix &input_matrix) override
     {
+        LAYER_LOG_DEBUG("GlobalAvgPool2d_Layer::forward: in_h=" + std::to_string(in_h) + ", in_w=" + std::to_string(in_w) + ", channels=" + std::to_string(channels));
+
         inputs = input_matrix;
         outputs = inputs.globalAvgPool2d(in_h, in_w, channels);
         has_forward = true;
@@ -39,9 +42,11 @@ public:
     {
         if (!has_forward)
         {
-            Logger::logMessage("GlobalAvgPool2d_Layer::backward: Backward called before forward", LOG_ERROR);
+            Logger::logMessage("GlobalAvgPool2d_Layer::backward: Backward called before forward", LOG_ERROR, true);
             throw std::logic_error("Backward called before forward");
         }
+
+        LAYER_LOG_DEBUG("GlobalAvgPool2d_Layer::backward: grad_output rows=" + std::to_string(gradient_output.getRows()) + ", cols=" + std::to_string(gradient_output.getCols()));
 
         return gradient_output.globalAvgPool2dBackward(in_h, in_w, channels);
     }
@@ -80,8 +85,10 @@ public:
     {
         if (target == new_target)
             return;
-        target = new_target;
 
+        Logger::logMessage("GlobalAvgPool2d_Layer::setTarget: Changing execution target from " + static_cast<std::string>(magic_enum::enum_name<Execution_Target>(target)) + " to " + static_cast<std::string>(magic_enum::enum_name<Execution_Target>(new_target)), LOG_WARNING);
+        
+        target = new_target;
         inputs.setExecutionTarget(new_target);
         outputs.setExecutionTarget(new_target);
     }

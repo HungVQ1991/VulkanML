@@ -1,13 +1,24 @@
 #pragma once
 
+#include <cstddef>
+#include <iostream>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include "helper/logger.h"
 
-#include <vector>
-#include <memory>
-#include <cstddef>
-#include <stdexcept>
-#include <iostream>
-#include <string>
+#ifndef ENABLE_MATRIX_DEBUG_LOGS
+#define ENABLE_MATRIX_DEBUG_LOGS 0
+#endif
+
+#if ENABLE_MATRIX_DEBUG_LOGS
+#define MATRIX_LOG_DEBUG(msg) Logger::logMessage(msg, LOG_DEBUG)
+#else
+#define MATRIX_LOG_DEBUG(msg) ((void)0)
+#endif
 
 class Impl
 {
@@ -25,7 +36,7 @@ public:
             std::string err_msg = "Impl::validateSameDimensions: Matrix dimension mismatch: (" + std::to_string(getRows()) + "x" +
                                   std::to_string(getCols()) + ") vs (" + std::to_string(other_impl.getRows()) + "x" +
                                   std::to_string(other_impl.getCols()) + ")";
-            Logger::logMessage(err_msg, LOG_ERROR);
+            Logger::logMessage(err_msg, LOG_ERROR, true);
             throw std::invalid_argument(err_msg);
         }
     }
@@ -36,7 +47,7 @@ public:
         {
             std::string err_msg = "Impl::validateMatmulDimensions: Matrix matmul dimension mismatch: cols_a (" + std::to_string(getCols()) +
                                   ") != rows_b (" + std::to_string(other_impl.getRows()) + ")";
-            Logger::logMessage(err_msg, LOG_ERROR);
+            Logger::logMessage(err_msg, LOG_ERROR, true);
             throw std::invalid_argument(err_msg);
         }
     }
@@ -47,7 +58,7 @@ public:
         {
             std::string err_msg = "Impl::validateSquare: Matrix is not square: (" + std::to_string(getRows()) + "x" +
                                   std::to_string(getCols()) + ")";
-            Logger::logMessage(err_msg, LOG_ERROR);
+            Logger::logMessage(err_msg, LOG_ERROR, true);
             throw std::invalid_argument(err_msg);
         }
     }
@@ -130,11 +141,12 @@ public:
     virtual std::shared_ptr<Impl> batchNormBackward(
         const std::shared_ptr<Impl> &grad_output,
         const std::shared_ptr<Impl> &gamma,
-        const std::shared_ptr<Impl> &batch_mean,
         const std::shared_ptr<Impl> &batch_var,
+        const std::shared_ptr<Impl> &x_hat,
         std::shared_ptr<Impl> &grad_gamma,
         std::shared_ptr<Impl> &grad_beta,
         float epsilon) const = 0;
+
     virtual void linearForward(
         const Impl &weights_w,
         const Impl &biases_b,
@@ -148,4 +160,25 @@ public:
         const Impl &grad_y,
         Impl &grad_w,
         Impl &grad_b) const = 0;
+
+    virtual std::shared_ptr<Impl> batchNorm2dForward(
+        const std::shared_ptr<Impl> &gamma,
+        const std::shared_ptr<Impl> &beta,
+        std::shared_ptr<Impl> &running_mean,
+        std::shared_ptr<Impl> &running_var,
+        std::shared_ptr<Impl> &batch_mean,
+        std::shared_ptr<Impl> &batch_var,
+        std::shared_ptr<Impl> &x_hat,
+        std::uint32_t in_h, std::uint32_t in_w, std::uint32_t in_c,
+        float epsilon, float momentum, bool is_training) const = 0;
+
+    virtual std::shared_ptr<Impl> batchNorm2dBackward(
+        const std::shared_ptr<Impl> &grad_output,
+        const std::shared_ptr<Impl> &gamma,
+        const std::shared_ptr<Impl> &batch_var,
+        const std::shared_ptr<Impl> &x_hat,
+        std::shared_ptr<Impl> &grad_gamma,
+        std::shared_ptr<Impl> &grad_beta,
+        std::uint32_t in_h, std::uint32_t in_w, std::uint32_t in_c,
+        float epsilon) const = 0;
 };

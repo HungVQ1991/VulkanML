@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <fstream>
 #include <stdexcept>
+#include <string>
 
 #include "helper/logger.h"
 #include "ilayer.h"
@@ -39,6 +40,8 @@ public:
 
     Matrix forward(const Matrix &input_matrix) override
     {
+        LAYER_LOG_DEBUG("MaxPool2d_Layer::forward: in_h=" + std::to_string(in_h) + ", in_w=" + std::to_string(in_w) + ", channels=" + std::to_string(channels));
+
         inputs = input_matrix;
         auto result = inputs.maxpool2d(in_h, in_w, channels, kernel_size, stride, padding);
         outputs = result.first;
@@ -51,9 +54,11 @@ public:
     {
         if (!has_forward)
         {
-            Logger::logMessage("MaxPool2d_Layer::backward: Backward called before forward", LOG_ERROR);
+            Logger::logMessage("MaxPool2d_Layer::backward: Backward called before forward", LOG_ERROR, true);
             throw std::logic_error("Backward called before forward");
         }
+
+        LAYER_LOG_DEBUG("MaxPool2d_Layer::backward: grad_output rows=" + std::to_string(gradient_output.getRows()) + ", cols=" + std::to_string(gradient_output.getCols()));
 
         return gradient_output.maxpool2dBackward(mask, in_h, in_w, channels, out_h, out_w, kernel_size, stride, padding);
     }
@@ -96,8 +101,10 @@ public:
     {
         if (target == new_target)
             return;
-        target = new_target;
 
+        Logger::logMessage("Maxpool2d_Layer::setTarget: Changing execution target from " + static_cast<std::string>(magic_enum::enum_name<Execution_Target>(target)) + " to " + static_cast<std::string>(magic_enum::enum_name<Execution_Target>(new_target)), LOG_WARNING);
+
+        target = new_target;
         inputs.setExecutionTarget(new_target);
         outputs.setExecutionTarget(new_target);
         mask.setExecutionTarget(new_target);

@@ -7,6 +7,7 @@
 #include <fstream>
 #include <random>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -87,9 +88,11 @@ public:
     {
         if (input_matrix.getCols() != input_dim)
         {
-            Logger::logMessage("Linear_Layer::forward: Input dimension mismatch", LOG_ERROR);
+            Logger::logMessage("Linear_Layer::forward: Input dimension mismatch", LOG_ERROR, true);
             throw std::invalid_argument("Input dimension mismatch");
         }
+
+        LAYER_LOG_DEBUG("Linear_Layer::forward: batch_size=" + std::to_string(input_matrix.getRows()) + ", in_dim=" + std::to_string(input_dim) + ", out_dim=" + std::to_string(output_dim));
 
         inputs = input_matrix;
         outputs = Matrix(inputs.getRows(), output_dim, target);
@@ -101,16 +104,15 @@ public:
     {
         if (gradient_output.getCols() != output_dim || gradient_output.getRows() != inputs.getRows())
         {
-            Logger::logMessage("Linear_Layer::backward: Gradient output dimension mismatch", LOG_ERROR);
+            Logger::logMessage("Linear_Layer::backward: Gradient output dimension mismatch", LOG_ERROR, true);
             throw std::invalid_argument("Gradient output dimension mismatch");
         }
 
+        LAYER_LOG_DEBUG("Linear_Layer::backward: grad_output rows=" + std::to_string(gradient_output.getRows()) + ", cols=" + std::to_string(gradient_output.getCols()));
+
         std::size_t batch_size = inputs.getRows();
-        float inv_batch_size = 1.0f / static_cast<float>(batch_size);
 
         inputs.linearBackwardWeightBias(gradient_output, weights_gradient, biases_gradient);
-        weights_gradient = weights_gradient * inv_batch_size;
-        biases_gradient = biases_gradient * inv_batch_size;
 
         Matrix grad_input(batch_size, input_dim, target);
         gradient_output.linearBackwardInput(weights, grad_input);
@@ -125,7 +127,7 @@ public:
     {
         if (new_weights.getRows() != input_dim || new_weights.getCols() != output_dim)
         {
-            Logger::logMessage("Linear_Layer::setWeights: Dimension size of weight must match", LOG_ERROR);
+            Logger::logMessage("Linear_Layer::setWeights: Dimension size of weight must match", LOG_ERROR, true);
             throw std::invalid_argument("Dimension size of weight must match");
         }
         weights = new_weights;
@@ -135,7 +137,7 @@ public:
     {
         if (new_biases.getRows() != 1 || new_biases.getCols() != output_dim)
         {
-            Logger::logMessage("Linear_Layer::setBiases: Dimension size of bias must match", LOG_ERROR);
+            Logger::logMessage("Linear_Layer::setBiases: Dimension size of bias must match", LOG_ERROR, true);
             throw std::invalid_argument("Dimension size of bias must match");
         }
         biases = new_biases;
@@ -173,6 +175,8 @@ public:
     {
         weights = Matrix::loadMatrix(in_file, target);
         biases = Matrix::loadMatrix(in_file, target);
+        input_dim = weights.getRows();
+        output_dim = weights.getCols();
     }
 
     void saveCheckpoint(std::ofstream &out_file) const override
@@ -197,8 +201,10 @@ public:
     {
         if (target == new_target)
             return;
-        target = new_target;
 
+        Logger::logMessage("Linear_Layer::setTarget: Changing execution target from " + static_cast<std::string>(magic_enum::enum_name<Execution_Target>(target)) + " to " + static_cast<std::string>(magic_enum::enum_name<Execution_Target>(new_target)), LOG_WARNING);
+        
+        target = new_target;
         weights.setExecutionTarget(new_target);
         biases.setExecutionTarget(new_target);
         weights_gradient.setExecutionTarget(new_target);

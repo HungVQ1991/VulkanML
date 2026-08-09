@@ -12,10 +12,12 @@
 #include "ilayer.h"
 #include "math/matrix.h"
 
-class Batch_Norm_Layer : public ILayer
+class Batch_Norm2d_Layer : public ILayer
 {
 private:
-    std::size_t input_dim;
+    std::uint32_t in_h;
+    std::uint32_t in_w;
+    std::uint32_t in_c;
     float epsilon;
     float momentum;
     bool is_training;
@@ -37,18 +39,18 @@ private:
 
     void initializeParameters()
     {
-        std::vector<float> gamma_data(input_dim, 1.0f);
-        std::vector<float> beta_data(input_dim, 0.0f);
-        std::vector<float> mean_data(input_dim, 0.0f);
-        std::vector<float> var_data(input_dim, 1.0f);
+        std::vector<float> gamma_data(in_c, 1.0f);
+        std::vector<float> beta_data(in_c, 0.0f);
+        std::vector<float> mean_data(in_c, 0.0f);
+        std::vector<float> var_data(in_c, 1.0f);
 
-        gamma = Matrix(1, input_dim, std::move(gamma_data), target);
-        beta = Matrix(1, input_dim, std::move(beta_data), target);
-        grad_gamma = Matrix(1, input_dim, target);
-        grad_beta = Matrix(1, input_dim, target);
+        gamma = Matrix(1, in_c, std::move(gamma_data), target);
+        beta = Matrix(1, in_c, std::move(beta_data), target);
+        grad_gamma = Matrix(1, in_c, target);
+        grad_beta = Matrix(1, in_c, target);
 
-        running_mean = Matrix(1, input_dim, std::move(mean_data), target);
-        running_var = Matrix(1, input_dim, std::move(var_data), target);
+        running_mean = Matrix(1, in_c, std::move(mean_data), target);
+        running_var = Matrix(1, in_c, std::move(var_data), target);
 
         batch_mean = Matrix(0, 0, target);
         batch_var = Matrix(0, 0, target);
@@ -56,8 +58,10 @@ private:
     }
 
 public:
-    Batch_Norm_Layer(std::size_t dimension, float eps = 1e-5f, float mom = 0.1f, Execution_Target exec_target = Execution_Target::CPU)
-        : input_dim(dimension),
+    Batch_Norm2d_Layer(std::uint32_t h, std::uint32_t w, std::uint32_t c, float eps = 1e-5f, float mom = 0.1f, Execution_Target exec_target = Execution_Target::CPU)
+        : in_h(h),
+          in_w(w),
+          in_c(c),
           epsilon(eps),
           momentum(mom),
           is_training(true),
@@ -77,7 +81,7 @@ public:
         initializeParameters();
     }
 
-    ~Batch_Norm_Layer() override = default;
+    ~Batch_Norm2d_Layer() override = default;
 
     void setTrainingMode(bool training) override
     {
@@ -86,19 +90,20 @@ public:
 
     Matrix forward(const Matrix &input_matrix) override
     {
-        if (input_matrix.getCols() != input_dim)
+        if (input_matrix.getCols() != in_h * in_w * in_c)
         {
-            Logger::logMessage("Batch_Norm_Layer::forward: Input dimension mismatch", LOG_ERROR, true);
+            Logger::logMessage("Batch_Norm2d_Layer::forward: Input dimension mismatch", LOG_ERROR, true);
             throw std::invalid_argument("Input dimension mismatch");
         }
 
-        LAYER_LOG_DEBUG("Batch_Norm_Layer::forward: dim=" + std::to_string(input_dim) + ", mode=" + (is_training ? "Train" : "Eval"));
+        LAYER_LOG_DEBUG("Batch_Norm2d_Layer::forward: in_h=" + std::to_string(in_h) + ", in_w=" + std::to_string(in_w) + ", in_c=" + std::to_string(in_c) + ", mode=" + (is_training ? "Train" : "Eval"));
 
         inputs = input_matrix;
-        Matrix outputs = inputs.batchNormForward(
+        Matrix outputs = inputs.batchNorm2dForward(
             gamma, beta,
             running_mean, running_var,
             batch_mean, batch_var, x_hat,
+            in_h, in_w, in_c,
             epsilon, momentum, is_training);
 
         has_forward = true;
@@ -109,15 +114,16 @@ public:
     {
         if (!has_forward)
         {
-            Logger::logMessage("Batch_Norm_Layer::backward: Backward called before forward", LOG_ERROR, true);
+            Logger::logMessage("Batch_Norm2d_Layer::backward: Backward called before forward", LOG_ERROR, true);
             throw std::logic_error("Backward called before forward");
         }
 
-        LAYER_LOG_DEBUG("Batch_Norm_Layer::backward: grad_output rows=" + std::to_string(gradient_output.getRows()) + ", cols=" + std::to_string(gradient_output.getCols()));
+        LAYER_LOG_DEBUG("Batch_Norm2d_Layer::backward: grad_output rows=" + std::to_string(gradient_output.getRows()) + ", cols=" + std::to_string(gradient_output.getCols()));
 
-        Matrix grad_input = inputs.batchNormBackward(
+        Matrix grad_input = inputs.batchNorm2dBackward(
             gradient_output, gamma, batch_var, x_hat,
             grad_gamma, grad_beta,
+            in_h, in_w, in_c,
             epsilon);
 
         return grad_input;
@@ -125,8 +131,8 @@ public:
 
     void resetGradient() override
     {
-        grad_gamma = Matrix(1, input_dim, target);
-        grad_beta = Matrix(1, input_dim, target);
+        grad_gamma = Matrix(1, in_c, target);
+        grad_beta = Matrix(1, in_c, target);
         inputs = Matrix(0, 0, target);
         batch_mean = Matrix(0, 0, target);
         batch_var = Matrix(0, 0, target);
@@ -161,13 +167,14 @@ public:
 
     Layer_Type getLayerType() const override
     {
-        return Layer_Type::BATCH_NORM;
+        return Layer_Type::BATCH_NORM_2D;
     }
 
     void saveConfig(std::ofstream &out_file) const override
     {
-        std::uint32_t num_features = static_cast<std::uint32_t>(input_dim);
-        out_file.write(reinterpret_cast<const char *>(&num_features), sizeof(num_features));
+        out_file.write(reinterpret_cast<const char *>(&in_h), sizeof(in_h));
+        out_file.write(reinterpret_cast<const char *>(&in_w), sizeof(in_w));
+        out_file.write(reinterpret_cast<const char *>(&in_c), sizeof(in_c));
         out_file.write(reinterpret_cast<const char *>(&epsilon), sizeof(epsilon));
         out_file.write(reinterpret_cast<const char *>(&momentum), sizeof(momentum));
     }
@@ -218,7 +225,8 @@ public:
         if (target == new_target)
             return;
 
-        Logger::logMessage("Batch_Norm_Layer::setTarget: Changing execution target from " + static_cast<std::string>(magic_enum::enum_name<Execution_Target>(target)) + " to " + static_cast<std::string>(magic_enum::enum_name<Execution_Target>(new_target)), LOG_WARNING);
+        
+        Logger::logMessage("Batch_Norm2d_Layer::setTarget: Changing execution target from " + static_cast<std::string>(magic_enum::enum_name<Execution_Target>(target)) + " to " + static_cast<std::string>(magic_enum::enum_name<Execution_Target>(new_target)), LOG_WARNING);
 
         target = new_target;
         gamma.setExecutionTarget(new_target);

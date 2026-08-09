@@ -6,6 +6,7 @@
 #include <fstream>
 #include <random>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "helper/logger.h"
@@ -71,6 +72,8 @@ public:
 
     Matrix forward(const Matrix &input_matrix) override
     {
+        LAYER_LOG_DEBUG("Conv2d_Layer::forward: in_h=" + std::to_string(in_h) + ", in_w=" + std::to_string(in_w) + ", in_c=" + std::to_string(in_c) + ", out_c=" + std::to_string(out_c));
+
         inputs = input_matrix;
         outputs = inputs.conv2d(weights, biases, in_h, in_w, in_c, out_c, kernel_size, stride, padding);
         has_forward = true;
@@ -81,11 +84,14 @@ public:
     {
         if (!has_forward)
         {
-            Logger::logMessage("Conv2d_Layer::backward: Backward called before forward", LOG_ERROR);
+            Logger::logMessage("Conv2d_Layer::backward: Backward called before forward", LOG_ERROR, true);
             throw std::logic_error("Backward called before forward");
         }
 
+        LAYER_LOG_DEBUG("Conv2d_Layer::backward: grad_output rows=" + std::to_string(gradient_output.getRows()) + ", cols=" + std::to_string(gradient_output.getCols()));
+
         inputs.conv2dBackwardWeight(gradient_output, weights_gradient, biases_gradient, in_h, in_w, in_c, out_h, out_w, out_c, kernel_size, stride, padding);
+
         return gradient_output.conv2dBackwardInput(weights, in_h, in_w, in_c, out_h, out_w, out_c, kernel_size, stride, padding);
     }
 
@@ -167,11 +173,14 @@ public:
     {
         if (target == new_target)
             return;
-        target = new_target;
 
+        Logger::logMessage("Conv2d_Layer::setTarget: Changing execution target from " + static_cast<std::string>(magic_enum::enum_name<Execution_Target>(target)) + " to " + static_cast<std::string>(magic_enum::enum_name<Execution_Target>(new_target)), LOG_WARNING);
+        target = new_target;
         weights.setExecutionTarget(new_target);
         biases.setExecutionTarget(new_target);
         weights_gradient.setExecutionTarget(new_target);
         biases_gradient.setExecutionTarget(new_target);
+        inputs.setExecutionTarget(new_target);
+        outputs.setExecutionTarget(new_target);
     }
 };

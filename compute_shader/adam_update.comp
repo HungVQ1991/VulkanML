@@ -25,15 +25,18 @@ layout(push_constant) uniform PushConstants {
     float beta2;
     float eps;
     float max_grad;
-    float inv_correction1;      // = 1.0 / (1 - beta1^t), precomputed on host
-    float inv_sqrt_correction2; // = 1.0 / sqrt(1 - beta2^t), precomputed on host
+    float inv_correction1;
+    float inv_sqrt_correction2;
 } pc;
 
 void main() {
     uint idx = gl_GlobalInvocationID.x;
     if (idx >= pc.total_size) return;
 
-    float g = clamp(grads[idx], -pc.max_grad, pc.max_grad);
+    float g = grads[idx];
+    if (pc.max_grad > 0.0) {
+        g = clamp(g, -pc.max_grad, pc.max_grad);
+    }
 
     float m_val = fma(pc.beta1, m_vec[idx], (1.0 - pc.beta1) * g);
     float v_val = fma(pc.beta2, v_vec[idx], (1.0 - pc.beta2) * (g * g));
@@ -41,8 +44,6 @@ void main() {
     m_vec[idx] = m_val;
     v_vec[idx] = v_val;
 
-    // m_hat = m_val / correction1  ->  m_val * inv_correction1 (division removed)
-    // sqrt(v_hat) = sqrt(v_val / correction2) = sqrt(v_val) * inv_sqrt_correction2
     float m_hat = m_val * pc.inv_correction1;
     float v_hat_sqrt = sqrt(v_val) * pc.inv_sqrt_correction2;
 

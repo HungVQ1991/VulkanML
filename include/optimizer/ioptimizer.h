@@ -1,13 +1,24 @@
 #pragma once
-#include "helper/logger.h"
-#include "math/matrix.h"
-#include "learning_rate/ilearning_rate.h"
-#include "engine/execution_engine.h"
 
 #include <fstream>
+#include <map>
 #include <utility>
 #include <vector>
-#include <map>
+
+#include "engine/execution_engine.h"
+#include "helper/logger.h"
+#include "learning_rate/ilearning_rate.h"
+#include "math/matrix.h"
+
+#ifndef ENABLE_OPTIMIZER_DEBUG_LOGS
+#define ENABLE_OPTIMIZER_DEBUG_LOGS 0
+#endif
+
+#if ENABLE_OPTIMIZER_DEBUG_LOGS
+#define OPTIMIZER_LOG_DEBUG(msg) Logger::logMessage(msg, LOG_DEBUG)
+#else
+#define OPTIMIZER_LOG_DEBUG(msg) ((void)0)
+#endif
 
 enum class Optimizer_Type
 {
@@ -27,6 +38,3 @@ public:
     virtual void saveCheckpoint(std::ofstream &out_file) const = 0;
     virtual void loadCheckpoint(std::ifstream &in_file, Execution_Target target = Execution_Target::CPU) = 0;
 };
-
-
-

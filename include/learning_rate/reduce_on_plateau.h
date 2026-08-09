@@ -4,7 +4,9 @@
 #include <cmath>
 #include <fstream>
 #include <stdexcept>
+#include <string>
 
+#include "helper/logger.h"
 #include "ilearning_rate.h"
 
 class Reduce_On_Plateau : public ILearning_Rate
@@ -25,13 +27,25 @@ private:
     void validateParameters() const
     {
         if (learning_rate <= 0.0f)
+        {
+            Logger::logMessage("Reduce_On_Plateau::validateParameters: Initial learning rate must be greater than 0.", LOG_ERROR, true);
             throw std::invalid_argument("Initial learning rate must be greater than 0.");
+        }
         if (min_learning_rate < 0.0f || min_learning_rate > learning_rate)
+        {
+            Logger::logMessage("Reduce_On_Plateau::validateParameters: min_learning_rate is out of valid bounds.", LOG_ERROR, true);
             throw std::invalid_argument("min_learning_rate is out of valid bounds.");
+        }
         if (patience <= 0)
+        {
+            Logger::logMessage("Reduce_On_Plateau::validateParameters: patience must be greater than 0.", LOG_ERROR, true);
             throw std::invalid_argument("patience must be greater than 0.");
+        }
         if (decay_rate <= 0.0f || decay_rate >= 1.0f)
+        {
+            Logger::logMessage("Reduce_On_Plateau::validateParameters: decay_rate should be in range (0, 1).", LOG_ERROR, true);
             throw std::invalid_argument("decay_rate should be in range (0, 1).");
+        }
     }
 
 public:
@@ -51,7 +65,13 @@ public:
 
     float updateRate() override
     {
-        current_rate = std::max(min_learning_rate, learning_rate * std::pow(decay_rate, static_cast<float>(reductions_count)));
+        float calculated_rate = learning_rate * std::pow(decay_rate, static_cast<float>(reductions_count));
+        if (calculated_rate < min_learning_rate)
+        {
+            Logger::logMessage("Reduce_On_Plateau::updateRate: Learning rate decayed below min_learning_rate, clamped.", LOG_WARNING);
+        }
+        current_rate = std::max(min_learning_rate, calculated_rate);
+        LR_LOG_DEBUG("Reduce_On_Plateau::updateRate: reductions_count=" + std::to_string(reductions_count) + ", current_rate=" + std::to_string(current_rate));
         return current_rate;
     }
 
@@ -78,15 +98,18 @@ public:
             else
             {
                 bad_epochs_count++;
+                Logger::logMessage("Reduce_On_Plateau::step: Plateau detected, bad_epochs_count=" + std::to_string(bad_epochs_count) + "/" + std::to_string(patience), LOG_WARNING);
                 if (bad_epochs_count >= patience)
                 {
                     reductions_count++;
                     bad_epochs_count = 0;
+                    Logger::logMessage("Reduce_On_Plateau::step: Patience exhausted, triggering learning rate reduction #" + std::to_string(reductions_count), LOG_WARNING);
                     updateRate();
                 }
             }
         }
         current_epoch++;
+        LR_LOG_DEBUG("Reduce_On_Plateau::step: epoch=" + std::to_string(current_epoch) + ", current_val=" + std::to_string(current_val) + ", best_metric=" + std::to_string(best_metric));
     }
 
     float getCurrentRate() const override

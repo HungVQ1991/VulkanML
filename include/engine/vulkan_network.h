@@ -1,16 +1,30 @@
 #pragma once
 
-#include <vector>
-#include <string>
-#include <fstream>
-#include <stdexcept>
-#include <vulkan/vulkan.h>
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <cstddef>
+#include <cstdint>
+#include <fstream>
+#include <ranges>
+#include <stdexcept>
+#include <string>
+#include <vector>
+#include <vulkan/vulkan.h>
 
-#include "vulkan_context.h"
-#include "helper/magic_enum.hpp"
 #include "helper/logger.h"
+#include "helper/magic_enum.hpp"
+#include "vulkan_context.h"
+
+#ifndef ENABLE_NETWORK_DEBUG_LOGS
+#define ENABLE_NETWORK_DEBUG_LOGS 0
+#endif
+
+#if ENABLE_NETWORK_DEBUG_LOGS
+#define NETWORK_LOG_DEBUG(msg) Logger::logMessage(msg, LOG_DEBUG)
+#else
+#define NETWORK_LOG_DEBUG(msg) ((void)0)
+#endif
 
 const int BINDING_SIZE = 8;
 
@@ -46,28 +60,32 @@ enum Compute_Pipeline
     BATCH_NORM_TRANSFORM_FORWARD,
     BATCH_NORM_STATS_BACKWARD,
     BATCH_NORM_TRANSFORM_BACKWARD,
+    BATCH_NORM2D_STATS_FORWARD,
+    BATCH_NORM2D_TRANSFORM_FORWARD,
+    BATCH_NORM2D_STATS_BACKWARD,
+    BATCH_NORM2D_TRANSFORM_BACKWARD,
     COMPUTE_PIPELINE_END
 };
 
 class Vulkan_Network
 {
 private:
-
     std::string pipeline_folder = "compute_shader";
 
     VkDevice device = VK_NULL_HANDLE;
     VkDescriptorSetLayout descriptor_set_layout = VK_NULL_HANDLE;
-    // VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
     VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
 
     std::array<VkPipeline, Compute_Pipeline::COMPUTE_PIPELINE_END> pipelines{};
 
     std::vector<char> readSpvFile(const std::string &file_path) const
     {
+        NETWORK_LOG_DEBUG("Vulkan_Network::readSpvFile: Reading SPIR-V file: " + file_path);
+
         std::ifstream file_stream(file_path, std::ios::ate | std::ios::binary);
         if (!file_stream.is_open())
         {
-            Logger::logMessage("Vulkan_Network::readSpvFile: Failed to open SPIR-V file: " + file_path, LOG_ERROR);
+            Logger::logMessage("Vulkan_Network::readSpvFile: Failed to open SPIR-V file: " + file_path, LOG_ERROR, true);
             throw std::runtime_error("Failed to open SPIR-V file: " + file_path);
         }
 
@@ -82,6 +100,8 @@ private:
 
     VkShaderModule createShaderModule(const std::vector<char> &code_buffer) const
     {
+        NETWORK_LOG_DEBUG("Vulkan_Network::createShaderModule: Creating shader module of size " + std::to_string(code_buffer.size()) + " bytes");
+
         VkShaderModuleCreateInfo create_info{.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
         create_info.codeSize = code_buffer.size();
         create_info.pCode = reinterpret_cast<const std::uint32_t *>(code_buffer.data());
@@ -89,7 +109,7 @@ private:
         VkShaderModule shader_module = VK_NULL_HANDLE;
         if (vkCreateShaderModule(device, &create_info, nullptr, &shader_module) != VK_SUCCESS)
         {
-            Logger::logMessage("Vulkan_Network::createShaderModule: Failed to create shader module", LOG_ERROR);
+            Logger::logMessage("Vulkan_Network::createShaderModule: Failed to create shader module", LOG_ERROR, true);
             throw std::runtime_error("Failed to create shader module");
         }
 
@@ -98,6 +118,8 @@ private:
 
     VkPipeline createComputePipeline(const std::string &shader_path) const
     {
+        NETWORK_LOG_DEBUG("Vulkan_Network::createComputePipeline: Creating compute pipeline for shader: " + shader_path);
+
         auto shader_code = readSpvFile(shader_path);
         VkShaderModule shader_module = createShaderModule(shader_code);
 
@@ -114,7 +136,7 @@ private:
         if (vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipeline_info, nullptr, &pipeline) != VK_SUCCESS)
         {
             vkDestroyShaderModule(device, shader_module, nullptr);
-            Logger::logMessage("Vulkan_Network::createComputePipeline: Failed to create compute pipeline for shader: " + shader_path, LOG_ERROR);
+            Logger::logMessage("Vulkan_Network::createComputePipeline: Failed to create compute pipeline for shader: " + shader_path, LOG_ERROR, true);
             throw std::runtime_error("Failed to create compute pipeline");
         }
 
@@ -124,9 +146,23 @@ private:
 
     void createAllPipelines(const std::string &folder_path)
     {
+        if (folder_path.empty())
+        {
+            Logger::logMessage("Vulkan_Network::createAllPipelines: Shader folder path is empty", LOG_WARNING);
+        }
+
+        NETWORK_LOG_DEBUG("Vulkan_Network::createAllPipelines: Creating all compute pipelines from folder: " + folder_path);
+
         for (size_t i = 0; i < pipelines.size(); ++i)
         {
-            std::string shader_path = folder_path + "/" + std::string(magic_enum::enum_name(magic_enum::enum_cast<Compute_Pipeline>(i).value())) + ".spv";
+            auto enum_val = magic_enum::enum_cast<Compute_Pipeline>(i);
+            if (!enum_val.has_value())
+            {
+                Logger::logMessage("Vulkan_Network::createAllPipelines: Failed to cast enum at index " + std::to_string(i), LOG_WARNING);
+                continue;
+            }
+
+            std::string shader_path = folder_path + "/" + std::string(magic_enum::enum_name(enum_val.value())) + ".spv";
             std::ranges::transform(shader_path, shader_path.begin(), [](unsigned char c)
                                    { return static_cast<char>(std::tolower(c)); });
 
@@ -138,16 +174,16 @@ private:
     {
         if (device == VK_NULL_HANDLE)
             return;
+
+        NETWORK_LOG_DEBUG("Vulkan_Network::cleanup: Cleaning up Vulkan network pipelines and layouts");
+
         for (VkPipeline pipeline : pipelines)
-            if (pipeline != VK_NULL_HANDLE) vkDestroyPipeline(device, pipeline, nullptr);
+        {
+            if (pipeline != VK_NULL_HANDLE)
+                vkDestroyPipeline(device, pipeline, nullptr);
+        }
 
         std::fill(pipelines.begin(), pipelines.end(), VK_NULL_HANDLE);
-
-        // if (descriptor_pool != VK_NULL_HANDLE)
-        // {
-        //     vkDestroyDescriptorPool(device, descriptor_pool, nullptr);
-        //     descriptor_pool = VK_NULL_HANDLE;
-        // }
 
         if (pipeline_layout != VK_NULL_HANDLE)
         {
@@ -172,6 +208,7 @@ public:
     explicit Vulkan_Network(const Vulkan_Context &context, const std::string &_pipeline_folder)
         : device(context.getDevice()), pipeline_folder(_pipeline_folder)
     {
+        NETWORK_LOG_DEBUG("Vulkan_Network::Vulkan_Network: Initializing Vulkan Network with shader folder: " + _pipeline_folder);
 
         struct CleanupGuard
         {
@@ -199,7 +236,7 @@ public:
 
         if (vkCreateDescriptorSetLayout(device, &layout_info, nullptr, &descriptor_set_layout) != VK_SUCCESS)
         {
-            Logger::logMessage("Vulkan_Network::Vulkan_Network: Failed to create descriptor set layout", LOG_ERROR);
+            Logger::logMessage("Vulkan_Network::Vulkan_Network: Failed to create descriptor set layout", LOG_ERROR, true);
             throw std::runtime_error("Failed to create descriptor set layout");
         }
 
@@ -216,25 +253,9 @@ public:
 
         if (vkCreatePipelineLayout(device, &pipeline_layout_info, nullptr, &pipeline_layout) != VK_SUCCESS)
         {
-            Logger::logMessage("Vulkan_Network::Vulkan_Network: Failed to create pipeline layout", LOG_ERROR);
+            Logger::logMessage("Vulkan_Network::Vulkan_Network: Failed to create pipeline layout", LOG_ERROR, true);
             throw std::runtime_error("Failed to create pipeline layout");
         }
-
-        VkDescriptorPoolSize pool_size{};
-        pool_size.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        pool_size.descriptorCount = 4000;
-
-        VkDescriptorPoolCreateInfo pool_info{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-        pool_info.maxSets = 1000;
-        pool_info.poolSizeCount = 1;
-        pool_info.pPoolSizes = &pool_size;
-
-        // if (vkCreateDescriptorPool(device, &pool_info, nullptr, &descriptor_pool) != VK_SUCCESS)
-        // {
-        //     Logger::logMessage("Vulkan_Network::Vulkan_Network: Failed to create descriptor pool", LOG_ERROR);
-        //     throw std::runtime_error("Failed to create descriptor pool");
-        // }
 
         createAllPipelines(pipeline_folder);
 
@@ -244,8 +265,27 @@ public:
     ~Vulkan_Network() { cleanup(); }
 
     VkPipelineLayout getPipelineLayout() const { return pipeline_layout; }
-    VkPipeline getPipeline(Compute_Pipeline pipeline) const { return pipelines[static_cast<std::size_t>(pipeline)]; }
+
+    VkPipeline getPipeline(Compute_Pipeline pipeline) const
+    {
+        std::size_t idx = static_cast<std::size_t>(pipeline);
+        if (idx >= pipelines.size())
+        {
+            Logger::logMessage("Vulkan_Network::getPipeline: Pipeline index out of bounds (" + std::to_string(idx) + ")", LOG_WARNING);
+            return VK_NULL_HANDLE;
+        }
+        return pipelines[idx];
+    }
+
     VkDescriptorSetLayout getDescriptorSetLayout() const { return descriptor_set_layout; }
-    // VkDescriptorPool getDescriptorPool() const { return descriptor_pool; }
-    void changeComputeFolderDirectory(const std::string &new_folder) { pipeline_folder = new_folder; }
+
+    void changeComputeFolderDirectory(const std::string &new_folder)
+    {
+        if (new_folder.empty())
+        {
+            Logger::logMessage("Vulkan_Network::changeComputeFolderDirectory: Attempted to set empty folder path", LOG_WARNING);
+        }
+        NETWORK_LOG_DEBUG("Vulkan_Network::changeComputeFolderDirectory: Changing compute shader folder to " + new_folder);
+        pipeline_folder = new_folder;
+    }
 };

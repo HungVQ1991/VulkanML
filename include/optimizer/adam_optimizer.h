@@ -3,10 +3,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
+#include "helper/logger.h"
 #include "ioptimizer.h"
 #include "math/matrix.h"
 
@@ -38,10 +40,24 @@ private:
 
 public:
     explicit Adam_Optimizer(float lr = 0.001f, float b1 = 0.9f, float b2 = 0.999f, float eps = 1e-8f, float max_grad = 1.0f)
-        : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), max_gradient(max_grad) {}
+        : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), max_gradient(max_grad)
+    {
+        if (learning_rate <= 0.0f)
+        {
+            Logger::logMessage("Adam_Optimizer::Adam_Optimizer: Initial learning rate is non-positive", LOG_WARNING);
+        }
+        OPTIMIZER_LOG_DEBUG("Adam_Optimizer::Adam_Optimizer: lr=" + std::to_string(learning_rate) + ", beta1=" + std::to_string(beta1) + ", beta2=" + std::to_string(beta2) + ", epsilon=" + std::to_string(epsilon) + ", max_gradient=" + std::to_string(max_gradient));
+    }
 
     explicit Adam_Optimizer(ILearning_Rate &lr, float b1 = 0.9f, float b2 = 0.999f, float eps = 1e-8f, float max_grad = 1.0f)
-        : learning_rate(lr.getCurrentRate()), beta1(b1), beta2(b2), epsilon(eps), max_gradient(max_grad) {}
+        : learning_rate(lr.getCurrentRate()), beta1(b1), beta2(b2), epsilon(eps), max_gradient(max_grad)
+    {
+        if (learning_rate <= 0.0f)
+        {
+            Logger::logMessage("Adam_Optimizer::Adam_Optimizer: Initial learning rate is non-positive", LOG_WARNING);
+        }
+        OPTIMIZER_LOG_DEBUG("Adam_Optimizer::Adam_Optimizer (ILearning_Rate): lr=" + std::to_string(learning_rate) + ", beta1=" + std::to_string(beta1) + ", beta2=" + std::to_string(beta2) + ", epsilon=" + std::to_string(epsilon) + ", max_gradient=" + std::to_string(max_gradient));
+    }
 
     ~Adam_Optimizer() override = default;
 
@@ -56,7 +72,16 @@ public:
                 Matrix *param = param_grad_pairs[i].first;
                 if (param)
                 {
-                    states.emplace(param, std::move(loaded_states[i]));
+                    if (param->getRows() == loaded_states[i].m_matrix.getRows() &&
+                        param->getCols() == loaded_states[i].m_matrix.getCols())
+                    {
+                        states.emplace(param, std::move(loaded_states[i]));
+                    }
+                    else
+                    {
+                        Logger::logMessage("Adam_Optimizer::step: Parameter shape mismatch with loaded state, reinitializing state", LOG_WARNING);
+                        states.emplace(param, Parameter_State(param->getRows(), param->getCols(), param->getTarget()));
+                    }
                     param_order.push_back(param);
                 }
             }
@@ -64,10 +89,15 @@ public:
         }
 
         ++timestep;
+        OPTIMIZER_LOG_DEBUG("Adam_Optimizer::step: timestep=" + std::to_string(timestep) + ", lr=" + std::to_string(learning_rate) + ", beta1=" + std::to_string(beta1) + ", beta2=" + std::to_string(beta2) + ", epsilon=" + std::to_string(epsilon) + ", max_gradient=" + std::to_string(max_gradient) + ", pairs=" + std::to_string(param_grad_pairs.size()));
+
         for (const auto &[param, grad] : param_grad_pairs)
         {
             if (!param || !grad)
+            {
+                Logger::logMessage("Adam_Optimizer::step: Null parameter or gradient pointer encountered", LOG_WARNING);
                 continue;
+            }
 
             auto it = states.find(param);
             if (it == states.end())
@@ -77,12 +107,13 @@ public:
                 param_order.push_back(param);
             }
 
-            param->adamUpdate(*grad, it->second.m_matrix, it->second.v_matrix, learning_rate, beta1, beta2, epsilon, static_cast<float>(timestep), max_gradient);
+            param->adamUpdate(*grad, it->second.m_matrix, it->second.v_matrix, learning_rate, beta1, beta2, epsilon, timestep, max_gradient);
         }
     }
 
     void reset() override
     {
+        OPTIMIZER_LOG_DEBUG("Adam_Optimizer::reset: Resetting optimizer states and timestep");
         states.clear();
         param_order.clear();
         loaded_states.clear();
@@ -91,10 +122,26 @@ public:
 
     float getLearningRate() const { return learning_rate; }
     float getMaxGradient() const { return max_gradient; }
-    void setLearningRate(float lr) override { learning_rate = lr; }
+    void setLearningRate(float lr) override
+    {
+        if (lr <= 0.0f)
+        {
+            Logger::logMessage("Adam_Optimizer::setLearningRate: learning_rate is non-positive", LOG_WARNING);
+        }
+        OPTIMIZER_LOG_DEBUG("Adam_Optimizer::setLearningRate: old_lr=" + std::to_string(learning_rate) + ", new_lr=" + std::to_string(lr));
+        learning_rate = lr;
+    }
 
     void saveCheckpoint(std::ofstream &out_file) const override
     {
+        if (!out_file.is_open())
+        {
+            Logger::logMessage("Adam_Optimizer::saveCheckpoint: Output stream is not open", LOG_ERROR, true);
+            return;
+        }
+
+        OPTIMIZER_LOG_DEBUG("Adam_Optimizer::saveCheckpoint: Saving checkpoint at timestep=" + std::to_string(timestep) + ", lr=" + std::to_string(learning_rate));
+
         std::uint64_t step_val = static_cast<std::uint64_t>(timestep);
         out_file.write(reinterpret_cast<const char *>(&step_val), sizeof(step_val));
         out_file.write(reinterpret_cast<const char *>(&learning_rate), sizeof(learning_rate));
@@ -119,6 +166,12 @@ public:
 
     void loadCheckpoint(std::ifstream &in_file, Execution_Target target = Execution_Target::CPU) override
     {
+        if (!in_file.is_open())
+        {
+            Logger::logMessage("Adam_Optimizer::loadCheckpoint: Input stream is not open", LOG_ERROR, true);
+            return;
+        }
+
         reset();
 
         std::uint64_t step_val{0};
@@ -133,6 +186,8 @@ public:
 
         std::uint32_t num_states{0};
         in_file.read(reinterpret_cast<char *>(&num_states), sizeof(num_states));
+
+        OPTIMIZER_LOG_DEBUG("Adam_Optimizer::loadCheckpoint: Loaded timestep=" + std::to_string(timestep) + ", lr=" + std::to_string(learning_rate) + ", beta1=" + std::to_string(beta1) + ", beta2=" + std::to_string(beta2) + ", epsilon=" + std::to_string(epsilon) + ", max_gradient=" + std::to_string(max_gradient) + ", num_states=" + std::to_string(num_states));
 
         loaded_states.reserve(num_states);
         for (std::uint32_t i = 0; i < num_states; ++i)
