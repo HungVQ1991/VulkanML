@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <format>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -32,11 +33,6 @@ public:
             throw std::invalid_argument("Dimensions mismatch");
         }
 
-        if (pred_matrix.getTarget() != target_matrix.getTarget())
-        {
-            Logger::logMessage("CCE_Cost::computeLoss: Execution target mismatch between prediction and target matrix", LOG_WARNING);
-        }
-
         std::size_t batch_size = pred_matrix.getRows();
         if (batch_size == 0 || pred_matrix.getCols() == 0)
         {
@@ -44,33 +40,30 @@ public:
             return 0.0f;
         }
 
-        COST_LOG_DEBUG("CCE_Cost::computeLoss: rows=" + std::to_string(pred_matrix.getRows()) + ", cols=" + std::to_string(pred_matrix.getCols()));
+        // Matrix loss_matrix = pred_matrix.cceLoss(target_matrix, epsilon_val);
+        // float total_loss = loss_matrix.getScalar();
 
-        std::vector<float> pred_data = pred_matrix.getData();
-        std::vector<float> target_data = target_matrix.getData();
-
-        float sum_val = 0.0f;
-        for (std::size_t i = 0; i < pred_data.size(); ++i)
-        {
-            float p_val = std::clamp(pred_data[i], epsilon_val, 1.0f - epsilon_val);
-            float y_val = target_data[i];
-            sum_val += -y_val * std::log(p_val);
-        }
-
-        return sum_val / static_cast<float>(batch_size);
+        return 0;
     }
 
     Matrix computeGradient(const Matrix &pred_matrix, const Matrix &target_matrix) const override
     {
+        auto log_node_count = [](const std::string &checkpoint)
+        {
+            std::size_t count = Execution_Engine::getInstance().getCurrentGraph().getNodes().size();
+             Logger::logMessage(std::format("[TRACE_CCE] {} -> Node count = {}", checkpoint, count), LOG_DEBUG);
+        };
+
+        // log_node_count("CCE_01_ENTRY");
+
         if (pred_matrix.getRows() != target_matrix.getRows() || pred_matrix.getCols() != target_matrix.getCols())
         {
-            Logger::logMessage("CCE_Cost::computeGradient: Dimensions mismatch", LOG_ERROR, true);
-            throw std::invalid_argument("Dimensions mismatch");
-        }
-
-        if (pred_matrix.getTarget() != target_matrix.getTarget())
-        {
-            Logger::logMessage("CCE_Cost::computeGradient: Execution target mismatch between prediction and target matrix", LOG_WARNING);
+            std::string err_msg = std::format(
+                "CCE_Cost::computeGradient: Dimensions mismatch! Pred: ({}x{}), Target: ({}x{})",
+                pred_matrix.getRows(), pred_matrix.getCols(),
+                target_matrix.getRows(), target_matrix.getCols());
+            Logger::logMessage(err_msg, LOG_ERROR, true);
+            throw std::invalid_argument(err_msg);
         }
 
         std::size_t batch_size = pred_matrix.getRows();
@@ -80,10 +73,26 @@ public:
             return Matrix(0, 0, pred_matrix.getTarget());
         }
 
-        COST_LOG_DEBUG("CCE_Cost::computeGradient: rows=" + std::to_string(pred_matrix.getRows()) + ", cols=" + std::to_string(pred_matrix.getCols()));
+        // log_node_count("CCE_02_BEFORE_COPY_TARGET");
+        Matrix synced_target = target_matrix;
+        // log_node_count("CCE_03_AFTER_COPY_TARGET");
+
+        if (synced_target.getTarget() != pred_matrix.getTarget())
+        {
+            // log_node_count("CCE_04_BEFORE_SET_TARGET");
+            synced_target.setExecutionTarget(pred_matrix.getTarget());
+            // log_node_count("CCE_05_AFTER_SET_TARGET");
+        }
 
         float inv_batch = 1.0f / static_cast<float>(batch_size);
-        return (pred_matrix - target_matrix) * inv_batch;
+
+        // log_node_count("CCE_08_BEFORE_SUB_MUL");
+        Matrix grad_matrix = (pred_matrix - synced_target) * inv_batch;
+        // log_node_count("CCE_09_AFTER_SUB_MUL");
+
+        // COST_LOG_DEBUG(std::format("CCE_Cost::computeGradient: shape=({}x{})", grad_matrix.getRows(), grad_matrix.getCols()));
+
+        return grad_matrix;
     }
 
     Cost_Type getType() const override

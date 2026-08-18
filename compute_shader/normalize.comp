@@ -1,0 +1,48 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer Input_Buffer {
+    float input_data[];
+};
+
+layout(std430, set = 0, binding = 1) writeonly buffer Output_Buffer {
+    float output_data[];
+};
+
+layout(push_constant) uniform Push_Constants {
+    uint total_elements;
+} push_constants;
+
+shared float shared_sum_sq[256];
+
+void main() {
+    uint local_idx = gl_LocalInvocationID.x;
+    uint total_elements = push_constants.total_elements;
+
+    float local_sum = 0.0f;
+    for (uint i = local_idx; i < total_elements; i += gl_WorkGroupSize.x) {
+        float val = input_data[i];
+        local_sum += val * val;
+    }
+
+    shared_sum_sq[local_idx] = local_sum;
+    barrier();
+
+    for (uint stride = gl_WorkGroupSize.x / 2; stride > 0; stride >>= 1) {
+        if (local_idx < stride) {
+            shared_sum_sq[local_idx] += shared_sum_sq[local_idx + stride];
+        }
+        barrier();
+    }
+
+    float norm = sqrt(shared_sum_sq[0]);
+
+    for (uint i = local_idx; i < total_elements; i += gl_WorkGroupSize.x) {
+        if (norm < 1e-8f) {
+            output_data[i] = input_data[i];
+        } else {
+            output_data[i] = input_data[i] / norm;
+        }
+    }
+}

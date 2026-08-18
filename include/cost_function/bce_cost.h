@@ -45,18 +45,9 @@ public:
 
         COST_LOG_DEBUG("BCE_Cost::computeLoss: rows=" + std::to_string(pred_matrix.getRows()) + ", cols=" + std::to_string(pred_matrix.getCols()));
 
-        std::vector<float> pred_data = pred_matrix.getData();
-        std::vector<float> target_data = target_matrix.getData();
-
-        float sum_val = 0.0f;
-        for (std::size_t i = 0; i < pred_data.size(); ++i)
-        {
-            float p_val = std::clamp(pred_data[i], epsilon_val, 1.0f - epsilon_val);
-            float y_val = target_data[i];
-            sum_val += -(y_val * std::log(p_val) + (1.0f - y_val) * std::log(1.0f - p_val));
-        }
-
-        return pred_data.empty() ? 0.0f : (sum_val / static_cast<float>(pred_data.size()));
+        std::size_t total_elements = pred_matrix.getRows() * pred_matrix.getCols();
+        Matrix loss_matrix = pred_matrix.bceLoss(target_matrix, epsilon_val);
+        return loss_matrix.getScalar() / static_cast<float>(total_elements);
     }
 
     Matrix computeGradient(const Matrix &pred_matrix, const Matrix &target_matrix) const override

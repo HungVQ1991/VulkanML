@@ -1,0 +1,77 @@
+#version 450
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer Input_Buffer {
+    float input_data[];
+};
+
+layout(std430, set = 0, binding = 1) writeonly buffer Output_Buffer {
+    float output_data[];
+};
+
+layout(push_constant) uniform Push_Constants {
+    uint n;
+} push_constants;
+
+void main() {
+    uint n = push_constants.n;
+    if (n == 0) {
+        return;
+    }
+
+    float aug[32768];
+    uint aug_cols = 2 * n;
+
+    for (uint i = 0; i < n; ++i) {
+        for (uint j = 0; j < n; ++j) {
+            aug[i * aug_cols + j] = input_data[i * n + j];
+            aug[i * aug_cols + (n + j)] = (i == j) ? 1.0f : 0.0f;
+        }
+    }
+
+    for (uint i = 0; i < n; ++i) {
+        uint pivot_row = i;
+        float max_val = abs(aug[i * aug_cols + i]);
+
+        for (uint k = i + 1; k < n; ++k) {
+            float val = abs(aug[k * aug_cols + i]);
+            if (val > max_val) {
+                max_val = val;
+                pivot_row = k;
+            }
+        }
+
+        if (pivot_row != i) {
+            for (uint j = 0; j < aug_cols; ++j) {
+                float temp = aug[i * aug_cols + j];
+                aug[i * aug_cols + j] = aug[pivot_row * aug_cols + j];
+                aug[pivot_row * aug_cols + j] = temp;
+            }
+        }
+
+        float pivot = aug[i * aug_cols + i];
+        if (abs(pivot) < 1e-7f) {
+            return;
+        }
+
+        for (uint j = 0; j < aug_cols; ++j) {
+            aug[i * aug_cols + j] /= pivot;
+        }
+
+        for (uint k = 0; k < n; ++k) {
+            if (k != i) {
+                float factor = aug[k * aug_cols + i];
+                for (uint j = 0; j < aug_cols; ++j) {
+                    aug[k * aug_cols + j] -= factor * aug[i * aug_cols + j];
+                }
+            }
+        }
+    }
+
+    for (uint i = 0; i < n; ++i) {
+        for (uint j = 0; j < n; ++j) {
+            output_data[i * n + j] = aug[i * aug_cols + (n + j)];
+        }
+    }
+}

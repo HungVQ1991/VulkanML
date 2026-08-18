@@ -1,7 +1,9 @@
 #pragma once
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <format>
 #include <fstream>
 #include <string>
 #include <unordered_map>
@@ -21,7 +23,8 @@ private:
         Matrix v_matrix;
 
         Parameter_State(std::size_t rows, std::size_t cols, Execution_Target target)
-            : m_matrix(rows, cols, target), v_matrix(rows, cols, target) {}
+            : m_matrix(rows, cols, std::vector<float>(rows * cols, 0.0f), target),
+              v_matrix(rows, cols, std::vector<float>(rows * cols, 0.0f), target) {}
 
         Parameter_State(Matrix m, Matrix v)
             : m_matrix(std::move(m)), v_matrix(std::move(v)) {}
@@ -33,6 +36,7 @@ private:
     float epsilon;
     float max_gradient;
     std::size_t timestep = 0;
+    ILearning_Rate *lr_scheduler = nullptr;
 
     std::unordered_map<Matrix *, Parameter_State> states;
     std::vector<Matrix *> param_order;
@@ -40,7 +44,7 @@ private:
 
 public:
     explicit Adam_Optimizer(float lr = 0.001f, float b1 = 0.9f, float b2 = 0.999f, float eps = 1e-8f, float max_grad = 1.0f)
-        : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), max_gradient(max_grad)
+        : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), max_gradient(max_grad), lr_scheduler(nullptr)
     {
         if (learning_rate <= 0.0f)
         {
@@ -50,7 +54,7 @@ public:
     }
 
     explicit Adam_Optimizer(ILearning_Rate &lr, float b1 = 0.9f, float b2 = 0.999f, float eps = 1e-8f, float max_grad = 1.0f)
-        : learning_rate(lr.getCurrentRate()), beta1(b1), beta2(b2), epsilon(eps), max_gradient(max_grad)
+        : learning_rate(lr.getCurrentRate()), beta1(b1), beta2(b2), epsilon(eps), max_gradient(max_grad), lr_scheduler(&lr)
     {
         if (learning_rate <= 0.0f)
         {
@@ -65,6 +69,11 @@ public:
 
     void step(const std::vector<std::pair<Matrix *, Matrix *>> &param_grad_pairs) override
     {
+        if (lr_scheduler != nullptr)
+        {
+            learning_rate = lr_scheduler->getCurrentRate();
+        }
+
         if (states.empty() && !loaded_states.empty())
         {
             for (std::size_t i = 0; i < param_grad_pairs.size() && i < loaded_states.size(); ++i)
@@ -89,8 +98,8 @@ public:
         }
 
         ++timestep;
-        OPTIMIZER_LOG_DEBUG("Adam_Optimizer::step: timestep=" + std::to_string(timestep) + ", lr=" + std::to_string(learning_rate) + ", beta1=" + std::to_string(beta1) + ", beta2=" + std::to_string(beta2) + ", epsilon=" + std::to_string(epsilon) + ", max_gradient=" + std::to_string(max_gradient) + ", pairs=" + std::to_string(param_grad_pairs.size()));
 
+        std::size_t pair_index = 0;
         for (const auto &[param, grad] : param_grad_pairs)
         {
             if (!param || !grad)
@@ -108,6 +117,8 @@ public:
             }
 
             param->adamUpdate(*grad, it->second.m_matrix, it->second.v_matrix, learning_rate, beta1, beta2, epsilon, timestep, max_gradient);
+
+            ++pair_index;
         }
     }
 
@@ -130,6 +141,7 @@ public:
         }
         OPTIMIZER_LOG_DEBUG("Adam_Optimizer::setLearningRate: old_lr=" + std::to_string(learning_rate) + ", new_lr=" + std::to_string(lr));
         learning_rate = lr;
+        lr_scheduler = nullptr;
     }
 
     void saveCheckpoint(std::ofstream &out_file) const override

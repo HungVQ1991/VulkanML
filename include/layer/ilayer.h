@@ -43,6 +43,7 @@ public:
     virtual Matrix getBiases() const { return Matrix(0, 0); }
     virtual Matrix getWeightsGradient() { return Matrix(0, 0); }
     virtual Matrix getInput() { return Matrix(0, 0); }
+    virtual Matrix getOutput() { return Matrix(0, 0); }
 
     virtual bool hasParameters() const { return false; }
     virtual void resetGradient() {}

@@ -25,7 +25,7 @@
 #define CONTEXT_LOG_DEBUG(msg) ((void)0)
 #endif
 
-const bool DEBUG_VALIDATION = true;
+const bool DEBUG_VALIDATION = false;
 
 constexpr std::uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
@@ -40,6 +40,7 @@ struct Buffer_Transfer_Task
     VkBuffer src_buffer;
     VkDeviceSize src_offset;
     VkBuffer dst_buffer;
+    VkDeviceSize dst_offset;
     VkDeviceSize size;
 };
 
@@ -62,6 +63,7 @@ private:
     VkInstance instance = VK_NULL_HANDLE;
     VkPhysicalDevice physical_device = VK_NULL_HANDLE;
     VkDevice device = VK_NULL_HANDLE;
+    VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
     VkQueue compute_queue = VK_NULL_HANDLE;
     VkCommandPool command_pool = VK_NULL_HANDLE;
     std::uint32_t compute_queue_family_index = 0;
@@ -85,9 +87,10 @@ private:
     mutable std::vector<Buffer_Transfer_Task> pending_transfers;
 
     mutable VkFence fences[MAX_FRAMES_IN_FLIGHT]{VK_NULL_HANDLE, VK_NULL_HANDLE};
-    mutable std::function<void()> flush_callback = nullptr;
+    mutable std::function<void(VkFence)> flush_callback = nullptr;
 
     mutable std::mutex garbage_mutex;
+    mutable std::mutex context_mutex;
     mutable std::vector<Resource_Garbage> garbage_bins[MAX_FRAMES_IN_FLIGHT];
 
     mutable bool frame_ready[MAX_FRAMES_IN_FLIGHT]{false, false};
@@ -143,6 +146,42 @@ private:
         }
     }
 
+    bool checkDeviceLimits(VkPhysicalDevice phys_device) const
+    {
+        VkPhysicalDeviceProperties properties;
+        vkGetPhysicalDeviceProperties(phys_device, &properties);
+        const auto &limits = properties.limits;
+
+        constexpr std::uint32_t REQUIRED_STORAGE_BUFFERS = 32;
+        constexpr std::uint32_t REQUIRED_PUSH_CONSTANTS = 128;
+
+        if (limits.maxPerStageDescriptorStorageBuffers < REQUIRED_STORAGE_BUFFERS)
+        {
+            Logger::logMessage(std::format("Vulkan_Context::checkDeviceLimits: Device lacks required maxPerStageDescriptorStorageBuffers ({} < {})",
+                                           limits.maxPerStageDescriptorStorageBuffers, REQUIRED_STORAGE_BUFFERS),
+                               LOG_WARNING);
+            return false;
+        }
+
+        if (limits.maxDescriptorSetStorageBuffers < REQUIRED_STORAGE_BUFFERS)
+        {
+            Logger::logMessage(std::format("Vulkan_Context::checkDeviceLimits: Device lacks required maxDescriptorSetStorageBuffers ({} < {})",
+                                           limits.maxDescriptorSetStorageBuffers, REQUIRED_STORAGE_BUFFERS),
+                               LOG_WARNING);
+            return false;
+        }
+
+        if (limits.maxPushConstantsSize < REQUIRED_PUSH_CONSTANTS)
+        {
+            Logger::logMessage(std::format("Vulkan_Context::checkDeviceLimits: Device lacks required maxPushConstantsSize ({} < {})",
+                                           limits.maxPushConstantsSize, REQUIRED_PUSH_CONSTANTS),
+                               LOG_WARNING);
+            return false;
+        }
+
+        return true;
+    }
+
     void pickPhysicalDevice()
     {
         std::uint32_t device_count = 0;
@@ -164,6 +203,11 @@ private:
 
         for (const auto &d : devices)
         {
+            if (!checkDeviceLimits(d))
+            {
+                continue;
+            }
+
             VkPhysicalDeviceProperties device_properties;
             vkGetPhysicalDeviceProperties(d, &device_properties);
 
@@ -195,7 +239,7 @@ private:
 
         if (best_device == VK_NULL_HANDLE)
         {
-            Logger::logMessage("Vulkan_Context::pickPhysicalDevice: Failed to find a suitable GPU with compute queue support", LOG_ERROR, true);
+            Logger::logMessage("Vulkan_Context::pickPhysicalDevice: Failed to find a suitable GPU that satisfies all compute and resource limits", LOG_ERROR, true);
             throw std::runtime_error("Failed to find a suitable GPU");
         }
 
@@ -242,6 +286,12 @@ private:
         }
     }
 
+    void createPipelineCache()
+    {
+        VkPipelineCacheCreateInfo cache_info{.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+        vkCreatePipelineCache(device, &cache_info, nullptr, &pipeline_cache);
+    }
+
 public:
     Vulkan_Context()
     {
@@ -249,6 +299,7 @@ public:
         initInstance();
         pickPhysicalDevice();
         createLogicalDevice();
+        createPipelineCache();
         createCommandPool();
         initFences();
         allocator = std::make_unique<Vulkan_Sub_Allocator>(device, *this);
@@ -281,6 +332,9 @@ public:
 
         if (command_pool != VK_NULL_HANDLE)
             vkDestroyCommandPool(device, command_pool, nullptr);
+
+        if (pipeline_cache != VK_NULL_HANDLE)
+            vkDestroyPipelineCache(device, pipeline_cache, nullptr);
 
         if (device != VK_NULL_HANDLE)
             vkDestroyDevice(device, nullptr);
@@ -331,6 +385,8 @@ public:
 
     void *allocateStagingSpace(std::uint32_t frame_index, VkDeviceSize size, VkBuffer &out_buffer, VkDeviceSize &out_offset) const
     {
+        std::lock_guard<std::mutex> lock(context_mutex);
+
         if (frame_index >= MAX_FRAMES_IN_FLIGHT)
         {
             Logger::logMessage("Vulkan_Context::allocateStagingSpace: frame_index out of bounds (" + std::to_string(frame_index) + ")", LOG_WARNING);
@@ -434,14 +490,14 @@ public:
         vkResetFences(device, 1, &fences[frame_index]);
     }
 
-    void registerFlushCallback(std::function<void()> cb) const { flush_callback = cb; }
+    void registerFlushCallback(std::function<void(VkFence)> cb) const { flush_callback = cb; }
 
-    void flush() const
+    void flush(VkFence fence = VK_NULL_HANDLE) const
     {
         if (flush_callback)
         {
             CONTEXT_LOG_DEBUG("Vulkan_Context::flush: Executing flush callback");
-            flush_callback();
+            flush_callback(fence);
         }
         else
         {
@@ -456,6 +512,7 @@ public:
             Logger::logMessage("Vulkan_Context::resetStagingOffset: frame_index out of bounds (" + std::to_string(frame_index) + ")", LOG_WARNING);
             return;
         }
+        std::lock_guard<std::mutex> lock(context_mutex);
         current_offsets[frame_index] = 0;
     }
 
@@ -463,17 +520,101 @@ public:
 
     void addTransferTask(const Buffer_Transfer_Task &task) const
     {
+        std::lock_guard<std::mutex> lock(context_mutex);
         pending_transfers.push_back(task);
     }
 
-    const std::vector<Buffer_Transfer_Task> &getTransferTasks() const
+    std::vector<Buffer_Transfer_Task> getTransferTasks() const
     {
+        std::lock_guard<std::mutex> lock(context_mutex);
         return pending_transfers;
     }
 
     void clearTransferTasks() const
     {
+        std::lock_guard<std::mutex> lock(context_mutex);
         pending_transfers.clear();
+    }
+
+    void executePendingTransfers() const
+    {
+        std::vector<Buffer_Transfer_Task> transfers_to_execute;
+        {
+            std::lock_guard<std::mutex> lock(context_mutex);
+            if (pending_transfers.empty())
+            {
+                return;
+            }
+            transfers_to_execute = std::move(pending_transfers);
+            pending_transfers.clear();
+        }
+
+        VkCommandBufferAllocateInfo alloc_info{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        alloc_info.commandPool = command_pool;
+        alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        alloc_info.commandBufferCount = 1;
+
+        VkCommandBuffer cmd_buffer = VK_NULL_HANDLE;
+        if (vkAllocateCommandBuffers(device, &alloc_info, &cmd_buffer) != VK_SUCCESS)
+        {
+            Logger::logMessage("Vulkan_Context::executePendingTransfers: Failed to allocate command buffer", LOG_ERROR, true);
+            throw std::runtime_error("Failed to allocate command buffer");
+        }
+
+        VkCommandBufferBeginInfo begin_info{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+        if (vkBeginCommandBuffer(cmd_buffer, &begin_info) != VK_SUCCESS)
+        {
+            vkFreeCommandBuffers(device, command_pool, 1, &cmd_buffer);
+            Logger::logMessage("Vulkan_Context::executePendingTransfers: Failed to begin command buffer", LOG_ERROR, true);
+            throw std::runtime_error("Failed to begin command buffer");
+        }
+
+        for (const auto &task : transfers_to_execute)
+        {
+            VkBufferCopy copy_region{};
+            copy_region.srcOffset = task.src_offset;
+            copy_region.dstOffset = task.dst_offset;
+            copy_region.size = task.size;
+
+            vkCmdCopyBuffer(cmd_buffer, task.src_buffer, task.dst_buffer, 1, &copy_region);
+
+            VkBufferMemoryBarrier barrier{.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.buffer = task.dst_buffer;
+            barrier.offset = task.dst_offset;
+            barrier.size = task.size;
+
+            vkCmdPipelineBarrier(cmd_buffer,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 0, 0, nullptr, 1, &barrier, 0, nullptr);
+        }
+
+        if (vkEndCommandBuffer(cmd_buffer) != VK_SUCCESS)
+        {
+            vkFreeCommandBuffers(device, command_pool, 1, &cmd_buffer);
+            Logger::logMessage("Vulkan_Context::executePendingTransfers: Failed to end command buffer", LOG_ERROR, true);
+            throw std::runtime_error("Failed to end command buffer");
+        }
+
+        VkSubmitInfo submit_info{.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        submit_info.commandBufferCount = 1;
+        submit_info.pCommandBuffers = &cmd_buffer;
+
+        if (vkQueueSubmit(compute_queue, 1, &submit_info, VK_NULL_HANDLE) != VK_SUCCESS)
+        {
+            vkFreeCommandBuffers(device, command_pool, 1, &cmd_buffer);
+            Logger::logMessage("Vulkan_Context::executePendingTransfers: Failed to submit transfer queue", LOG_ERROR, true);
+            throw std::runtime_error("Failed to submit transfer queue");
+        }
+
+        vkQueueWaitIdle(compute_queue);
+        vkFreeCommandBuffers(device, command_pool, 1, &cmd_buffer);
     }
 
     void cleanGarbage(std::uint32_t frame_index) const
@@ -484,14 +625,17 @@ public:
             return;
         }
 
-        for (const auto &stg : staging_garbage[frame_index])
         {
-            if (stg.buffer != VK_NULL_HANDLE)
-                vkDestroyBuffer(device, stg.buffer, nullptr);
-            if (stg.memory != VK_NULL_HANDLE)
-                vkFreeMemory(device, stg.memory, nullptr);
+            std::lock_guard<std::mutex> lock(context_mutex);
+            for (const auto &stg : staging_garbage[frame_index])
+            {
+                if (stg.buffer != VK_NULL_HANDLE)
+                    vkDestroyBuffer(device, stg.buffer, nullptr);
+                if (stg.memory != VK_NULL_HANDLE)
+                    vkFreeMemory(device, stg.memory, nullptr);
+            }
+            staging_garbage[frame_index].clear();
         }
-        staging_garbage[frame_index].clear();
 
         std::vector<Resource_Garbage> local_bin;
         {
@@ -542,6 +686,31 @@ public:
         current_frame = (current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
         CONTEXT_LOG_DEBUG("Vulkan_Context::advanceFrame: Advanced current frame to " + std::to_string(current_frame));
     }
+
+    void copyBuffer(VkBuffer src_buffer,
+                    VkBuffer dst_buffer,
+                    VkDeviceSize size,
+                    VkDeviceSize src_offset = 0,
+                    VkDeviceSize dst_offset = 0) const
+    {
+        if (src_buffer == VK_NULL_HANDLE || dst_buffer == VK_NULL_HANDLE || size == 0)
+        {
+            Logger::logMessage("Vulkan_Context::copyBuffer: Invalid parameters provided for buffer copy", LOG_WARNING);
+            return;
+        }
+
+        Buffer_Transfer_Task task{
+            .src_buffer = src_buffer,
+            .src_offset = src_offset,
+            .dst_buffer = dst_buffer,
+            .dst_offset = dst_offset,
+            .size = size};
+
+        addTransferTask(task);
+        CONTEXT_LOG_DEBUG("Vulkan_Context::copyBuffer: Enqueued transfer task of size " + std::to_string(size) + " bytes");
+    }
+
+    VkPipelineCache getPipelineCache() const { return pipeline_cache; }
 };
 
 inline Memory_Allocation Vulkan_Sub_Allocator::allocate(const VkMemoryRequirements &reqs, VkMemoryPropertyFlags properties)

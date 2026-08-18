@@ -61,6 +61,7 @@ private:
         }
     }
 
+private:
     void copyBuffer(VkBuffer src_buffer, VkBuffer dst_buffer, VkDeviceSize size) const
     {
         VkDevice device = context.getDevice();
@@ -198,7 +199,7 @@ public:
 
         createBuffer(buffer_size,
                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     }
 
     void freeMemory()
@@ -228,17 +229,16 @@ public:
             throw std::runtime_error("size mismatch");
         }
 
-        GVECTOR_LOG_DEBUG("GVector::uploadData: Uploading " + std::to_string(host_data.size()) + " elements to GPU");
-
         std::uint32_t frame = context.getCurrentFrame();
-        context.prepareFrame();
 
         VkBuffer staging_buf = VK_NULL_HANDLE;
         VkDeviceSize staging_offset = 0;
         void *mapped_ptr = context.allocateStagingSpace(frame, buffer_size, staging_buf, staging_offset);
 
         std::memcpy(mapped_ptr, host_data.data(), buffer_size);
-        context.addTransferTask({staging_buf, staging_offset, buffer, buffer_size});
+
+        context.addTransferTask({staging_buf, staging_offset, buffer, 0, buffer_size});
+
         markAsUsedInFrame(frame);
     }
 
@@ -250,10 +250,11 @@ public:
             return;
         }
 
-        GVECTOR_LOG_DEBUG("GVector::downloadData: Downloading " + std::to_string(getSize()) + " elements from GPU");
-
         context.flush();
-        vkDeviceWaitIdle(context.getDevice());
+        if (context.getDevice() != VK_NULL_HANDLE && context.getComputeQueue() != VK_NULL_HANDLE)
+        {
+            vkQueueWaitIdle(context.getComputeQueue());
+        }
 
         if (host_data.size() != getSize())
         {
@@ -289,6 +290,8 @@ public:
 
         copyBuffer(buffer, staging_buf, buffer_size);
 
+        vkDeviceWaitIdle(device);
+
         void *mapped_ptr = nullptr;
         if (vkMapMemory(device, staging_alloc.memory, staging_alloc.offset, buffer_size, 0, &mapped_ptr) != VK_SUCCESS)
         {
@@ -297,7 +300,6 @@ public:
             Logger::logMessage("GVector::downloadData: Failed to map staging memory", LOG_ERROR, true);
             throw std::runtime_error("GVector::downloadData: Failed to map memory");
         }
-
         std::memcpy(host_data.data(), mapped_ptr, buffer_size);
 
         vkUnmapMemory(device, staging_alloc.memory);
@@ -314,8 +316,15 @@ public:
         return buffer_size / sizeof(float);
     }
 
+    size_t getSizeBytes() const { return buffer_size; }
+
     void markAsUsedInFrame(std::uint32_t frame_index)
     {
         used_frame = frame_index;
     }
+
+    const Vulkan_Context &getContext() { return context; }
+    VkBuffer getBuffer() { return buffer; }
+    VkDevice getDevice() { return context.getDevice(); }
+    size_t getBufferSize() { return buffer_size; }
 };

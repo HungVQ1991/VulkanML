@@ -19,6 +19,7 @@
 #include "helper/logger.h"
 #include "math/matrix.h"
 #include "training_context.h"
+#include "engine/graph_optimizer.h"
 
 #ifndef ENABLE_NEURAL_NETWORK_DEBUG_LOGS
 #define ENABLE_NEURAL_NETWORK_DEBUG_LOGS 0
@@ -29,6 +30,14 @@
 #else
 #define NEURAL_NETWORK_LOG_DEBUG(msg) ((void)0)
 #endif
+
+class Neural_Network;
+
+void debugCheckGraphNodes(const std::string &checkpoint_name)
+{
+    std::size_t count = Execution_Engine::getInstance().getCurrentGraph().getNodes().size();
+    Logger::logMessage(std::format("[CHECKPOINT {}] Node count = {}", checkpoint_name, count), LOG_DEBUG);
+}
 
 class Neural_Network
 {
@@ -92,32 +101,35 @@ public:
         if (layers.empty())
         {
             Logger::logMessage("Neural_Network::forward: Network has no layers", LOG_ERROR, true);
-            throw std::logic_error("Neural network has no layers to execute forward pass");
+            throw std::logic_error("Neural network has no layers to execxute forward pass");
         }
-
-        NEURAL_NETWORK_LOG_DEBUG("Neural_Network::forward: input rows=" + std::to_string(input_matrix.getRows()) + ", cols=" + std::to_string(input_matrix.getCols()));
 
         Matrix current_output = input_matrix;
         for (const auto &layer : layers)
+        {
             current_output = layer->forward(current_output);
+        }
         last_prediction = current_output;
         return current_output;
     }
 
     Matrix backward(const Matrix &target_matrix)
     {
-        const ICost_Function &cost_fn = context.getCostFunction();
         if (layers.empty())
         {
             Logger::logMessage("Neural_Network::backward: Network has no layers", LOG_ERROR, true);
-            throw std::logic_error("Neural network has no layers to execute backward pass");
+            throw std::runtime_error("Network has no layers");
+        }
+        const ICost_Function &cost_fn = context.getCostFunction();
+
+        Matrix last_prediction_output = layers.back()->getOutput();
+
+        Matrix gradient_matrix = cost_fn.computeGradient(last_prediction_output, target_matrix);
+        for (std::size_t i = layers.size(); i > 0; --i)
+        {
+            gradient_matrix = layers[i - 1]->backward(gradient_matrix);
         }
 
-        NEURAL_NETWORK_LOG_DEBUG("Neural_Network::backward: target rows=" + std::to_string(target_matrix.getRows()) + ", cols=" + std::to_string(target_matrix.getCols()));
-
-        Matrix gradient_matrix = cost_fn.computeGradient(last_prediction, target_matrix);
-        for (std::size_t i = layers.size(); i > 0; --i)
-            gradient_matrix = layers[i - 1]->backward(gradient_matrix);
         return gradient_matrix;
     }
 
@@ -150,48 +162,106 @@ public:
         last_prediction = Matrix(0, 0, target);
     }
 
-    void trainStep(const Matrix &input_matrix, const Matrix &target_matrix)
+    void compileAndWarmup(std::size_t batch_size, std::size_t input_dim, std::size_t output_dim)
     {
-        auto start_gpu = std::chrono::high_resolution_clock::now();
+        if (layers.empty())
+        {
+            Logger::logMessage("Neural_Network::compileAndWarmup: Network has no layers", LOG_WARNING);
+            return;
+        }
+
+        Matrix dummy_input(batch_size, input_dim, target);
+        Matrix dummy_target(batch_size, output_dim, target);
+
+        forward(dummy_input);
+        backward(dummy_target);
 
         IOptimizer &optimizer = context.getOptimizer();
-        optimizer.setLearningRate(context.getLearningRate().getCurrentRate());
-
-        forward(input_matrix);
-        backward(target_matrix);
-
         optimizer.step(getParamsAndGrads());
+
         reset();
 
         if (target == Execution_Target::VULKAN_GPU)
         {
-            Execution_Engine::getInstance().executeGraph();
-            Execution_Engine::getInstance().waitIdle();
+            Execution_Engine &engine = Execution_Engine::getInstance();
+            engine.compileGraph(engine.getCurrentGraph(),
+                                dummy_input.getGVector(),
+                                dummy_target.getGVector());
+            engine.getCurrentGraph().clear();
+            engine.waitIdle();
+            engine.enableGraphCaching(true);
         }
-        auto end_gpu = std::chrono::high_resolution_clock::now();
-        Logger::logMessage(std::format("[Thread Main {}] Finished GPU TrainStep in {:.2f} ms",
-                                       std::this_thread::get_id(),
-                                       std::chrono::duration<double, std::milli>(end_gpu - start_gpu).count()),
-                           LOG_DEBUG, true);
+    }
+
+    void printL2Norms()
+    {
+        auto param_grad_pairs = getParamsAndGrads();
+        std::size_t index = 0;
+
+        auto compute_l2_norm = [](const Matrix &matrix) -> float
+        {
+            const auto &data = matrix.getData();
+            float sum_sq = 0.0f;
+            for (float val : data)
+            {
+                sum_sq += val * val;
+            }
+            return std::sqrt(sum_sq);
+        };
+
+        std::string result = "\n--- Gradient & Parameter L2 Norm Inspection ---\n";
+        for (const auto &[param, grad] : param_grad_pairs)
+        {
+            if (!param || !grad)
+            {
+                continue;
+            }
+
+            float param_norm = compute_l2_norm(*param);
+            float grad_norm = compute_l2_norm(*grad);
+            float ratio = (param_norm > 1e-8f) ? (grad_norm / param_norm) : 0.0f;
+
+            result += std::format("Param #{:<2} | Shape: {:>4}x{:<4} | ||W||: {:>10.4e} | ||dW||: {:>10.4e} | Ratio: {:>10.4e}\n",
+                                     index++, param->getRows(), param->getCols(), param_norm, grad_norm, ratio);
+        }
+        result += "-----------------------------------------------\n\n";
+        Logger::logMessage(result, LOG_INFO, true);
+    }
+
+    void trainStep(Matrix &input_matrix, Matrix &target_matrix)
+    {
+        Execution_Engine &engine = Execution_Engine::getInstance();
+
+        if (input_matrix.getTarget() != target)
+        {
+            input_matrix.setExecutionTarget(target);
+        }
+
+        if (target_matrix.getTarget() != target)
+        {
+            target_matrix.setExecutionTarget(target);
+        }
+
+        forward(input_matrix);
+        backward(target_matrix);
+        printL2Norms();
+        IOptimizer &optimizer = context.getOptimizer();
+        optimizer.step(getParamsAndGrads());
+
+        if (target == Execution_Target::VULKAN_GPU)
+        {
+            engine.executeGraph();
+        }
     }
 
     void fit(Async_Data_Pipeline &data_pipeline, std::size_t total_epochs, std::size_t steps_per_epoch)
     {
-        if (!is_target_synced)
-        {
-            Logger::logMessage("Neural_Network::fit: Execution target is not synced, syncing now", LOG_WARNING);
-            setTarget(target);
-        }
-
-        if (total_epochs == 0 || steps_per_epoch == 0)
-        {
-            Logger::logMessage("Neural_Network::fit: total_epochs or steps_per_epoch is 0", LOG_WARNING);
-            return;
-        }
-
-        NEURAL_NETWORK_LOG_DEBUG("Neural_Network::fit: Starting fit total_epochs=" + std::to_string(total_epochs) + ", steps_per_epoch=" + std::to_string(steps_per_epoch));
-
         setTrainingMode(true);
+
+        Execution_Engine &engine = Execution_Engine::getInstance();
+        VkQueue compute_queue = engine.getContext().getComputeQueue();
+
+        data_pipeline.setDevice(engine.getContext().getDevice());
         data_pipeline.start();
 
         for (std::size_t epoch = context.getCurrentEpoch(); epoch < total_epochs; ++epoch)
@@ -200,53 +270,26 @@ public:
 
             for (std::size_t step = 0; step < steps_per_epoch; ++step)
             {
-                Batch_Data batch = data_pipeline.nextBatch();
+                Batch_Data batch = data_pipeline.nextBatch(data_pipeline.getBatchSize(), 784, 10);
 
-                if (batch.inputs.getTarget() != target)
+                if (batch.inputs && batch.targets)
                 {
-                    Logger::logMessage("Neural_Network::fit: Batch input target mismatch with network target, converting batch", LOG_WARNING);
-                    batch.inputs.setExecutionTarget(target);
-                    batch.targets.setExecutionTarget(target);
-                }
+                    if (batch.inputs->getTarget() != target)
+                    {
+                        batch.inputs->setExecutionTarget(target);
+                        batch.targets->setExecutionTarget(target);
+                    }
 
-                trainStep(batch.inputs, batch.targets);
+                    trainStep(*batch.inputs, *batch.targets);
+                    vkQueueWaitIdle(compute_queue);
+                }
             }
 
             context.getLearningRate().step();
         }
 
+        context.setCurrentEpoch(total_epochs);
         data_pipeline.stop();
-    }
-
-    float evaluate(const Matrix &input_matrix, const Matrix &target_matrix)
-    {
-        setTrainingMode(false);
-
-        Matrix eval_input = input_matrix;
-        Matrix eval_target = target_matrix;
-
-        if (eval_input.getTarget() != target)
-        {
-            Logger::logMessage("Neural_Network::evaluate: input_matrix target mismatch with network target, converting input", LOG_WARNING);
-            eval_input.setExecutionTarget(target);
-        }
-
-        if (eval_target.getTarget() != target)
-        {
-            Logger::logMessage("Neural_Network::evaluate: target_matrix target mismatch with network target, converting target", LOG_WARNING);
-            eval_target.setExecutionTarget(target);
-        }
-
-        const ICost_Function &cost_fn = context.getCostFunction();
-        Matrix pred = forward(eval_input);
-
-        if (target == Execution_Target::VULKAN_GPU)
-            Execution_Engine::getInstance().executeGraph();
-
-        float loss_val = cost_fn.computeLoss(pred, eval_target);
-
-        setTrainingMode(true);
-        return loss_val;
     }
 
     void saveInference(const std::string &file_path) const

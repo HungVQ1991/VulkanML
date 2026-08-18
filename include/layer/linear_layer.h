@@ -30,21 +30,6 @@ public:
     std::size_t output_dim = 0;
     Execution_Target target = Execution_Target::CPU;
 
-private:
-    Matrix clipGradients(const Matrix &gradients, float max_value) const
-    {
-        if (target == Execution_Target::CPU)
-        {
-            std::vector<float> grad_data = gradients.getData();
-            for (float &val : grad_data)
-            {
-                val = std::clamp(val, -max_value, max_value);
-            }
-            return Matrix(gradients.getRows(), gradients.getCols(), std::move(grad_data), target);
-        }
-        return gradients;
-    }
-
 public:
     Linear_Layer()
         : weights(0, 0),
@@ -73,10 +58,15 @@ public:
         std::mt19937 gen(rd());
         std::normal_distribution<float> dist(0.0f, stddev);
 
+        float sum_w = 0.0f;
         for (float &w : weight_data)
         {
             w = dist(gen);
+            sum_w += std::abs(w);
         }
+
+        float mean_w = weight_data.empty() ? 0.0f : sum_w / static_cast<float>(weight_data.size());
+        Logger::logMessage(std::format("DEBUG_INIT: Layer weights mean_abs = {:.8f}", mean_w), LOG_DEBUG);
 
         weights = Matrix(input_dimension, output_dimension, std::move(weight_data), target);
         biases = Matrix(1, output_dimension, std::move(bias_data), target);

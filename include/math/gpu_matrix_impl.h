@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <format>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -45,7 +46,7 @@ private:
     template <typename Pipeline_Enum, typename Push_Constants_Type>
     void pushToGraph(Pipeline_Enum pipeline_id, const std::vector<std::shared_ptr<GVector>> &buffers, const Push_Constants_Type &push_constants, std::uint32_t group_x, std::uint32_t group_y = 1, std::uint32_t group_z = 1) const
     {
-        if (buffers.size() > 8)
+        if (buffers.size() > 16)
         {
             Logger::logMessage("Gpu_Matrix_Impl::pushToGraph: Exceeded maximum supported buffer count", LOG_ERROR, true);
             throw std::runtime_error("Exceeded maximum supported buffer count");
@@ -76,6 +77,32 @@ private:
         return other_gpu;
     }
 
+    const Gpu_Matrix_Impl &castToGpuMatrix(const Impl &other_impl, const std::string &error_msg) const
+    {
+        try
+        {
+            return dynamic_cast<const Gpu_Matrix_Impl &>(other_impl);
+        }
+        catch (const std::bad_cast &)
+        {
+            Logger::logMessage(error_msg, LOG_ERROR, true);
+            throw std::invalid_argument(error_msg);
+        }
+    }
+
+    Gpu_Matrix_Impl &castToGpuMatrix(Impl &other_impl, const std::string &error_msg) const
+    {
+        try
+        {
+            return dynamic_cast<Gpu_Matrix_Impl &>(other_impl);
+        }
+        catch (const std::bad_cast &)
+        {
+            Logger::logMessage(error_msg, LOG_ERROR, true);
+            throw std::invalid_argument(error_msg);
+        }
+    }
+
     template <typename Pipeline_Enum>
     std::shared_ptr<Impl> executeElementwise(const std::shared_ptr<Impl> &other_impl, Pipeline_Enum pipeline_id, const std::string &error_msg, bool allow_broadcast) const
     {
@@ -100,6 +127,7 @@ private:
             .cols = static_cast<std::uint32_t>(cols),
             .is_broadcast = static_cast<std::uint32_t>(is_broadcast ? 1 : 0)};
 
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::executeElementwise: total_elements={}, cols={}, is_broadcast={}", dims.total_elements, dims.cols, dims.is_broadcast));
         pushToGraph(pipeline_id, {storage, other_gpu->storage, result->storage}, dims, (dims.total_elements + 255) / 256);
 
         return result;
@@ -136,10 +164,19 @@ public:
 
     const std::vector<float> &getData() const override
     {
+        if (rows == 0 || cols == 0)
+        {
+            Logger::logMessage(std::format("[GET_DATA_DEBUG] Warning: rows or cols is 0! rows={}, cols={}", rows, cols), LOG_WARNING);
+            host_cache.clear();
+            return host_cache;
+        }
+        Execution_Engine::getInstance().getContext().flush();
         host_cache.resize(rows * cols);
         storage->downloadData(host_cache);
         return host_cache;
     }
+
+    std::shared_ptr<GVector> getGVector() override { return storage; }
 
     VkBuffer getBuffer() const { return storage->getBuffer(); }
 
@@ -155,6 +192,7 @@ public:
             .cols_a = static_cast<std::uint32_t>(cols),
             .cols_b = static_cast<std::uint32_t>(result->getCols())};
 
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::matmul: rows_a={}, cols_a={}, cols_b={}", dims.rows_a, dims.cols_a, dims.cols_b));
         pushToGraph(MATMUL, {storage, other_gpu->storage, result->storage}, dims, (dims.cols_b + 15) / 16, (dims.rows_a + 15) / 16);
         return result;
     }
@@ -180,6 +218,7 @@ public:
             float scalar;
         } constants{total_elements, scalar};
 
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::mulScalar: total_elements={}, scalar={}", constants.total_elements, constants.scalar));
         pushToGraph(MUL_SCALAR, {storage, result->storage}, constants, (total_elements + 255) / 256);
 
         return result;
@@ -202,6 +241,7 @@ public:
             float scalar;
         } constants{total_elements, 1.0f / scalar};
 
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::divScalar: total_elements={}, scalar={}", constants.total_elements, constants.scalar));
         pushToGraph(MUL_SCALAR, {storage, result->storage}, constants, (total_elements + 255) / 256);
 
         return result;
@@ -225,6 +265,7 @@ public:
             .rows = static_cast<std::uint32_t>(rows),
             .cols = static_cast<std::uint32_t>(cols)};
 
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::transpose: rows={}, cols={}", dims.rows, dims.cols));
         pushToGraph(TRANSPOSE, {storage, result->storage}, dims, (dims.cols + 15) / 16, (dims.rows + 15) / 16);
 
         return result;
@@ -235,6 +276,7 @@ public:
         auto result = std::make_shared<Gpu_Matrix_Impl>(rows, cols);
         std::uint32_t total_elements = static_cast<std::uint32_t>(rows * cols);
 
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::relu: total_elements={}", total_elements));
         pushToGraph(RELU, {storage, result->storage}, total_elements, (total_elements + 255) / 256);
         return result;
     }
@@ -245,6 +287,8 @@ public:
         auto grad_gpu = castToGpuMatrix(grad_impl, "Gpu_Matrix_Impl::reluBackward: Target matrix is not a Gpu_Matrix_Impl");
         auto result = std::make_shared<Gpu_Matrix_Impl>(rows, cols);
         std::uint32_t total_elements = static_cast<std::uint32_t>(rows * cols);
+
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::reluBackward: total_elements={}", total_elements));
         pushToGraph(RELU_BACKWARD, {storage, grad_gpu->storage, result->storage}, total_elements, (total_elements + 255) / 256);
         return result;
     }
@@ -254,6 +298,7 @@ public:
         auto result = std::make_shared<Gpu_Matrix_Impl>(rows, cols);
         std::uint32_t total_elements = static_cast<std::uint32_t>(rows * cols);
 
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::gelu: total_elements={}", total_elements));
         pushToGraph(GELU, {storage, result->storage}, total_elements, (total_elements + 255) / 256);
         return result;
     }
@@ -264,6 +309,8 @@ public:
         auto grad_gpu = castToGpuMatrix(grad_impl, "Gpu_Matrix_Impl::geluBackward: Target matrix is not a Gpu_Matrix_Impl");
         auto result = std::make_shared<Gpu_Matrix_Impl>(rows, cols);
         std::uint32_t total_elements = static_cast<std::uint32_t>(rows * cols);
+
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::geluBackward: total_elements={}", total_elements));
         pushToGraph(GELU_BACKWARD, {storage, grad_gpu->storage, result->storage}, total_elements, (total_elements + 255) / 256);
         return result;
     }
@@ -272,86 +319,34 @@ public:
     {
         validateSquare();
 
-        std::size_t n = rows;
-        std::vector<float> host_data = getData();
-        std::vector<float> aug(n * 2 * n, 0.0f);
+        std::uint32_t n = static_cast<std::uint32_t>(rows);
+        auto result = std::make_shared<Gpu_Matrix_Impl>(n, n);
 
-        for (std::size_t i = 0; i < n; ++i)
+        struct Inverse_Push_Constants
         {
-            for (std::size_t j = 0; j < n; ++j)
-                aug[i * (2 * n) + j] = host_data[i * n + j];
-            aug[i * (2 * n) + (n + i)] = 1.0f;
-        }
+            std::uint32_t n;
+        } constants{n};
 
-        for (std::size_t i = 0; i < n; ++i)
-        {
-            std::size_t pivot_row = i;
-            float max_val = std::abs(aug[i * (2 * n) + i]);
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::inverse: n={}", constants.n));
+        pushToGraph(MATRIX_INVERSE, {storage, result->storage}, constants, 1, 1, 1);
 
-            for (std::size_t k = i + 1; k < n; ++k)
-            {
-                float val = std::abs(aug[k * (2 * n) + i]);
-                if (val > max_val)
-                {
-                    max_val = val;
-                    pivot_row = k;
-                }
-            }
-
-            if (max_val < 1e-7f)
-            {
-                Logger::logMessage("Gpu_Matrix_Impl::inverse: Matrix is singular and cannot be inverted", LOG_ERROR, true);
-                throw std::runtime_error("Matrix is singular");
-            }
-
-            if (pivot_row != i)
-                for (std::size_t j = 0; j < 2 * n; ++j)
-                    std::swap(aug[i * (2 * n) + j], aug[pivot_row * (2 * n) + j]);
-
-            float pivot = aug[i * (2 * n) + i];
-            for (std::size_t j = 0; j < 2 * n; ++j)
-                aug[i * (2 * n) + j] /= pivot;
-
-            for (std::size_t k = 0; k < n; ++k)
-            {
-                if (k != i)
-                {
-                    float factor = aug[k * (2 * n) + i];
-                    for (std::size_t j = 0; j < 2 * n; ++j)
-                    {
-                        aug[k * (2 * n) + j] -= factor * aug[i * (2 * n) + j];
-                    }
-                }
-            }
-        }
-
-        std::vector<float> inv_data(n * n);
-        for (std::size_t i = 0; i < n; ++i)
-            for (std::size_t j = 0; j < n; ++j)
-                inv_data[i * n + j] = aug[i * (2 * n) + (n + j)];
-
-        return std::make_shared<Gpu_Matrix_Impl>(n, n, inv_data);
+        return result;
     }
 
     std::shared_ptr<Impl> normalize() const override
     {
-        std::vector<float> host_data = getData();
-        float sum_sq = 0.0f;
-        for (float val : host_data)
-            sum_sq += val * val;
+        auto result = std::make_shared<Gpu_Matrix_Impl>(rows, cols);
+        std::uint32_t total_elements = static_cast<std::uint32_t>(rows * cols);
 
-        float norm = std::sqrt(sum_sq);
-        if (norm < 1e-8f)
+        struct Normalize_Push_Constants
         {
-            Logger::logMessage("Gpu_Matrix_Impl::normalize: Matrix norm near zero during normalization", LOG_WARNING);
-            return std::make_shared<Gpu_Matrix_Impl>(rows, cols, host_data);
-        }
+            std::uint32_t total_elements;
+        } constants{total_elements};
 
-        std::vector<float> result_data(host_data.size());
-        for (std::size_t i = 0; i < host_data.size(); ++i)
-            result_data[i] = host_data[i] / norm;
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::normalize: total_elements={}", constants.total_elements));
+        pushToGraph(NORMALIZE, {storage, result->storage}, constants, 1, 1, 1);
 
-        return std::make_shared<Gpu_Matrix_Impl>(rows, cols, result_data);
+        return result;
     }
 
     std::shared_ptr<Impl> softmax() const override
@@ -366,6 +361,7 @@ public:
             static_cast<std::uint32_t>(rows),
             static_cast<std::uint32_t>(cols)};
 
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::softmax: rows={}, cols={}", constants.rows, constants.cols));
         pushToGraph(SOFTMAX, {storage, result->storage}, constants, constants.rows, 1, 1);
 
         return result;
@@ -386,6 +382,7 @@ public:
             static_cast<std::uint32_t>(rows),
             static_cast<std::uint32_t>(cols)};
 
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::softmaxBackward: rows={}, cols={}", constants.rows, constants.cols));
         pushToGraph(SOFTMAX_BACKWARD, {storage, grad_gpu->storage, result->storage}, constants, constants.rows, 1, 1);
 
         return result;
@@ -405,6 +402,7 @@ public:
             float max_gradient;
         } constants{total_elements, learning_rate, max_gradient};
 
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::sgdUpdate: total_elements={}, learning_rate={}, max_gradient={}", constants.total_elements, constants.learning_rate, constants.max_gradient));
         pushToGraph(SGD_UPDATE, {storage, grad_gpu->storage}, constants, (total_elements + 255) / 256);
     }
 
@@ -455,6 +453,8 @@ public:
             inv_correction1,
             inv_sqrt_correction2};
 
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::adamUpdate: total_elements={}, learning_rate={}, beta1={}, beta2={}, epsilon={}, max_gradient={}, inv_correction1={}, inv_sqrt_correction2={}",
+                                     constants.total_elements, constants.learning_rate, constants.beta1, constants.beta2, constants.epsilon, constants.max_gradient, constants.inv_correction1, constants.inv_sqrt_correction2));
         pushToGraph(
             ADAM_UPDATE,
             {storage, grad_gpu->storage, m_gpu->storage, v_gpu->storage},
@@ -487,6 +487,7 @@ public:
         std::uint32_t group_x = (constants.cols_w + 15) / 16;
         std::uint32_t group_y = (constants.rows_x + 15) / 16;
 
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::matmulAdd: rows_x={}, cols_x={}, cols_w={}, pad={}", constants.rows_x, constants.cols_x, constants.cols_w, constants.pad));
         pushToGraph(MATMUL_ADD, {storage, w_gpu->storage, b_gpu->storage, result->storage}, constants, group_x, group_y, 1);
 
         return result;
@@ -526,6 +527,8 @@ public:
         std::uint32_t group_y = (out_w + 15) / 16;
         std::uint32_t group_z = batch_size * out_h;
 
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::conv2d: batch_size={}, in_h={}, in_w={}, in_c={}, out_h={}, out_w={}, out_c={}, kernel_size={}, stride={}, padding={}",
+                                     constants.batch_size, constants.in_h, constants.in_w, constants.in_c, constants.out_h, constants.out_w, constants.out_c, constants.kernel_size, constants.stride, constants.padding));
         pushToGraph(CONV2D_FORWARD_PASS, {storage, w_gpu->storage, b_gpu->storage, result->storage}, constants, group_x, group_y, group_z);
 
         return result;
@@ -560,6 +563,8 @@ public:
         std::uint32_t group_y = (in_w + 15) / 16;
         std::uint32_t group_z = batch_size * in_h;
 
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::conv2dBackwardInput: batch_size={}, in_h={}, in_w={}, in_c={}, out_h={}, out_w={}, out_c={}, kernel_size={}, stride={}, padding={}",
+                                     constants.batch_size, constants.in_h, constants.in_w, constants.in_c, constants.out_h, constants.out_w, constants.out_c, constants.kernel_size, constants.stride, constants.padding));
         pushToGraph(CONV2D_BACKWARD_PASS_INPUT_GRADIENT, {storage, w_gpu->storage, result->storage}, constants, group_x, group_y, group_z);
 
         return result;
@@ -597,19 +602,23 @@ public:
         std::uint32_t group_y = (in_c + 15) / 16;
         std::uint32_t group_z = kernel_size * kernel_size;
 
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::conv2dBackwardWeight: batch_size={}, in_h={}, in_w={}, in_c={}, out_h={}, out_w={}, out_c={}, kernel_size={}, stride={}, padding={}",
+                                     constants.batch_size, constants.in_h, constants.in_w, constants.in_c, constants.out_h, constants.out_w, constants.out_c, constants.kernel_size, constants.stride, constants.padding));
         pushToGraph(CONV2D_BACKWARD_PASS_WEIGHT_BIAS_GRADIENT, {storage, go_gpu->storage, gw_gpu->storage, gb_gpu->storage}, constants, group_x, group_y, group_z);
     }
 
-    std::pair<std::shared_ptr<Impl>, std::shared_ptr<Impl>> maxpool2d(
+    void maxpool2d(
+        Impl &out_result,
+        Impl &out_mask,
         std::uint32_t in_h, std::uint32_t in_w, std::uint32_t channels,
         std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const override
     {
+        auto &result_gpu = static_cast<Gpu_Matrix_Impl &>(out_result);
+        auto &mask_gpu = static_cast<Gpu_Matrix_Impl &>(out_mask);
+
         std::uint32_t batch_size = static_cast<std::uint32_t>(rows);
         std::uint32_t out_h = (in_h + 2 * padding - kernel_size) / stride + 1;
         std::uint32_t out_w = (in_w + 2 * padding - kernel_size) / stride + 1;
-
-        auto result = std::make_shared<Gpu_Matrix_Impl>(batch_size, out_h * out_w * channels);
-        auto mask = std::make_shared<Gpu_Matrix_Impl>(batch_size, out_h * out_w * channels);
 
         struct Max_Pool_2d_Push_Constants
         {
@@ -628,21 +637,22 @@ public:
         std::uint32_t group_y = (out_w + 15) / 16;
         std::uint32_t group_z = batch_size * out_h;
 
-        pushToGraph(MAXPOOL2D_FORWARD, {storage, result->storage, mask->storage}, constants, group_x, group_y, group_z);
-
-        return {result, mask};
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::maxpool2d: batch_size={}, in_h={}, in_w={}, channels={}, out_h={}, out_w={}, kernel_size={}, stride={}, padding={}",
+                                     constants.batch_size, constants.in_h, constants.in_w, constants.channels, constants.out_h, constants.out_w, constants.kernel_size, constants.stride, constants.padding));
+        pushToGraph(MAXPOOL2D_FORWARD, {storage, result_gpu.storage, mask_gpu.storage}, constants, group_x, group_y, group_z);
     }
 
-    std::shared_ptr<Impl> maxpool2dBackward(
-        const std::shared_ptr<Impl> &mask,
+    void maxpool2dBackward(
+        const Impl &mask,
+        Impl &grad_input,
         std::uint32_t in_h, std::uint32_t in_w, std::uint32_t channels,
         std::uint32_t out_h, std::uint32_t out_w,
         std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const override
     {
-        auto mask_gpu = castToGpuMatrix(mask, "Gpu_Matrix_Impl::maxpool2dBackward: Invalid mask matrix");
+        const auto &mask_gpu = static_cast<const Gpu_Matrix_Impl &>(mask);
+        auto &grad_in_gpu = static_cast<Gpu_Matrix_Impl &>(grad_input);
 
         std::uint32_t batch_size = static_cast<std::uint32_t>(rows);
-        auto result = std::make_shared<Gpu_Matrix_Impl>(batch_size, in_h * in_w * channels);
 
         struct Max_Pool_2d_Push_Constants
         {
@@ -661,9 +671,9 @@ public:
         std::uint32_t group_y = (in_w + 15) / 16;
         std::uint32_t group_z = batch_size * in_h;
 
-        pushToGraph(MAXPOOL2D_BACKWARD, {storage, mask_gpu->storage, result->storage}, constants, group_x, group_y, group_z);
-
-        return result;
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::maxpool2dBackward: batch_size={}, in_h={}, in_w={}, channels={}, out_h={}, out_w={}, kernel_size={}, stride={}, padding={}",
+                                     constants.batch_size, constants.in_h, constants.in_w, constants.channels, constants.out_h, constants.out_w, constants.kernel_size, constants.stride, constants.padding));
+        pushToGraph(MAXPOOL2D_BACKWARD, {storage, mask_gpu.storage, grad_in_gpu.storage}, constants, group_x, group_y, group_z);
     }
 
     std::shared_ptr<Impl> globalAvgPool2d(
@@ -683,6 +693,8 @@ public:
         std::uint32_t group_x = (channels + 255) / 256;
         std::uint32_t group_y = batch_size;
 
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::globalAvgPool2d: batch_size={}, in_h={}, in_w={}, channels={}",
+                                     constants.batch_size, constants.in_h, constants.in_w, constants.channels));
         pushToGraph(GLOBAL_AVGPOOL_FORWARD, {storage, result->storage}, constants, group_x, group_y, 1);
 
         return result;
@@ -706,6 +718,8 @@ public:
         std::uint32_t group_y = (in_w + 15) / 16;
         std::uint32_t group_z = batch_size * in_h;
 
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::globalAvgPool2dBackward: batch_size={}, in_h={}, in_w={}, channels={}",
+                                     constants.batch_size, constants.in_h, constants.in_w, constants.channels));
         pushToGraph(GLOBAL_AVGPOOL_BACKWARD, {storage, result->storage}, constants, group_x, group_y, group_z);
 
         return result;
@@ -749,6 +763,7 @@ public:
                 float momentum;
             } stats_consts{n, d, momentum};
 
+            MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::batchNormForward (stats): batch_size={}, dim={}, momentum={}", stats_consts.batch_size, stats_consts.dim, stats_consts.momentum));
             pushToGraph(BATCH_NORM_STATS_FORWARD, {storage, b_mean_gpu->storage, b_var_gpu->storage, r_mean_gpu->storage, r_var_gpu->storage}, stats_consts, (d + 255) / 256, 1, 1);
 
             struct Transform_Push_Constants
@@ -758,6 +773,7 @@ public:
                 float epsilon;
             } trans_consts{n * d, d, epsilon};
 
+            MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::batchNormForward (transform): total_elements={}, dim={}, epsilon={}", trans_consts.total_elements, trans_consts.dim, trans_consts.epsilon));
             pushToGraph(BATCH_NORM_TRANSFORM_FORWARD, {storage, b_mean_gpu->storage, b_var_gpu->storage, gamma_gpu->storage, beta_gpu->storage, result->storage, x_hat_gpu->storage}, trans_consts, (n * d + 255) / 256, 1, 1);
         }
         else
@@ -769,6 +785,7 @@ public:
                 float epsilon;
             } trans_consts{n * d, d, epsilon};
 
+            MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::batchNormForward (transform eval): total_elements={}, dim={}, epsilon={}", trans_consts.total_elements, trans_consts.dim, trans_consts.epsilon));
             pushToGraph(BATCH_NORM_TRANSFORM_FORWARD, {storage, r_mean_gpu->storage, r_var_gpu->storage, gamma_gpu->storage, beta_gpu->storage, result->storage, x_hat_gpu->storage}, trans_consts, (n * d + 255) / 256, 1, 1);
         }
 
@@ -805,6 +822,7 @@ public:
             std::uint32_t dim;
         } b_stats_consts{n, d};
 
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::batchNormBackward (stats): batch_size={}, dim={}", b_stats_consts.batch_size, b_stats_consts.dim));
         pushToGraph(BATCH_NORM_STATS_BACKWARD, {dout_gpu->storage, x_hat_gpu->storage, g_gamma_gpu->storage, g_beta_gpu->storage}, b_stats_consts, (d + 255) / 256, 1, 1);
 
         struct Backward_Transform_Push_Constants
@@ -815,6 +833,7 @@ public:
             float epsilon;
         } b_trans_consts{n * d, n, d, epsilon};
 
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::batchNormBackward (transform): total_elements={}, batch_size={}, dim={}, epsilon={}", b_trans_consts.total_elements, b_trans_consts.batch_size, b_trans_consts.dim, b_trans_consts.epsilon));
         pushToGraph(BATCH_NORM_TRANSFORM_BACKWARD, {dout_gpu->storage, x_hat_gpu->storage, gamma_gpu->storage, g_gamma_gpu->storage, g_beta_gpu->storage, b_var_gpu->storage, dx->storage}, b_trans_consts, (n * d + 255) / 256, 1, 1);
 
         return dx;
@@ -844,6 +863,7 @@ public:
         std::uint32_t group_x = (constants.cols_w + 15) / 16;
         std::uint32_t group_y = (constants.rows_x + 15) / 16;
 
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::linearForward: rows_x={}, cols_x={}, cols_w={}, pad={}", constants.rows_x, constants.cols_x, constants.cols_w, constants.pad));
         pushToGraph(MATMUL_ADD, {storage, w_gpu.storage, b_gpu.storage, y_gpu.storage}, constants, group_x, group_y, 1);
     }
 
@@ -867,6 +887,7 @@ public:
         std::uint32_t group_x = (constants.in_dim + 15) / 16;
         std::uint32_t group_y = (constants.batch_size + 15) / 16;
 
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::linearBackwardInput: batch_size={}, in_dim={}, out_dim={}", constants.batch_size, constants.in_dim, constants.out_dim));
         pushToGraph(LINEAR_BACKWARD_INPUT, {storage, w_gpu.storage, dx_gpu.storage}, constants, group_x, group_y, 1);
     }
 
@@ -892,40 +913,39 @@ public:
         std::uint32_t group_x = (constants.out_dim + 15) / 16;
         std::uint32_t group_y = (constants.in_dim + 15) / 16;
 
-        pushToGraph(LINEAR_BACKWARD_WEIGHT_BIAS, {storage, dy_gpu.storage, dw_gpu.storage, db_gpu.storage}, constants, group_x, group_y, 1);
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::linearBackwardWeightBias: batch_size={}, in_dim={}, out_dim={}", constants.batch_size, constants.in_dim, constants.out_dim));
+        pushToGraph(LINEAR_BACKWARD_WEIGHT_BIAS,
+                    {storage, dy_gpu.storage, dw_gpu.storage, db_gpu.storage},
+                    constants, group_x, group_y, 1);
     }
 
-    std::shared_ptr<Impl> batchNorm2dForward(
-        const std::shared_ptr<Impl> &gamma,
-        const std::shared_ptr<Impl> &beta,
-        std::shared_ptr<Impl> &running_mean,
-        std::shared_ptr<Impl> &running_var,
-        std::shared_ptr<Impl> &batch_mean,
-        std::shared_ptr<Impl> &batch_var,
-        std::shared_ptr<Impl> &x_hat,
+    void batchNorm2dForward(
+        const Impl &gamma,
+        const Impl &beta,
+        Impl &running_mean,
+        Impl &running_var,
+        Impl &batch_mean,
+        Impl &batch_var,
+        Impl &x_hat,
+        Impl &output_y,
         std::uint32_t in_h, std::uint32_t in_w, std::uint32_t in_c,
         float epsilon, float momentum, bool is_training) const override
     {
-        auto gamma_gpu = castToGpuMatrix(gamma, "Invalid gamma matrix");
-        auto beta_gpu = castToGpuMatrix(beta, "Invalid beta matrix");
-        auto r_mean_gpu = castToGpuMatrix(running_mean, "Invalid running_mean matrix");
-        auto r_var_gpu = castToGpuMatrix(running_var, "Invalid running_var matrix");
+        const auto &gamma_gpu = castToGpuMatrix(gamma, "Gpu_Matrix_Impl::batchNorm2dForward: Invalid gamma matrix");
+        const auto &beta_gpu = castToGpuMatrix(beta, "Gpu_Matrix_Impl::batchNorm2dForward: Invalid beta matrix");
+        auto &r_mean_gpu = castToGpuMatrix(running_mean, "Gpu_Matrix_Impl::batchNorm2dForward: Invalid running_mean matrix");
+        auto &r_var_gpu = castToGpuMatrix(running_var, "Gpu_Matrix_Impl::batchNorm2dForward: Invalid running_var matrix");
+        auto &b_mean_gpu = castToGpuMatrix(batch_mean, "Gpu_Matrix_Impl::batchNorm2dForward: Invalid batch_mean matrix");
+        auto &b_var_gpu = castToGpuMatrix(batch_var, "Gpu_Matrix_Impl::batchNorm2dForward: Invalid batch_var matrix");
+        auto &x_hat_gpu = castToGpuMatrix(x_hat, "Gpu_Matrix_Impl::batchNorm2dForward: Invalid x_hat matrix");
+        auto &y_gpu = castToGpuMatrix(output_y, "Gpu_Matrix_Impl::batchNorm2dForward: Invalid output_y matrix");
 
         std::uint32_t n = static_cast<std::uint32_t>(rows);
         std::uint32_t d = in_h * in_w * in_c;
         std::uint32_t spatial_count = n * in_h * in_w;
 
-        auto result = std::make_shared<Gpu_Matrix_Impl>(n, d);
-        x_hat = std::make_shared<Gpu_Matrix_Impl>(n, d);
-        auto x_hat_gpu = castToGpuMatrix(x_hat, "Invalid x_hat matrix");
-
         if (is_training)
         {
-            batch_mean = std::make_shared<Gpu_Matrix_Impl>(1, in_c);
-            batch_var = std::make_shared<Gpu_Matrix_Impl>(1, in_c);
-            auto b_mean_gpu = castToGpuMatrix(batch_mean, "Invalid batch_mean matrix");
-            auto b_var_gpu = castToGpuMatrix(batch_var, "Invalid batch_var matrix");
-
             struct Stats_Push_Constants
             {
                 std::uint32_t total_elements;
@@ -934,7 +954,8 @@ public:
                 float momentum;
             } stats_consts{n * d, in_c, spatial_count, momentum};
 
-            pushToGraph(BATCH_NORM2D_STATS_FORWARD, {storage, b_mean_gpu->storage, b_var_gpu->storage, r_mean_gpu->storage, r_var_gpu->storage}, stats_consts, (in_c + 255) / 256, 1, 1);
+            MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::batchNorm2dForward (stats): total_elements={}, channels={}, spatial_count={}, momentum={}", stats_consts.total_elements, stats_consts.channels, stats_consts.spatial_count, stats_consts.momentum));
+            pushToGraph(BATCH_NORM2D_STATS_FORWARD, {storage, b_mean_gpu.storage, b_var_gpu.storage, r_mean_gpu.storage, r_var_gpu.storage}, stats_consts, (in_c + 255) / 256, 1, 1);
 
             struct Transform_Push_Constants
             {
@@ -943,7 +964,8 @@ public:
                 float epsilon;
             } trans_consts{n * d, in_c, epsilon};
 
-            pushToGraph(BATCH_NORM2D_TRANSFORM_FORWARD, {storage, result->storage, gamma_gpu->storage, beta_gpu->storage, b_mean_gpu->storage, b_var_gpu->storage, x_hat_gpu->storage}, trans_consts, (n * d + 255) / 256, 1, 1);
+            MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::batchNorm2dForward (transform): total_elements={}, channels={}, epsilon={}", trans_consts.total_elements, trans_consts.channels, trans_consts.epsilon));
+            pushToGraph(BATCH_NORM2D_TRANSFORM_FORWARD, {storage, b_mean_gpu.storage, b_var_gpu.storage, gamma_gpu.storage, beta_gpu.storage, y_gpu.storage, x_hat_gpu.storage}, trans_consts, (n * d + 255) / 256, 1, 1);
         }
         else
         {
@@ -954,37 +976,31 @@ public:
                 float epsilon;
             } trans_consts{n * d, in_c, epsilon};
 
-            pushToGraph(BATCH_NORM2D_TRANSFORM_FORWARD, {storage, result->storage, gamma_gpu->storage, beta_gpu->storage, r_mean_gpu->storage, r_var_gpu->storage, x_hat_gpu->storage}, trans_consts, (n * d + 255) / 256, 1, 1);
+            MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::batchNorm2dForward (transform eval): total_elements={}, channels={}, epsilon={}", trans_consts.total_elements, trans_consts.channels, trans_consts.epsilon));
+            pushToGraph(BATCH_NORM2D_TRANSFORM_FORWARD, {storage, r_mean_gpu.storage, r_var_gpu.storage, gamma_gpu.storage, beta_gpu.storage, y_gpu.storage, x_hat_gpu.storage}, trans_consts, (n * d + 255) / 256, 1, 1);
         }
-
-        return result;
     }
 
-    std::shared_ptr<Impl> batchNorm2dBackward(
-        const std::shared_ptr<Impl> &grad_output,
-        const std::shared_ptr<Impl> &gamma,
-        const std::shared_ptr<Impl> &batch_var,
-        const std::shared_ptr<Impl> &x_hat,
-        std::shared_ptr<Impl> &grad_gamma,
-        std::shared_ptr<Impl> &grad_beta,
+    void batchNorm2dBackward(
+        const Impl &gamma,
+        const Impl &batch_var,
+        const Impl &x_hat,
+        Impl &grad_gamma,
+        Impl &grad_beta,
+        Impl &grad_input,
         std::uint32_t in_h, std::uint32_t in_w, std::uint32_t in_c,
         float epsilon) const override
     {
-        auto dout_gpu = castToGpuMatrix(grad_output, "Invalid grad_output matrix");
-        auto gamma_gpu = castToGpuMatrix(gamma, "Invalid gamma matrix");
-        auto b_var_gpu = castToGpuMatrix(batch_var, "Invalid batch_var matrix");
-        auto x_hat_gpu = castToGpuMatrix(x_hat, "Invalid x_hat matrix");
+        const auto &gamma_gpu = castToGpuMatrix(gamma, "Gpu_Matrix_Impl::batchNorm2dBackward: Invalid gamma matrix");
+        const auto &b_var_gpu = castToGpuMatrix(batch_var, "Gpu_Matrix_Impl::batchNorm2dBackward: Invalid batch_var matrix");
+        const auto &x_hat_gpu = castToGpuMatrix(x_hat, "Gpu_Matrix_Impl::batchNorm2dBackward: Invalid x_hat matrix");
+        auto &g_gamma_gpu = castToGpuMatrix(grad_gamma, "Gpu_Matrix_Impl::batchNorm2dBackward: Invalid grad_gamma matrix");
+        auto &g_beta_gpu = castToGpuMatrix(grad_beta, "Gpu_Matrix_Impl::batchNorm2dBackward: Invalid grad_beta matrix");
+        auto &dx_gpu = castToGpuMatrix(grad_input, "Gpu_Matrix_Impl::batchNorm2dBackward: Invalid grad_input matrix");
 
         std::uint32_t n = static_cast<std::uint32_t>(rows);
         std::uint32_t d = in_h * in_w * in_c;
         std::uint32_t spatial_count = n * in_h * in_w;
-
-        grad_gamma = std::make_shared<Gpu_Matrix_Impl>(1, in_c);
-        grad_beta = std::make_shared<Gpu_Matrix_Impl>(1, in_c);
-        auto g_gamma_gpu = castToGpuMatrix(grad_gamma, "Invalid grad_gamma matrix");
-        auto g_beta_gpu = castToGpuMatrix(grad_beta, "Invalid grad_beta matrix");
-
-        auto dx = std::make_shared<Gpu_Matrix_Impl>(n, d);
 
         struct Backward_Stats_Push_Constants
         {
@@ -993,7 +1009,8 @@ public:
             std::uint32_t spatial_count;
         } b_stats_consts{n * d, in_c, spatial_count};
 
-        pushToGraph(BATCH_NORM2D_STATS_BACKWARD, {dout_gpu->storage, x_hat_gpu->storage, g_gamma_gpu->storage, g_beta_gpu->storage}, b_stats_consts, (in_c + 255) / 256, 1, 1);
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::batchNorm2dBackward (stats): total_elements={}, channels={}, spatial_count={}", b_stats_consts.total_elements, b_stats_consts.channels, b_stats_consts.spatial_count));
+        pushToGraph(BATCH_NORM2D_STATS_BACKWARD, {storage, x_hat_gpu.storage, g_gamma_gpu.storage, g_beta_gpu.storage}, b_stats_consts, (in_c + 255) / 256, 1, 1);
 
         struct Backward_Transform_Push_Constants
         {
@@ -1003,10 +1020,109 @@ public:
             float epsilon;
         } b_trans_consts{n * d, in_c, spatial_count, epsilon};
 
-        pushToGraph(BATCH_NORM2D_TRANSFORM_BACKWARD, {dout_gpu->storage, x_hat_gpu->storage, gamma_gpu->storage, b_var_gpu->storage, g_gamma_gpu->storage, g_beta_gpu->storage, dx->storage}, b_trans_consts, (n * d + 255) / 256, 1, 1);
-
-        return dx;
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::batchNorm2dBackward (transform): total_elements={}, channels={}, spatial_count={}, epsilon={}", b_trans_consts.total_elements, b_trans_consts.channels, b_trans_consts.spatial_count, b_trans_consts.epsilon));
+        pushToGraph(BATCH_NORM2D_TRANSFORM_BACKWARD, {storage, x_hat_gpu.storage, gamma_gpu.storage, g_gamma_gpu.storage, g_beta_gpu.storage, b_var_gpu.storage, dx_gpu.storage}, b_trans_consts, (n * d + 255) / 256, 1, 1);
     }
 
-    void uploadData(const std::vector<float> &host_data) override { storage->uploadData(host_data); }
+    std::shared_ptr<Impl> cceLoss(
+        const std::shared_ptr<Impl> &target_impl,
+        float epsilon_val) const override
+    {
+        validateSameDimensions(*target_impl);
+        auto target_gpu = castToGpuMatrix(target_impl, "Gpu_Matrix_Impl::cceLoss: Target matrix is not a Gpu_Matrix_Impl");
+
+        std::uint32_t total_elements = static_cast<std::uint32_t>(rows * cols);
+        std::uint32_t group_x = (total_elements + 255) / 256;
+
+        auto result = std::make_shared<Gpu_Matrix_Impl>(1, group_x);
+
+        struct Cce_Loss_Push_Constants
+        {
+            std::uint32_t total_elements;
+            float epsilon_val;
+        } constants{total_elements, epsilon_val};
+
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::cceLoss: total_elements={}, epsilon_val={}", constants.total_elements, constants.epsilon_val));
+        pushToGraph(CCE_LOSS, {storage, target_gpu->storage, result->storage}, constants, group_x, 1, 1);
+
+        return result;
+    }
+
+    std::shared_ptr<Impl> mseLoss(
+        const std::shared_ptr<Impl> &target_impl) const override
+    {
+        validateSameDimensions(*target_impl);
+        auto target_gpu = castToGpuMatrix(target_impl, "Gpu_Matrix_Impl::mseLoss: Target matrix is not a Gpu_Matrix_Impl");
+
+        std::uint32_t total_elements = static_cast<std::uint32_t>(rows * cols);
+        std::uint32_t group_x = (total_elements + 255) / 256;
+
+        auto result = std::make_shared<Gpu_Matrix_Impl>(1, group_x);
+
+        struct Mse_Loss_Push_Constants
+        {
+            std::uint32_t total_elements;
+        } constants{total_elements};
+
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::mseLoss: total_elements={}", constants.total_elements));
+        pushToGraph(MSE_LOSS, {storage, target_gpu->storage, result->storage}, constants, group_x, 1, 1);
+
+        return result;
+    }
+
+    std::shared_ptr<Impl> maeLoss(
+        const std::shared_ptr<Impl> &target_impl) const override
+    {
+        validateSameDimensions(*target_impl);
+        auto target_gpu = castToGpuMatrix(target_impl, "Gpu_Matrix_Impl::maeLoss: Target matrix is not a Gpu_Matrix_Impl");
+
+        std::uint32_t total_elements = static_cast<std::uint32_t>(rows * cols);
+        std::uint32_t group_x = (total_elements + 255) / 256;
+
+        auto result = std::make_shared<Gpu_Matrix_Impl>(1, group_x);
+
+        struct Mae_Loss_Push_Constants
+        {
+            std::uint32_t total_elements;
+        } constants{total_elements};
+
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::maeLoss: total_elements={}", constants.total_elements));
+        pushToGraph(MAE_LOSS, {storage, target_gpu->storage, result->storage}, constants, group_x, 1, 1);
+
+        return result;
+    }
+
+    std::shared_ptr<Impl> bceLoss(
+        const std::shared_ptr<Impl> &target_impl,
+        float epsilon_val) const override
+    {
+        validateSameDimensions(*target_impl);
+        auto target_gpu = castToGpuMatrix(target_impl, "Gpu_Matrix_Impl::bceLoss: Target matrix is not a Gpu_Matrix_Impl");
+
+        std::uint32_t total_elements = static_cast<std::uint32_t>(rows * cols);
+        std::uint32_t group_x = (total_elements + 255) / 256;
+
+        auto result = std::make_shared<Gpu_Matrix_Impl>(1, group_x);
+
+        struct Bce_Loss_Push_Constants
+        {
+            std::uint32_t total_elements;
+            float epsilon_val;
+        } constants{total_elements, epsilon_val};
+
+        MATRIX_LOG_DEBUG(std::format("Gpu_Matrix_Impl::bceLoss: total_elements={}, epsilon_val={}", constants.total_elements, constants.epsilon_val));
+        pushToGraph(BCE_LOSS, {storage, target_gpu->storage, result->storage}, constants, group_x, 1, 1);
+
+        return result;
+    }
+
+    void uploadData(const std::vector<float> &host_data) override
+    {
+        if (host_data.size() != rows * cols)
+        {
+            Logger::logMessage("Gpu_Matrix_Impl::uploadData: Host data size mismatch", LOG_ERROR, true);
+            throw std::invalid_argument("Host data size mismatch");
+        }
+        storage->uploadData(host_data);
+    }
 };

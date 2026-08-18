@@ -105,19 +105,32 @@ public:
         }
     }
 
-    void print(const std::string &name = "") const
+    void print(std::size_t max_display_rows = 10, std::size_t max_display_cols = 10) const
     {
-        if (!name.empty())
-            std::cout << name << " (" << getRows() << "x" << getCols() << ")\n";
-
-        std::vector<float> data = getData();
-        for (std::size_t i = 0; i < getRows(); ++i)
+        const auto &data_vec = getData();
+        std::size_t print_rows = std::min(getRows(), max_display_rows);
+        std::size_t print_cols = std::min(getCols(), max_display_cols);
+    
+        std::cout << "Matrix (" << getRows() << "x" << getCols() << "):\n";
+    
+        for (std::size_t r = 0; r < print_rows; ++r)
         {
-            for (std::size_t j = 0; j < getCols(); ++j)
-                std::cout << std::setprecision(6) << std::defaultfloat << data[i * getCols() + j] << ' ';
-            std::cout << '\n';
+            std::cout << "  [ ";
+            for (std::size_t c = 0; c < print_cols; ++c)
+            {
+                std::cout << std::format("{:8.4f} ", data_vec[r * getCols() + c]);
+            }
+            if (getCols() > print_cols)
+            {
+                std::cout << "... ";
+            }
+            std::cout << "]\n";
         }
-        std::cout << std::endl;
+    
+        if (getRows() > print_rows)
+        {
+            std::cout << "  ...\n";
+        }
     }
 
     void saveMatrix(std::ofstream &out_file) const
@@ -162,14 +175,19 @@ public:
 
     void setExecutionTarget(Execution_Target new_target)
     {
-        if (current_target == new_target)
-            return;
+        if (current_target == new_target) return;
 
         Logger::logMessage("Matrix::setExecutionTarget: Changing execution target from " + static_cast<std::string>(magic_enum::enum_name<Execution_Target>(current_target)) + " to " + static_cast<std::string>(magic_enum::enum_name<Execution_Target>(new_target)), LOG_WARNING);
-        std::vector<float> current_data = getData();
+
         std::size_t r = getRows();
         std::size_t c = getCols();
+        std::vector<float> current_data = getData();
         *this = Matrix(r, c, current_data, new_target);
+
+        if (new_target == Execution_Target::VULKAN_GPU)
+        {
+            Execution_Engine::getInstance().getContext().executePendingTransfers();
+        }
     }
 
     std::vector<float> getData() const { return pimpl->getData(); }
@@ -227,19 +245,23 @@ public:
         pimpl->conv2dBackwardWeight(grad_output.pimpl, grad_weights.pimpl, grad_biases.pimpl, in_h, in_w, in_c, out_h, out_w, out_c, kernel_size, stride, padding);
     }
 
-    std::pair<Matrix, Matrix> maxpool2d(std::uint32_t in_h, std::uint32_t in_w, std::uint32_t channels,
-                                        std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const
+    void maxpool2d(
+        Matrix &out_result,
+        Matrix &out_mask,
+        std::uint32_t in_h, std::uint32_t in_w, std::uint32_t channels,
+        std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const
     {
-        auto [out_impl, mask_impl] = pimpl->maxpool2d(in_h, in_w, channels, kernel_size, stride, padding);
-        return {Matrix(out_impl, current_target), Matrix(mask_impl, current_target)};
+        pimpl->maxpool2d(*out_result.pimpl, *out_mask.pimpl, in_h, in_w, channels, kernel_size, stride, padding);
     }
 
-    Matrix maxpool2dBackward(const Matrix &mask,
-                             std::uint32_t in_h, std::uint32_t in_w, std::uint32_t channels,
-                             std::uint32_t out_h, std::uint32_t out_w,
-                             std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const
+    void maxpool2dBackward(
+        const Matrix &mask,
+        Matrix &grad_input,
+        std::uint32_t in_h, std::uint32_t in_w, std::uint32_t channels,
+        std::uint32_t out_h, std::uint32_t out_w,
+        std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const
     {
-        return Matrix(pimpl->maxpool2dBackward(mask.pimpl, in_h, in_w, channels, out_h, out_w, kernel_size, stride, padding), current_target);
+        pimpl->maxpool2dBackward(*mask.pimpl, *grad_input.pimpl, in_h, in_w, channels, out_h, out_w, kernel_size, stride, padding);
     }
 
     Matrix globalAvgPool2d(std::uint32_t in_h, std::uint32_t in_w, std::uint32_t channels) const
@@ -301,33 +323,78 @@ public:
         pimpl->linearBackwardWeightBias(*grad_y.pimpl, *grad_w.pimpl, *grad_b.pimpl);
     }
 
-    Matrix batchNorm2dForward(const Matrix &gamma, const Matrix &beta,
-                              Matrix &running_mean, Matrix &running_var,
-                              Matrix &batch_mean, Matrix &batch_var, Matrix &x_hat,
-                              std::uint32_t in_h, std::uint32_t in_w, std::uint32_t in_c,
-                              float epsilon, float momentum, bool is_training) const
+    void batchNorm2dForward(
+        const Matrix &gamma, const Matrix &beta,
+        Matrix &running_mean, Matrix &running_var,
+        Matrix &batch_mean, Matrix &batch_var, Matrix &x_hat,
+        Matrix &output_y,
+        std::uint32_t in_h, std::uint32_t in_w, std::uint32_t in_c,
+        float epsilon, float momentum, bool is_training) const
     {
-        auto result_impl = pimpl->batchNorm2dForward(
-            gamma.pimpl, beta.pimpl,
-            running_mean.pimpl, running_var.pimpl,
-            batch_mean.pimpl, batch_var.pimpl, x_hat.pimpl,
+        pimpl->batchNorm2dForward(
+            *gamma.pimpl, *beta.pimpl,
+            *running_mean.pimpl, *running_var.pimpl,
+            *batch_mean.pimpl, *batch_var.pimpl, *x_hat.pimpl,
+            *output_y.pimpl,
             in_h, in_w, in_c, epsilon, momentum, is_training);
-
-        return Matrix(result_impl, current_target);
     }
 
-    Matrix batchNorm2dBackward(const Matrix &grad_output, const Matrix &gamma,
-                               const Matrix &batch_var, const Matrix &x_hat,
-                               Matrix &grad_gamma, Matrix &grad_beta,
-                               std::uint32_t in_h, std::uint32_t in_w, std::uint32_t in_c,
-                               float epsilon) const
+    void batchNorm2dBackward(
+        const Matrix &gamma,
+        const Matrix &batch_var,
+        const Matrix &x_hat,
+        Matrix &grad_gamma,
+        Matrix &grad_beta,
+        Matrix &grad_input,
+        std::uint32_t in_h,
+        std::uint32_t in_w,
+        std::uint32_t in_c,
+        float epsilon) const
     {
-        auto dx_impl = pimpl->batchNorm2dBackward(
-            grad_output.pimpl, gamma.pimpl, batch_var.pimpl, x_hat.pimpl,
-            grad_gamma.pimpl, grad_beta.pimpl, in_h, in_w, in_c, epsilon);
+        pimpl->batchNorm2dBackward(
+            *gamma.pimpl,
+            *batch_var.pimpl,
+            *x_hat.pimpl,
+            *grad_gamma.pimpl,
+            *grad_beta.pimpl,
+            *grad_input.pimpl,
+            in_h,
+            in_w,
+            in_c,
+            epsilon);
+    }
 
-        return Matrix(dx_impl, current_target);
+    Matrix cceLoss(const Matrix &target_matrix, float epsilon_val = 1e-7f) const
+    {
+        return Matrix(pimpl->cceLoss(target_matrix.pimpl, epsilon_val), current_target);
+    }
+
+    Matrix mseLoss(const Matrix &target_matrix) const
+    {
+        return Matrix(pimpl->mseLoss(target_matrix.pimpl), current_target);
+    }
+
+    Matrix maeLoss(const Matrix &target_matrix) const
+    {
+        return Matrix(pimpl->maeLoss(target_matrix.pimpl), current_target);
+    }
+
+    Matrix bceLoss(const Matrix &target_matrix, float epsilon_val = 1e-7f) const
+    {
+        return Matrix(pimpl->bceLoss(target_matrix.pimpl, epsilon_val), current_target);
+    }
+
+    float getScalar() const
+    {
+        const auto &host_data = getData();
+        float sum_val = 0.0f;
+        for (float val : host_data)
+        {
+            sum_val += val;
+        }
+        return sum_val;
     }
 
     void uploadData(const std::vector<float> &host_data) { pimpl->uploadData(host_data); }
+    std::shared_ptr<GVector> getGVector() {return pimpl->getGVector(); }
 };

@@ -36,16 +36,9 @@ public:
 
         COST_LOG_DEBUG("MSE_Cost::computeLoss: rows=" + std::to_string(pred.getRows()) + ", cols=" + std::to_string(pred.getCols()));
 
-        Matrix diff = pred - target;
-        Matrix sq_diff = diff.hadamardMul(diff);
-        std::vector<float> data = sq_diff.getData();
-
-        float sum = 0.0f;
-        for (float val : data)
-        {
-            sum += val;
-        }
-        return data.empty() ? 0.0f : (sum / static_cast<float>(data.size()));
+        std::size_t total_elements = pred.getRows() * pred.getCols();
+        Matrix loss_matrix = pred.mseLoss(target);
+        return loss_matrix.getScalar() / static_cast<float>(total_elements);
     }
 
     Matrix computeGradient(const Matrix &pred, const Matrix &target) const override

@@ -63,6 +63,8 @@ public:
         }
     }
 
+    virtual std::shared_ptr<GVector> getGVector() { return {}; }
+
     virtual std::shared_ptr<Impl> matmul(const std::shared_ptr<Impl> &other_impl) const = 0;
     virtual std::shared_ptr<Impl> matdiv(const std::shared_ptr<Impl> &other_impl) const = 0;
     virtual std::shared_ptr<Impl> add(const std::shared_ptr<Impl> &other_impl) const = 0;
@@ -114,12 +116,15 @@ public:
         std::uint32_t out_h, std::uint32_t out_w, std::uint32_t out_c,
         std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const = 0;
 
-    virtual std::pair<std::shared_ptr<Impl>, std::shared_ptr<Impl>> maxpool2d(
+    virtual void maxpool2d(
+        Impl &out_result,
+        Impl &out_mask,
         std::uint32_t in_h, std::uint32_t in_w, std::uint32_t channels,
         std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const = 0;
 
-    virtual std::shared_ptr<Impl> maxpool2dBackward(
-        const std::shared_ptr<Impl> &mask,
+    virtual void maxpool2dBackward(
+        const Impl &mask,
+        Impl &grad_input,
         std::uint32_t in_h, std::uint32_t in_w, std::uint32_t channels,
         std::uint32_t out_h, std::uint32_t out_w,
         std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const = 0;
@@ -161,24 +166,40 @@ public:
         Impl &grad_w,
         Impl &grad_b) const = 0;
 
-    virtual std::shared_ptr<Impl> batchNorm2dForward(
-        const std::shared_ptr<Impl> &gamma,
-        const std::shared_ptr<Impl> &beta,
-        std::shared_ptr<Impl> &running_mean,
-        std::shared_ptr<Impl> &running_var,
-        std::shared_ptr<Impl> &batch_mean,
-        std::shared_ptr<Impl> &batch_var,
-        std::shared_ptr<Impl> &x_hat,
+    virtual void batchNorm2dForward(
+        const Impl &gamma,
+        const Impl &beta,
+        Impl &running_mean,
+        Impl &running_var,
+        Impl &batch_mean,
+        Impl &batch_var,
+        Impl &x_hat,
+        Impl &output_y,
         std::uint32_t in_h, std::uint32_t in_w, std::uint32_t in_c,
         float epsilon, float momentum, bool is_training) const = 0;
 
-    virtual std::shared_ptr<Impl> batchNorm2dBackward(
-        const std::shared_ptr<Impl> &grad_output,
-        const std::shared_ptr<Impl> &gamma,
-        const std::shared_ptr<Impl> &batch_var,
-        const std::shared_ptr<Impl> &x_hat,
-        std::shared_ptr<Impl> &grad_gamma,
-        std::shared_ptr<Impl> &grad_beta,
-        std::uint32_t in_h, std::uint32_t in_w, std::uint32_t in_c,
+    virtual void batchNorm2dBackward(
+        const Impl &gamma,
+        const Impl &batch_var,
+        const Impl &x_hat,
+        Impl &grad_gamma,
+        Impl &grad_beta,
+        Impl &grad_input,
+        std::uint32_t in_h,
+        std::uint32_t in_w,
+        std::uint32_t in_c,
         float epsilon) const = 0;
+
+    virtual std::shared_ptr<Impl> cceLoss(
+        const std::shared_ptr<Impl> &target_impl,
+        float epsilon_val) const = 0;
+    virtual std::shared_ptr<Impl> mseLoss(
+        const std::shared_ptr<Impl> &target_impl) const = 0;
+
+    virtual std::shared_ptr<Impl> maeLoss(
+        const std::shared_ptr<Impl> &target_impl) const = 0;
+
+    virtual std::shared_ptr<Impl> bceLoss(
+        const std::shared_ptr<Impl> &target_impl,
+        float epsilon_val) const = 0;
 };

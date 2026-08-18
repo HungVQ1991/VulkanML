@@ -39,16 +39,9 @@ public:
 
         COST_LOG_DEBUG("MAE_Cost::computeLoss: rows=" + std::to_string(pred_matrix.getRows()) + ", cols=" + std::to_string(pred_matrix.getCols()));
 
-        std::vector<float> pred_data = pred_matrix.getData();
-        std::vector<float> target_data = target_matrix.getData();
-
-        float sum_val = 0.0f;
-        for (std::size_t i = 0; i < pred_data.size(); ++i)
-        {
-            sum_val += std::abs(pred_data[i] - target_data[i]);
-        }
-
-        return pred_data.empty() ? 0.0f : (sum_val / static_cast<float>(pred_data.size()));
+        std::size_t total_elements = pred_matrix.getRows() * pred_matrix.getCols();
+        Matrix loss_matrix = pred_matrix.maeLoss(target_matrix);
+        return loss_matrix.getScalar() / static_cast<float>(total_elements);
     }
 
     Matrix computeGradient(const Matrix &pred_matrix, const Matrix &target_matrix) const override

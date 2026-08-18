@@ -14,10 +14,11 @@ class SGD_Optimizer : public IOptimizer
 private:
     float learning_rate = 0.0f;
     float max_gradient = 0.0f;
+    ILearning_Rate *lr_scheduler = nullptr;
 
 public:
     explicit SGD_Optimizer(float lr = 0.01f, float max_grad = 1.0f)
-        : learning_rate(lr), max_gradient(max_grad)
+        : learning_rate(lr), max_gradient(max_grad), lr_scheduler(nullptr)
     {
         if (learning_rate <= 0.0f)
         {
@@ -26,7 +27,7 @@ public:
     }
 
     explicit SGD_Optimizer(ILearning_Rate &lr, float max_grad = 1.0f)
-        : learning_rate(lr.getCurrentRate()), max_gradient(max_grad)
+        : learning_rate(lr.getCurrentRate()), max_gradient(max_grad), lr_scheduler(&lr)
     {
         if (learning_rate <= 0.0f)
         {
@@ -40,6 +41,11 @@ public:
 
     void step(const std::vector<std::pair<Matrix *, Matrix *>> &param_grad_pairs) override
     {
+        if (lr_scheduler != nullptr)
+        {
+            learning_rate = lr_scheduler->getCurrentRate();
+        }
+
         OPTIMIZER_LOG_DEBUG("SGD_Optimizer::step: lr=" + std::to_string(learning_rate) + ", pairs=" + std::to_string(param_grad_pairs.size()));
 
         for (const auto &[param, grad] : param_grad_pairs)
@@ -69,8 +75,9 @@ public:
             Logger::logMessage("SGD_Optimizer::setLearningRate: learning_rate is non-positive", LOG_WARNING);
         }
         learning_rate = lr;
+        lr_scheduler = nullptr;
     }
-
+    
     void saveCheckpoint(std::ofstream &out_file) const override
     {
         if (!out_file.is_open())

@@ -1,7 +1,9 @@
 #pragma once
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <format>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -95,6 +97,11 @@ public:
         LAYER_LOG_DEBUG("Batch_Norm_Layer::forward: dim=" + std::to_string(input_dim) + ", mode=" + (is_training ? "Train" : "Eval"));
 
         inputs = input_matrix;
+        if (inputs.getTarget() != target)
+        {
+            inputs.setExecutionTarget(target);
+        }
+
         Matrix outputs = inputs.batchNormForward(
             gamma, beta,
             running_mean, running_var,

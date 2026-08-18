@@ -26,7 +26,7 @@
 #define NETWORK_LOG_DEBUG(msg) ((void)0)
 #endif
 
-const int BINDING_SIZE = 8;
+const int BINDING_SIZE = 32;
 
 enum Compute_Pipeline
 {
@@ -64,6 +64,12 @@ enum Compute_Pipeline
     BATCH_NORM2D_TRANSFORM_FORWARD,
     BATCH_NORM2D_STATS_BACKWARD,
     BATCH_NORM2D_TRANSFORM_BACKWARD,
+    CCE_LOSS,
+    MSE_LOSS,
+    MAE_LOSS,
+    BCE_LOSS,
+    MATRIX_INVERSE,
+    NORMALIZE,
     COMPUTE_PIPELINE_END
 };
 
