@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <format>
 #include <shaderc/shaderc.hpp>
 #include <stdexcept>
 #include <string>
@@ -8,50 +9,63 @@
 
 #include "helper/logger.h"
 
-#ifndef ENABLE_SHADER_DEBUG_LOGS
-#define ENABLE_SHADER_DEBUG_LOGS 0
-#endif
-
-#if ENABLE_SHADER_DEBUG_LOGS
-#define SHADER_LOG_DEBUG(msg) Logger::logMessage(msg, LOG_DEBUG)
-#else
-#define SHADER_LOG_DEBUG(msg) ((void)0)
-#endif
-
 class Shader_Compiler
 {
 private:
     shaderc::Compiler compiler;
-    shaderc::CompileOptions options;
+    shaderc::CompileOptions compile_options;
 
 public:
     Shader_Compiler()
     {
-        SHADER_LOG_DEBUG("Shader_Compiler::Shader_Compiler: Initializing shader compiler");
-        options.SetOptimizationLevel(shaderc_optimization_level_performance);
-        options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_3);
+        Logger::logMessage("Shader_Compiler::Shader_Compiler: Initializing shader compiler",
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::SHADER_GENERATION);
+        compile_options.SetOptimizationLevel(shaderc_optimization_level_performance);
+        compile_options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_3);
+        compile_options.SetTargetSpirv(shaderc_spirv_version_1_5);
     }
 
-    std::vector<std::uint32_t> compileGlslToSpv(const std::string &glsl_code, const std::string &shader_name)
-{
-    shaderc::Compiler compiler;
-    shaderc::CompileOptions options;
-
-    options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_2);
-    options.SetOptimizationLevel(shaderc_optimization_level_performance);
-
-    shaderc::SpvCompilationResult module = compiler.CompileGlslToSpv(
-        glsl_code,
-        shaderc_compute_shader,
-        shader_name.c_str(),
-        options);
-
-    if (module.GetCompilationStatus() != shaderc_compilation_status_success)
+    [[nodiscard]] const shaderc::Compiler &getCompiler() const noexcept
     {
-        Logger::logMessage("Shader_Compiler::compileGlslToSpv: " + module.GetErrorMessage(), LOG_ERROR, true);
-        throw std::runtime_error("SPIR-V compilation failed: " + module.GetErrorMessage());
+        return compiler;
     }
 
-    return {module.cbegin(), module.cend()};
-}
+    [[nodiscard]] shaderc::Compiler &getCompiler() noexcept
+    {
+        return compiler;
+    }
+
+    [[nodiscard]] const shaderc::CompileOptions &getCompileOptions() const noexcept
+    {
+        return compile_options;
+    }
+
+    [[nodiscard]] shaderc::CompileOptions &getCompileOptions() noexcept
+    {
+        return compile_options;
+    }
+
+    std::vector<std::uint32_t> compileGlslToSpirv(const std::string &_glsl_code, const std::string &_shader_name = "compute_shader") const
+    {
+        shaderc::SpvCompilationResult compilation_result = compiler.CompileGlslToSpv(
+            _glsl_code,
+            shaderc_compute_shader,
+            _shader_name.c_str(),
+            compile_options);
+
+        if (compilation_result.GetCompilationStatus() != shaderc_compilation_status_success)
+        {
+            Logger::logMessage(std::format("Shader_Compiler::compileGlslToSpirv: {}", compilation_result.GetErrorMessage()),
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::SHADER_GENERATION);
+            throw std::runtime_error("SPIR-V compilation failed: " + compilation_result.GetErrorMessage());
+        }
+
+        return {compilation_result.cbegin(), compilation_result.cend()};
+    }
 };

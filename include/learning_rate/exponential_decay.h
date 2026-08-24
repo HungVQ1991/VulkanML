@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <format>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -12,41 +13,58 @@
 class Exponential_Decay : public ILearning_Rate
 {
 private:
-    float learning_rate;
-    float min_learning_rate;
-    float decay_rate;
-    float current_rate;
-    int current_epoch{0};
+    float learning_rate = 0.001f;
+    float minimum_learning_rate = 1e-6f;
+    float decay_rate = 0.95f;
+    float current_learning_rate = 0.001f;
+    int current_epoch = 0;
 
     void validateParameters() const
     {
         if (learning_rate <= 0.0f)
         {
-            Logger::logMessage("Exponential_Decay::validateParameters: Initial learning rate must be greater than 0.", LOG_ERROR, true);
+            Logger::logMessage("Exponential_Decay::validateParameters: Initial learning rate must be greater than 0.",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::LR_SCHEDULER);
             throw std::invalid_argument("Initial learning rate must be greater than 0.");
         }
-        if (min_learning_rate < 0.0f || min_learning_rate > learning_rate)
+        if (minimum_learning_rate < 0.0f || minimum_learning_rate > learning_rate)
         {
-            Logger::logMessage("Exponential_Decay::validateParameters: min_learning_rate is out of valid bounds.", LOG_ERROR, true);
-            throw std::invalid_argument("min_learning_rate is out of valid bounds.");
+            Logger::logMessage("Exponential_Decay::validateParameters: minimum_learning_rate is out of valid bounds.",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::LR_SCHEDULER);
+            throw std::invalid_argument("minimum_learning_rate is out of valid bounds.");
         }
         if (decay_rate <= 0.0f || decay_rate >= 1.0f)
         {
-            Logger::logMessage("Exponential_Decay::validateParameters: decay_rate should be in range (0, 1).", LOG_ERROR, true);
+            Logger::logMessage("Exponential_Decay::validateParameters: decay_rate should be in range (0, 1).",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::LR_SCHEDULER);
             throw std::invalid_argument("decay_rate should be in range (0, 1).");
         }
     }
 
 public:
-    Exponential_Decay(float init_lr = 0.001f, float min_lr = 1e-6f, float lr_decay_rate = 0.95f)
-        : learning_rate(init_lr), min_learning_rate(min_lr), decay_rate(lr_decay_rate), current_rate(init_lr)
+    Exponential_Decay(float _initial_learning_rate = 0.001f,
+                      float _minimum_learning_rate = 1e-6f,
+                      float _decay_rate = 0.95f)
+        : learning_rate(_initial_learning_rate),
+          minimum_learning_rate(_minimum_learning_rate),
+          decay_rate(_decay_rate),
+          current_learning_rate(_initial_learning_rate)
     {
         validateParameters();
     }
 
-    ~Exponential_Decay() override = default;
+    ~Exponential_Decay() noexcept override = default;
 
-    Decay_Mode getType() const override
+    [[nodiscard]] Decay_Mode getType() const noexcept override
     {
         return Decay_Mode::EXPONENTIAL_DECAY;
     }
@@ -54,46 +72,56 @@ public:
     float updateRate() override
     {
         float calculated_rate = learning_rate * std::pow(decay_rate, static_cast<float>(current_epoch));
-        if (calculated_rate < min_learning_rate)
+        if (calculated_rate < minimum_learning_rate)
         {
-            Logger::logMessage("Exponential_Decay::updateRate: Learning rate decayed below min_learning_rate, clamped.", LOG_WARNING);
+            Logger::logMessage("Exponential_Decay::updateRate: Learning rate decayed below minimum_learning_rate, clamped.",
+                               Log_Level::LOG_WARNING,
+                               false,
+                               0,
+                               Log_Feature::LR_SCHEDULER);
         }
-        current_rate = std::max(min_learning_rate, calculated_rate);
-        LR_LOG_DEBUG("Exponential_Decay::updateRate: epoch=" + std::to_string(current_epoch) + ", current_rate=" + std::to_string(current_rate));
-        return current_rate;
+        current_learning_rate = std::max(minimum_learning_rate, calculated_rate);
+        Logger::logMessage(std::format("Exponential_Decay::updateRate: epoch={}, current_rate={}",
+                                       current_epoch,
+                                       current_learning_rate),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::LR_SCHEDULER);
+        return current_learning_rate;
     }
 
-    void step(float current_val = 0.0f) override
+    void step(float _current_value = 0.0f) override
     {
         current_epoch++;
         updateRate();
     }
 
-    float getCurrentRate() const override
+    [[nodiscard]] float getCurrentRate() const noexcept override
     {
-        return current_rate;
+        return current_learning_rate;
     }
 
-    float getLearningRate() const override
+    [[nodiscard]] float getLearningRate() const noexcept override
     {
         return learning_rate;
     }
 
-    void saveCheckpoint(std::ofstream &stream) const override
+    void saveCheckpoint(std::ofstream &_output_file_stream) const override
     {
-        stream.write(reinterpret_cast<const char *>(&learning_rate), sizeof(learning_rate));
-        stream.write(reinterpret_cast<const char *>(&min_learning_rate), sizeof(min_learning_rate));
-        stream.write(reinterpret_cast<const char *>(&decay_rate), sizeof(decay_rate));
-        stream.write(reinterpret_cast<const char *>(&current_rate), sizeof(current_rate));
-        stream.write(reinterpret_cast<const char *>(&current_epoch), sizeof(current_epoch));
+        _output_file_stream.write(reinterpret_cast<const char *>(&learning_rate), sizeof(learning_rate));
+        _output_file_stream.write(reinterpret_cast<const char *>(&minimum_learning_rate), sizeof(minimum_learning_rate));
+        _output_file_stream.write(reinterpret_cast<const char *>(&decay_rate), sizeof(decay_rate));
+        _output_file_stream.write(reinterpret_cast<const char *>(&current_learning_rate), sizeof(current_learning_rate));
+        _output_file_stream.write(reinterpret_cast<const char *>(&current_epoch), sizeof(current_epoch));
     }
 
-    void loadCheckpoint(std::ifstream &stream) override
+    void loadCheckpoint(std::ifstream &_input_file_stream) override
     {
-        stream.read(reinterpret_cast<char *>(&learning_rate), sizeof(learning_rate));
-        stream.read(reinterpret_cast<char *>(&min_learning_rate), sizeof(min_learning_rate));
-        stream.read(reinterpret_cast<char *>(&decay_rate), sizeof(decay_rate));
-        stream.read(reinterpret_cast<char *>(&current_rate), sizeof(current_rate));
-        stream.read(reinterpret_cast<char *>(&current_epoch), sizeof(current_epoch));
+        _input_file_stream.read(reinterpret_cast<char *>(&learning_rate), sizeof(learning_rate));
+        _input_file_stream.read(reinterpret_cast<char *>(&minimum_learning_rate), sizeof(minimum_learning_rate));
+        _input_file_stream.read(reinterpret_cast<char *>(&decay_rate), sizeof(decay_rate));
+        _input_file_stream.read(reinterpret_cast<char *>(&current_learning_rate), sizeof(current_learning_rate));
+        _input_file_stream.read(reinterpret_cast<char *>(&current_epoch), sizeof(current_epoch));
     }
 };

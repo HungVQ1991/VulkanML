@@ -14,99 +14,140 @@
 #include "icost_function.h"
 #include "math/matrix.h"
 
-class CCE_Cost : public ICost_Function
+class Cce_Cost : public ICost_Function
 {
 private:
-    float epsilon_val = 1e-7f;
+    float epsilon = 1e-7f;
+    mutable Matrix loss_matrix;
+    mutable Matrix synced_target_matrix;
+    mutable Matrix difference_matrix;
+    mutable Matrix gradient_matrix;
 
 public:
-    explicit CCE_Cost(float eps_param = 1e-7f)
-        : epsilon_val(eps_param) {}
-
-    ~CCE_Cost() override = default;
-
-    float computeLoss(const Matrix &pred_matrix, const Matrix &target_matrix) const override
+    explicit Cce_Cost(float _epsilon = 1e-7f, Execution_Target _execution_target = Execution_Target::CPU)
+        : epsilon(_epsilon),
+          loss_matrix(0, 0, _execution_target),
+          synced_target_matrix(0, 0, _execution_target),
+          difference_matrix(0, 0, _execution_target),
+          gradient_matrix(0, 0, _execution_target)
     {
-        if (pred_matrix.getRows() != target_matrix.getRows() || pred_matrix.getCols() != target_matrix.getCols())
+    }
+
+    ~Cce_Cost() noexcept override = default;
+
+    [[nodiscard]] float computeLoss(const Matrix &_prediction_matrix, const Matrix &_target_matrix) const override
+    {
+        if (_prediction_matrix.getRows() != _target_matrix.getRows() || _prediction_matrix.getColumns() != _target_matrix.getColumns())
         {
-            Logger::logMessage("CCE_Cost::computeLoss: Dimensions mismatch", LOG_ERROR, true);
+            Logger::logMessage("Cce_Cost::computeLoss: Dimensions mismatch",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::LOSS_COMPUTE);
             throw std::invalid_argument("Dimensions mismatch");
         }
 
-        std::size_t batch_size = pred_matrix.getRows();
-        if (batch_size == 0 || pred_matrix.getCols() == 0)
+        std::size_t batch_size = _prediction_matrix.getRows();
+        if (batch_size == 0 || _prediction_matrix.getColumns() == 0)
         {
-            Logger::logMessage("CCE_Cost::computeLoss: Empty input matrix encountered", LOG_WARNING);
+            Logger::logMessage("Cce_Cost::computeLoss: Empty input matrix encountered",
+                               Log_Level::LOG_WARNING,
+                               false,
+                               0,
+                               Log_Feature::LOSS_COMPUTE);
             return 0.0f;
         }
 
-        // Matrix loss_matrix = pred_matrix.cceLoss(target_matrix, epsilon_val);
-        // float total_loss = loss_matrix.getScalar();
+        Logger::logMessage(std::format("Cce_Cost::computeLoss: batch_size={}, columns={}",
+                                       batch_size,
+                                       _prediction_matrix.getColumns()),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::LOSS_COMPUTE);
 
-        return 0;
+        if (loss_matrix.getExecutionTarget() != _prediction_matrix.getExecutionTarget())
+        {
+            loss_matrix.setExecutionTarget(_prediction_matrix.getExecutionTarget());
+        }
+
+        _prediction_matrix.cceLoss(_target_matrix, loss_matrix, epsilon);
+        return loss_matrix.getScalar() / static_cast<float>(batch_size);
     }
 
-    Matrix computeGradient(const Matrix &pred_matrix, const Matrix &target_matrix) const override
+    [[nodiscard]] Matrix computeGradient(const Matrix &_prediction_matrix, const Matrix &_target_matrix) const override
     {
-        auto log_node_count = [](const std::string &checkpoint)
+        if (_prediction_matrix.getRows() != _target_matrix.getRows() || _prediction_matrix.getColumns() != _target_matrix.getColumns())
         {
-            std::size_t count = Execution_Engine::getInstance().getCurrentGraph().getNodes().size();
-             Logger::logMessage(std::format("[TRACE_CCE] {} -> Node count = {}", checkpoint, count), LOG_DEBUG);
-        };
-
-        // log_node_count("CCE_01_ENTRY");
-
-        if (pred_matrix.getRows() != target_matrix.getRows() || pred_matrix.getCols() != target_matrix.getCols())
-        {
-            std::string err_msg = std::format(
-                "CCE_Cost::computeGradient: Dimensions mismatch! Pred: ({}x{}), Target: ({}x{})",
-                pred_matrix.getRows(), pred_matrix.getCols(),
-                target_matrix.getRows(), target_matrix.getCols());
-            Logger::logMessage(err_msg, LOG_ERROR, true);
-            throw std::invalid_argument(err_msg);
+            std::string error_message = std::format(
+                "Cce_Cost::computeGradient: Dimensions mismatch! Prediction: ({}x{}), Target: ({}x{})",
+                _prediction_matrix.getRows(),
+                _prediction_matrix.getColumns(),
+                _target_matrix.getRows(),
+                _target_matrix.getColumns());
+            Logger::logMessage(error_message, Log_Level::LOG_ERROR, true, 0, Log_Feature::LOSS_COMPUTE);
+            throw std::invalid_argument(error_message);
         }
 
-        std::size_t batch_size = pred_matrix.getRows();
-        if (batch_size == 0 || pred_matrix.getCols() == 0)
+        std::size_t batch_size = _prediction_matrix.getRows();
+        if (batch_size == 0 || _prediction_matrix.getColumns() == 0)
         {
-            Logger::logMessage("CCE_Cost::computeGradient: Empty input matrix encountered", LOG_WARNING);
-            return Matrix(0, 0, pred_matrix.getTarget());
+            Logger::logMessage("Cce_Cost::computeGradient: Empty input matrix encountered",
+                               Log_Level::LOG_WARNING,
+                               false,
+                               0,
+                               Log_Feature::LOSS_COMPUTE);
+            return Matrix(0, 0, _prediction_matrix.getExecutionTarget());
         }
 
-        // log_node_count("CCE_02_BEFORE_COPY_TARGET");
-        Matrix synced_target = target_matrix;
-        // log_node_count("CCE_03_AFTER_COPY_TARGET");
+        Logger::logMessage(std::format("Cce_Cost::computeGradient: batch_size={}, columns={}",
+                                       batch_size,
+                                       _prediction_matrix.getColumns()),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::LOSS_COMPUTE);
 
-        if (synced_target.getTarget() != pred_matrix.getTarget())
+        Execution_Target execution_target = _prediction_matrix.getExecutionTarget();
+
+        synced_target_matrix = _target_matrix;
+        if (synced_target_matrix.getExecutionTarget() != execution_target)
         {
-            // log_node_count("CCE_04_BEFORE_SET_TARGET");
-            synced_target.setExecutionTarget(pred_matrix.getTarget());
-            // log_node_count("CCE_05_AFTER_SET_TARGET");
+            synced_target_matrix.setExecutionTarget(execution_target);
         }
 
-        float inv_batch = 1.0f / static_cast<float>(batch_size);
+        if (difference_matrix.getExecutionTarget() != execution_target)
+        {
+            difference_matrix.setExecutionTarget(execution_target);
+        }
 
-        // log_node_count("CCE_08_BEFORE_SUB_MUL");
-        Matrix grad_matrix = (pred_matrix - synced_target) * inv_batch;
-        // log_node_count("CCE_09_AFTER_SUB_MUL");
+        if (gradient_matrix.getExecutionTarget() != execution_target)
+        {
+            gradient_matrix.setExecutionTarget(execution_target);
+        }
 
-        // COST_LOG_DEBUG(std::format("CCE_Cost::computeGradient: shape=({}x{})", grad_matrix.getRows(), grad_matrix.getCols()));
+        float inverse_batch_size = 1.0f / static_cast<float>(batch_size);
 
-        return grad_matrix;
+        _prediction_matrix.sub(synced_target_matrix, difference_matrix);
+        difference_matrix.mulScalar(inverse_batch_size, gradient_matrix);
+
+        return gradient_matrix;
     }
 
-    Cost_Type getType() const override
+    [[nodiscard]] Cost_Type getType() const noexcept override
     {
         return Cost_Type::CCE;
     }
 
-    void saveCheckpoint(std::ofstream &out_file) const override
+    void saveCheckpoint(std::ofstream &_output_file_stream) const override
     {
-        out_file.write(reinterpret_cast<const char *>(&epsilon_val), sizeof(epsilon_val));
+        _output_file_stream.write(reinterpret_cast<const char *>(&epsilon), sizeof(epsilon));
     }
 
-    void loadCheckpoint(std::ifstream &in_file) override
+    void loadCheckpoint(std::ifstream &_input_file_stream) override
     {
-        in_file.read(reinterpret_cast<char *>(&epsilon_val), sizeof(epsilon_val));
+        _input_file_stream.read(reinterpret_cast<char *>(&epsilon), sizeof(epsilon));
     }
 };
+
+using CCE_Cost = Cce_Cost;

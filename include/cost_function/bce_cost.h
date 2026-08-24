@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <format>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -13,92 +14,148 @@
 #include "icost_function.h"
 #include "math/matrix.h"
 
-class BCE_Cost : public ICost_Function
+class Bce_Cost : public ICost_Function
 {
 private:
-    float epsilon_val = 1e-7f;
+    float epsilon = 1e-7f;
+    mutable Matrix loss_matrix;
+    mutable Matrix gradient_matrix;
 
 public:
-    explicit BCE_Cost(float eps_param = 1e-7f)
-        : epsilon_val(eps_param) {}
-
-    ~BCE_Cost() override = default;
-
-    float computeLoss(const Matrix &pred_matrix, const Matrix &target_matrix) const override
+    explicit Bce_Cost(float _epsilon = 1e-7f, Execution_Target _execution_target = Execution_Target::CPU)
+        : epsilon(_epsilon),
+          loss_matrix(0, 0, _execution_target),
+          gradient_matrix(0, 0, _execution_target)
     {
-        if (pred_matrix.getRows() != target_matrix.getRows() || pred_matrix.getCols() != target_matrix.getCols())
+    }
+
+    ~Bce_Cost() noexcept override = default;
+
+    [[nodiscard]] float computeLoss(const Matrix &_prediction_matrix, const Matrix &_target_matrix) const override
+    {
+        if (_prediction_matrix.getRows() != _target_matrix.getRows() || _prediction_matrix.getColumns() != _target_matrix.getColumns())
         {
-            Logger::logMessage("BCE_Cost::computeLoss: Dimensions mismatch", LOG_ERROR, true);
+            Logger::logMessage("Bce_Cost::computeLoss: Dimensions mismatch",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::LOSS_COMPUTE);
             throw std::invalid_argument("Dimensions mismatch");
         }
 
-        if (pred_matrix.getTarget() != target_matrix.getTarget())
+        if (_prediction_matrix.getExecutionTarget() != _target_matrix.getExecutionTarget())
         {
-            Logger::logMessage("BCE_Cost::computeLoss: Execution target mismatch between prediction and target matrix", LOG_WARNING);
+            Logger::logMessage("Bce_Cost::computeLoss: Execution target mismatch between prediction and target matrix",
+                               Log_Level::LOG_WARNING,
+                               true,
+                               0,
+                               Log_Feature::LOSS_COMPUTE);
         }
 
-        if (pred_matrix.getRows() == 0 || pred_matrix.getCols() == 0)
+        if (_prediction_matrix.getRows() == 0 || _prediction_matrix.getColumns() == 0)
         {
-            Logger::logMessage("BCE_Cost::computeLoss: Empty input matrix encountered", LOG_WARNING);
+            Logger::logMessage("Bce_Cost::computeLoss: Empty input matrix encountered",
+                               Log_Level::LOG_WARNING,
+                               false,
+                               0,
+                               Log_Feature::LOSS_COMPUTE);
             return 0.0f;
         }
 
-        COST_LOG_DEBUG("BCE_Cost::computeLoss: rows=" + std::to_string(pred_matrix.getRows()) + ", cols=" + std::to_string(pred_matrix.getCols()));
+        Logger::logMessage(std::format("Bce_Cost::computeLoss: rows={}, columns={}",
+                                       _prediction_matrix.getRows(),
+                                       _prediction_matrix.getColumns()),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::LOSS_COMPUTE);
 
-        std::size_t total_elements = pred_matrix.getRows() * pred_matrix.getCols();
-        Matrix loss_matrix = pred_matrix.bceLoss(target_matrix, epsilon_val);
+        if (loss_matrix.getExecutionTarget() != _prediction_matrix.getExecutionTarget())
+        {
+            loss_matrix.setExecutionTarget(_prediction_matrix.getExecutionTarget());
+        }
+
+        std::size_t total_elements = _prediction_matrix.getRows() * _prediction_matrix.getColumns();
+        _prediction_matrix.bceLoss(_target_matrix, loss_matrix, epsilon);
         return loss_matrix.getScalar() / static_cast<float>(total_elements);
     }
 
-    Matrix computeGradient(const Matrix &pred_matrix, const Matrix &target_matrix) const override
+    [[nodiscard]] Matrix computeGradient(const Matrix &_prediction_matrix, const Matrix &_target_matrix) const override
     {
-        if (pred_matrix.getRows() != target_matrix.getRows() || pred_matrix.getCols() != target_matrix.getCols())
+        if (_prediction_matrix.getRows() != _target_matrix.getRows() || _prediction_matrix.getColumns() != _target_matrix.getColumns())
         {
-            Logger::logMessage("BCE_Cost::computeGradient: Dimensions mismatch", LOG_ERROR, true);
+            Logger::logMessage("Bce_Cost::computeGradient: Dimensions mismatch",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::LOSS_COMPUTE);
             throw std::invalid_argument("Dimensions mismatch");
         }
 
-        if (pred_matrix.getTarget() != target_matrix.getTarget())
+        if (_prediction_matrix.getExecutionTarget() != _target_matrix.getExecutionTarget())
         {
-            Logger::logMessage("BCE_Cost::computeGradient: Execution target mismatch between prediction and target matrix", LOG_WARNING);
+            Logger::logMessage("Bce_Cost::computeGradient: Execution target mismatch between prediction and target matrix",
+                               Log_Level::LOG_WARNING,
+                               true,
+                               0,
+                               Log_Feature::LOSS_COMPUTE);
         }
 
-        if (pred_matrix.getRows() == 0 || pred_matrix.getCols() == 0)
+        if (_prediction_matrix.getRows() == 0 || _prediction_matrix.getColumns() == 0)
         {
-            Logger::logMessage("BCE_Cost::computeGradient: Empty input matrix encountered", LOG_WARNING);
-            return Matrix(0, 0, pred_matrix.getTarget());
+            Logger::logMessage("Bce_Cost::computeGradient: Empty input matrix encountered",
+                               Log_Level::LOG_WARNING,
+                               false,
+                               0,
+                               Log_Feature::LOSS_COMPUTE);
+            return Matrix(0, 0, _prediction_matrix.getExecutionTarget());
         }
 
-        COST_LOG_DEBUG("BCE_Cost::computeGradient: rows=" + std::to_string(pred_matrix.getRows()) + ", cols=" + std::to_string(pred_matrix.getCols()));
+        Logger::logMessage(std::format("Bce_Cost::computeGradient: rows={}, columns={}",
+                                       _prediction_matrix.getRows(),
+                                       _prediction_matrix.getColumns()),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::LOSS_COMPUTE);
 
-        std::vector<float> pred_data = pred_matrix.getData();
-        std::vector<float> target_data = target_matrix.getData();
-        std::size_t total_elements = pred_data.size();
-        std::vector<float> grad_data(total_elements);
-        float inv_total = 1.0f / static_cast<float>(total_elements);
+        std::vector<float> prediction_data = _prediction_matrix.getData();
+        std::vector<float> target_data = _target_matrix.getData();
+        std::size_t total_elements = prediction_data.size();
+        std::vector<float> gradient_data(total_elements);
+        float inverse_total_elements = 1.0f / static_cast<float>(total_elements);
 
         for (std::size_t i = 0; i < total_elements; ++i)
         {
-            float p_val = std::clamp(pred_data[i], epsilon_val, 1.0f - epsilon_val);
-            float y_val = target_data[i];
-            grad_data[i] = ((p_val - y_val) / (p_val * (1.0f - p_val))) * inv_total;
+            float probability_value = std::clamp(prediction_data[i], epsilon, 1.0f - epsilon);
+            float target_value = target_data[i];
+            gradient_data[i] = ((probability_value - target_value) / (probability_value * (1.0f - probability_value))) * inverse_total_elements;
         }
 
-        return Matrix(pred_matrix.getRows(), pred_matrix.getCols(), std::move(grad_data), pred_matrix.getTarget());
+        gradient_matrix.initializeShape(_prediction_matrix.getRows(), _prediction_matrix.getColumns());
+        if (gradient_matrix.getExecutionTarget() != _prediction_matrix.getExecutionTarget())
+        {
+            gradient_matrix.setExecutionTarget(_prediction_matrix.getExecutionTarget());
+        }
+        gradient_matrix.uploadData(gradient_data);
+
+        return gradient_matrix;
     }
 
-    Cost_Type getType() const override
+    [[nodiscard]] Cost_Type getType() const noexcept override
     {
         return Cost_Type::BCE;
     }
 
-    void saveCheckpoint(std::ofstream &out_file) const override
+    void saveCheckpoint(std::ofstream &_output_file_stream) const override
     {
-        out_file.write(reinterpret_cast<const char *>(&epsilon_val), sizeof(epsilon_val));
+        _output_file_stream.write(reinterpret_cast<const char *>(&epsilon), sizeof(epsilon));
     }
 
-    void loadCheckpoint(std::ifstream &in_file) override
+    void loadCheckpoint(std::ifstream &_input_file_stream) override
     {
-        in_file.read(reinterpret_cast<char *>(&epsilon_val), sizeof(epsilon_val));
+        _input_file_stream.read(reinterpret_cast<char *>(&epsilon), sizeof(epsilon));
     }
 };
+
+using BCE_Cost = Bce_Cost;

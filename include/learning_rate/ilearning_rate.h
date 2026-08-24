@@ -2,17 +2,8 @@
 
 #include <cstdint>
 #include <fstream>
+
 #include "helper/logger.h"
-
-#ifndef ENABLE_LR_DEBUG_LOGS
-#define ENABLE_LR_DEBUG_LOGS 0
-#endif
-
-#if ENABLE_LR_DEBUG_LOGS
-#define LR_LOG_DEBUG(msg) Logger::logMessage(msg, LOG_DEBUG)
-#else
-#define LR_LOG_DEBUG(msg) ((void)0)
-#endif
 
 enum class Decay_Mode : std::uint32_t
 {
@@ -31,14 +22,14 @@ class ILearning_Rate
 public:
     virtual ~ILearning_Rate() noexcept = default;
 
-    virtual Decay_Mode getType() const = 0;
+    [[nodiscard]] virtual Decay_Mode getType() const noexcept = 0;
     virtual float updateRate() = 0;
-    virtual void step(float current_val = 0.0f) = 0;
-    virtual float getCurrentRate() const = 0;
-    virtual float getLearningRate() const = 0;
+    virtual void step(float _current_value = 0.0f) = 0;
+    [[nodiscard]] virtual float getCurrentRate() const noexcept = 0;
+    [[nodiscard]] virtual float getLearningRate() const noexcept = 0;
 
-    virtual void saveCheckpoint(std::ofstream &stream) const = 0;
-    virtual void loadCheckpoint(std::ifstream &stream) = 0;
+    virtual void saveCheckpoint(std::ofstream &_output_file_stream) const = 0;
+    virtual void loadCheckpoint(std::ifstream &_input_file_stream) = 0;
 
-    virtual void setMaxEpoch(int total_epochs) {}
+    virtual void setMaxEpoch(int _maximum_epoch) {}
 };

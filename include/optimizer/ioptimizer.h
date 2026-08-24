@@ -1,7 +1,7 @@
 #pragma once
 
+#include <cstdint>
 #include <fstream>
-#include <map>
 #include <utility>
 #include <vector>
 
@@ -10,17 +10,7 @@
 #include "learning_rate/ilearning_rate.h"
 #include "math/matrix.h"
 
-#ifndef ENABLE_OPTIMIZER_DEBUG_LOGS
-#define ENABLE_OPTIMIZER_DEBUG_LOGS 0
-#endif
-
-#if ENABLE_OPTIMIZER_DEBUG_LOGS
-#define OPTIMIZER_LOG_DEBUG(msg) Logger::logMessage(msg, LOG_DEBUG)
-#else
-#define OPTIMIZER_LOG_DEBUG(msg) ((void)0)
-#endif
-
-enum class Optimizer_Type
+enum class Optimizer_Type : std::uint32_t
 {
     SGD_OPTIMIZER,
     ADAM_OPTIMIZER,
@@ -30,11 +20,12 @@ enum class Optimizer_Type
 class IOptimizer
 {
 public:
-    virtual Optimizer_Type getType() const = 0;
     virtual ~IOptimizer() noexcept = default;
-    virtual void step(const std::vector<std::pair<Matrix *, Matrix *>> &param_grad_pairs) = 0;
+
+    [[nodiscard]] virtual Optimizer_Type getType() const noexcept = 0;
+    virtual void step(const std::vector<std::pair<Matrix *, Matrix *>> &_parameter_gradient_pairs) = 0;
     virtual void reset() {}
-    virtual void setLearningRate(float lr) = 0;
-    virtual void saveCheckpoint(std::ofstream &out_file) const = 0;
-    virtual void loadCheckpoint(std::ifstream &in_file, Execution_Target target = Execution_Target::CPU) = 0;
+    virtual void setLearningRate(float _learning_rate) = 0;
+    virtual void saveCheckpoint(std::ofstream &_output_file_stream) const = 0;
+    virtual void loadCheckpoint(std::ifstream &_input_file_stream, Execution_Target _execution_target = Execution_Target::CPU) = 0;
 };

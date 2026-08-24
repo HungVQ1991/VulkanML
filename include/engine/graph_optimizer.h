@@ -1,60 +1,78 @@
 #pragma once
 
-#include <vector>
-#include <string>
+#include <algorithm>
+#include <cstdint>
 #include <format>
 #include <memory>
-#include <algorithm>
+#include <string>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 #include <vulkan/vulkan.h>
 
 #include "compute_graph.h"
 #include "compute_node.h"
-#include "shader_dictionary.h"
+#include "gpu_vector.h"
 #include "helper/logger.h"
 #include "helper/magic_enum.hpp"
-
-#ifndef ENABLE_GRAPH_OPTIMIZER_DEBUG_LOGS
-#define ENABLE_GRAPH_OPTIMIZER_DEBUG_LOGS 0
-#endif
-
-#if ENABLE_GRAPH_OPTIMIZER_DEBUG_LOGS
-#define GRAPH_OPTIMIZER_LOG_DEBUG(msg) Logger::logMessage(msg, LOG_DEBUG)
-#else
-#define GRAPH_OPTIMIZER_LOG_DEBUG(msg) ((void)0)
-#endif
+#include "shader_dictionary.h"
 
 #ifndef ENABLE_SHADER_FUSION
 #define ENABLE_SHADER_FUSION 0
 #endif
 
-struct Buffer_Binding_Map
+struct Buffer_Binding_Mapping
 {
-    std::uint32_t raw_node_index;
-    std::uint32_t raw_buffer_index;
-    std::uint32_t fused_buffer_index;
+    std::uint32_t raw_node_index = 0;
+    std::uint32_t raw_buffer_index = 0;
+    std::uint32_t fused_buffer_index = 0;
 };
 
-struct Push_Constant_Map
+struct Push_Constant_Mapping
 {
-    std::uint32_t raw_node_index;
-    std::uint32_t fused_pc_offset;
-    std::uint32_t pc_size;
+    std::uint32_t raw_node_index = 0;
+    std::uint32_t fused_push_constants_offset = 0;
+    std::uint32_t push_constants_size = 0;
 };
 
 struct Cached_Graph_Template
 {
     std::vector<Compute_Node> fused_nodes;
-    std::vector<std::vector<Buffer_Binding_Map>> buffer_mappings;
-    std::vector<std::vector<Push_Constant_Map>> pc_mappings;
+    std::vector<std::vector<Buffer_Binding_Mapping>> buffer_mappings;
+    std::vector<std::vector<Push_Constant_Mapping>> push_constants_mappings;
     std::vector<std::vector<std::uint32_t>> raw_node_indices;
     bool is_valid = false;
 
-    void clear()
+    [[nodiscard]] const std::vector<Compute_Node> &getFusedNodes() const noexcept
+    {
+        return fused_nodes;
+    }
+
+    [[nodiscard]] const std::vector<std::vector<Buffer_Binding_Mapping>> &getBufferMappings() const noexcept
+    {
+        return buffer_mappings;
+    }
+
+    [[nodiscard]] const std::vector<std::vector<Push_Constant_Mapping>> &getPushConstantsMappings() const noexcept
+    {
+        return push_constants_mappings;
+    }
+
+    [[nodiscard]] const std::vector<std::vector<std::uint32_t>> &getRawNodeIndices() const noexcept
+    {
+        return raw_node_indices;
+    }
+
+    [[nodiscard]] bool isValid() const noexcept
+    {
+        return is_valid;
+    }
+
+    void clear() noexcept
     {
         fused_nodes.clear();
         buffer_mappings.clear();
-        pc_mappings.clear();
+        push_constants_mappings.clear();
         raw_node_indices.clear();
         is_valid = false;
     }
@@ -64,182 +82,252 @@ class Graph_Optimizer
 {
 private:
     static constexpr std::size_t MAX_PUSH_CONSTANTS_BYTES = 128;
-    static constexpr std::size_t MAX_SSBO_BINDINGS = 32;
+    static constexpr std::size_t MAX_STORAGE_BUFFER_BINDINGS = 32;
     static constexpr std::size_t MAX_FUSED_OPERATIONS = 8;
 
-    static constexpr std::size_t alignTo4Bytes(std::size_t offset)
+    static constexpr std::size_t alignTo4Bytes(std::size_t offset) noexcept
     {
         return (offset + 3) & ~std::size_t(3);
     }
 
-static bool isFusible(
-        Op_Class prod_class, 
-        Op_Class cons_class, 
-        Compute_Pipeline prod_op, 
-        Compute_Pipeline tail_op)
+    static bool isOptimizerNode(const Compute_Node &node) noexcept
     {
-        if (cons_class != Op_Class::ELEMENTWISE)
+        if (node.is_fused)
         {
             return false;
         }
-
-        const auto &shader_dict = Shader_Dictionary::getInstance();
-        const auto &tail_meta = shader_dict.getMetadata(tail_op);
-        const auto &prod_meta = shader_dict.getMetadata(prod_op);
-
-        if (tail_meta.writes_multiple_elements || tail_meta.shared_mem_size > 0)
-        {
-            return false;
-        }
-
-        if (prod_meta.op_class == Op_Class::STANDALONE || 
-            prod_meta.writes_multiple_elements || 
-            prod_meta.output_count > 1)
-        {
-            return false;
-        }
-
-        return (prod_class == Op_Class::MATRIX_2D ||
-                prod_class == Op_Class::ELEMENTWISE ||
-                prod_class == Op_Class::TENSOR_3D);
+        return node.pipeline_id == Compute_Pipeline::ADAM_UPDATE ||
+               node.pipeline_id == Compute_Pipeline::SGD_UPDATE;
     }
 
-    static bool checkDimensions(
-        const Compute_Node &a, 
-        const Compute_Node &b, 
-        Op_Class prod_class, 
-        Op_Class cons_class)
+    static void assignPipelineBarriers(std::vector<Compute_Node> &nodes)
     {
-        if (a.group_x == b.group_x && a.group_y == b.group_y && a.group_z == b.group_z)
+        if (nodes.empty())
+        {
+            return;
+        }
+
+        for (std::size_t i = 0; i < nodes.size(); ++i)
+        {
+            if (i == nodes.size() - 1)
+            {
+                nodes[i].is_barrier_required_after = true;
+                continue;
+            }
+
+            bool current_is_optimizer = isOptimizerNode(nodes[i]);
+            bool next_is_optimizer = isOptimizerNode(nodes[i + 1]);
+
+            if (current_is_optimizer && next_is_optimizer)
+            {
+                nodes[i].is_barrier_required_after = false;
+            }
+            else
+            {
+                nodes[i].is_barrier_required_after = true;
+            }
+        }
+    }
+
+    static bool isFusible(
+        Operation_Class producer_class,
+        Operation_Class consumer_class,
+        Compute_Pipeline producer_pipeline,
+        Compute_Pipeline consumer_pipeline)
+    {
+        if (consumer_class != Operation_Class::ELEMENTWISE)
+        {
+            return false;
+        }
+
+        const auto &shader_dictionary = Shader_Dictionary::getInstance();
+        const auto &consumer_metadata = shader_dictionary.getMetadata(consumer_pipeline);
+        const auto &producer_metadata = shader_dictionary.getMetadata(producer_pipeline);
+
+        if (consumer_metadata.is_writing_multiple_elements || consumer_metadata.shared_memory_size > 0)
+        {
+            return false;
+        }
+
+        if (producer_metadata.operation_class == Operation_Class::STANDALONE ||
+            producer_metadata.is_writing_multiple_elements ||
+            producer_metadata.output_count > 1)
+        {
+            return false;
+        }
+
+        return (producer_class == Operation_Class::MATRIX_2D ||
+                producer_class == Operation_Class::ELEMENTWISE ||
+                producer_class == Operation_Class::TENSOR_3D);
+    }
+
+    static bool hasCompatibleDimensions(
+        const Compute_Node &producer_node,
+        const Compute_Node &consumer_node,
+        Operation_Class producer_class,
+        Operation_Class consumer_class) noexcept
+    {
+        if (producer_node.workgroup_count_x == consumer_node.workgroup_count_x &&
+            producer_node.workgroup_count_y == consumer_node.workgroup_count_y &&
+            producer_node.workgroup_count_z == consumer_node.workgroup_count_z)
         {
             return true;
         }
 
-        if (cons_class == Op_Class::ELEMENTWISE)
+        if (consumer_class == Operation_Class::ELEMENTWISE)
         {
-            if (prod_class == Op_Class::MATRIX_2D || prod_class == Op_Class::TENSOR_3D)
+            if (producer_class == Operation_Class::MATRIX_2D || producer_class == Operation_Class::TENSOR_3D)
             {
-                std::uint64_t total_workgroups_a = static_cast<std::uint64_t>(a.group_x) * a.group_y * a.group_z;
-                std::uint64_t total_workgroups_b = static_cast<std::uint64_t>(b.group_x) * b.group_y * b.group_z;
+                std::uint64_t total_workgroups_producer = static_cast<std::uint64_t>(producer_node.workgroup_count_x) *
+                                                          producer_node.workgroup_count_y *
+                                                          producer_node.workgroup_count_z;
+                std::uint64_t total_workgroups_consumer = static_cast<std::uint64_t>(consumer_node.workgroup_count_x) *
+                                                          consumer_node.workgroup_count_y *
+                                                          consumer_node.workgroup_count_z;
 
-                return (total_workgroups_a >= total_workgroups_b);
+                return (total_workgroups_producer >= total_workgroups_consumer);
             }
         }
 
         return false;
     }
 
-    static std::uint32_t findOrAddBuffer(Compute_Node &node, const std::shared_ptr<GVector> &buf)
+    static std::uint32_t findOrAddBuffer(Compute_Node &node, const std::shared_ptr<gpu::vector> &target_buffer)
     {
-        for (std::uint32_t idx = 0; idx < node.buffers.size(); ++idx)
+        for (std::uint32_t index = 0; index < node.buffers.size(); ++index)
         {
-            const auto &exist_buf = node.buffers[idx];
-            if (buf && exist_buf && (buf == exist_buf || (buf->getBuffer() != VK_NULL_HANDLE && buf->getBuffer() == exist_buf->getBuffer())))
+            const auto &existing_buffer = node.buffers[index];
+            if (target_buffer && existing_buffer &&
+                (target_buffer == existing_buffer ||
+                 (target_buffer->getBuffer() != VK_NULL_HANDLE &&
+                  target_buffer->getBuffer() == existing_buffer->getBuffer())))
             {
-                return idx;
+                return index;
             }
         }
-        node.buffers.push_back(buf);
+        node.buffers.push_back(target_buffer);
         return static_cast<std::uint32_t>(node.buffers.size() - 1);
     }
 
-    static void updateDispatchGrid(Compute_Node &fused_node, const Compute_Node &next_node, Op_Class prod_class, Op_Class cons_class)
+    static void updateDispatchGrid(
+        Compute_Node &fused_node,
+        const Compute_Node &next_node,
+        Operation_Class producer_class,
+        Operation_Class consumer_class)
     {
-        const auto &shader_dict = Shader_Dictionary::getInstance();
-        const auto &next_meta = shader_dict.getMetadata(next_node.pipeline_id);
+        const auto &shader_dictionary = Shader_Dictionary::getInstance();
+        const auto &next_metadata = shader_dictionary.getMetadata(next_node.pipeline_id);
 
-        if (next_meta.shared_mem_size > 0 || cons_class == Op_Class::STANDALONE)
+        if (next_metadata.shared_memory_size > 0 || consumer_class == Operation_Class::STANDALONE)
         {
-            fused_node.group_x = next_node.group_x;
-            fused_node.group_y = 1;
-            fused_node.group_z = 1;
+            fused_node.workgroup_count_x = next_node.workgroup_count_x;
+            fused_node.workgroup_count_y = 1;
+            fused_node.workgroup_count_z = 1;
             return;
         }
 
-        if (prod_class == Op_Class::MATRIX_2D || prod_class == Op_Class::TENSOR_3D || prod_class == Op_Class::STANDALONE)
+        if (producer_class == Operation_Class::MATRIX_2D ||
+            producer_class == Operation_Class::TENSOR_3D ||
+            producer_class == Operation_Class::STANDALONE)
         {
             return;
         }
 
-        fused_node.group_x = std::max(fused_node.group_x, next_node.group_x);
-        fused_node.group_y = std::max(fused_node.group_y, next_node.group_y);
-        fused_node.group_z = std::max(fused_node.group_z, next_node.group_z);
+        fused_node.workgroup_count_x = std::max(fused_node.workgroup_count_x, next_node.workgroup_count_x);
+        fused_node.workgroup_count_y = std::max(fused_node.workgroup_count_y, next_node.workgroup_count_y);
+        fused_node.workgroup_count_z = std::max(fused_node.workgroup_count_z, next_node.workgroup_count_z);
     }
 
     static Fused_Operation buildFusedOperation(
         Compute_Node &fused_node,
         const Compute_Node &source_node,
-        std::uint32_t pc_offset,
-        const Snippet_Metadata &meta,
+        std::uint32_t push_constants_offset,
+        const Snippet_Metadata &metadata,
         std::uint32_t raw_node_index = 0,
-        std::vector<Buffer_Binding_Map> *out_buf_map = nullptr)
+        std::vector<Buffer_Binding_Mapping> *output_buffer_mappings = nullptr)
     {
-        Fused_Operation op{
+        Fused_Operation operation{
             .pipeline_id = source_node.pipeline_id,
-            .pc_offset = pc_offset,
-            .pc_size = static_cast<std::uint32_t>(source_node.push_constants_data.size()),
+            .push_constants_offset = push_constants_offset,
+            .push_constants_size = static_cast<std::uint32_t>(source_node.push_constants_data.size()),
             .input_buffer_indices = {},
             .output_buffer_indices = {},
-            .group_x = source_node.group_x,
-            .group_y = source_node.group_y,
-            .group_z = source_node.group_z};
+            .workgroup_count_x = source_node.workgroup_count_x,
+            .workgroup_count_y = source_node.workgroup_count_y,
+            .workgroup_count_z = source_node.workgroup_count_z};
 
-        for (std::uint32_t b = 0; b < meta.input_count && b < source_node.buffers.size(); ++b)
+        for (std::uint32_t buffer_index = 0; buffer_index < metadata.input_count && buffer_index < source_node.buffers.size(); ++buffer_index)
         {
-            std::uint32_t fused_buf_idx = findOrAddBuffer(fused_node, source_node.buffers[b]);
-            op.input_buffer_indices.push_back(fused_buf_idx);
-            if (out_buf_map)
+            std::uint32_t fused_buffer_index = findOrAddBuffer(fused_node, source_node.buffers[buffer_index]);
+            operation.input_buffer_indices.push_back(fused_buffer_index);
+            if (output_buffer_mappings)
             {
-                out_buf_map->push_back({raw_node_index, b, fused_buf_idx});
+                output_buffer_mappings->push_back(Buffer_Binding_Mapping{
+                    .raw_node_index = raw_node_index,
+                    .raw_buffer_index = buffer_index,
+                    .fused_buffer_index = fused_buffer_index});
             }
         }
 
-        for (std::uint32_t b = meta.input_count; b < meta.input_count + meta.output_count && b < source_node.buffers.size(); ++b)
+        for (std::uint32_t buffer_index = metadata.input_count;
+             buffer_index < metadata.input_count + metadata.output_count && buffer_index < source_node.buffers.size();
+             ++buffer_index)
         {
-            std::uint32_t fused_buf_idx = findOrAddBuffer(fused_node, source_node.buffers[b]);
-            op.output_buffer_indices.push_back(fused_buf_idx);
-            if (out_buf_map)
+            std::uint32_t fused_buffer_index = findOrAddBuffer(fused_node, source_node.buffers[buffer_index]);
+            operation.output_buffer_indices.push_back(fused_buffer_index);
+            if (output_buffer_mappings)
             {
-                out_buf_map->push_back({raw_node_index, b, fused_buf_idx});
+                output_buffer_mappings->push_back(Buffer_Binding_Mapping{
+                    .raw_node_index = raw_node_index,
+                    .raw_buffer_index = buffer_index,
+                    .fused_buffer_index = fused_buffer_index});
             }
 
-            std::uint32_t local_out_idx = b - meta.input_count;
-            bool is_declared_persistent = std::find(meta.persistent_outputs.begin(),
-                                                    meta.persistent_outputs.end(),
-                                                    local_out_idx) != meta.persistent_outputs.end();
+            std::uint32_t local_output_index = buffer_index - metadata.input_count;
+            bool is_declared_persistent = std::find(metadata.persistent_output_indices.begin(),
+                                                    metadata.persistent_output_indices.end(),
+                                                    local_output_index) != metadata.persistent_output_indices.end();
 
-            if (source_node.external_output_indices.contains(b) || is_declared_persistent)
+            if (source_node.external_output_indices.contains(buffer_index) || is_declared_persistent)
             {
-                fused_node.external_output_indices.insert(fused_buf_idx);
+                fused_node.external_output_indices.insert(fused_buffer_index);
             }
         }
 
-        return op;
+        return operation;
     }
 
-    static bool hasAliasingHazard(const Compute_Node &fused_node, const Compute_Node &next_node, const Shader_Dictionary &shader_dict)
+    static bool hasAliasingHazard(
+        const Compute_Node &fused_node,
+        const Compute_Node &next_node,
+        const Shader_Dictionary &shader_dictionary)
     {
-        const Snippet_Metadata &next_meta = shader_dict.getMetadata(next_node.pipeline_id);
+        const Snippet_Metadata &next_metadata = shader_dictionary.getMetadata(next_node.pipeline_id);
 
-        std::vector<std::shared_ptr<GVector>> next_outputs;
-        for (std::uint32_t i = next_meta.input_count; i < next_meta.input_count + next_meta.output_count && i < next_node.buffers.size(); ++i)
+        std::vector<std::shared_ptr<gpu::vector>> next_output_buffers;
+        for (std::uint32_t i = next_metadata.input_count;
+             i < next_metadata.input_count + next_metadata.output_count && i < next_node.buffers.size();
+             ++i)
         {
             if (next_node.buffers[i])
             {
-                next_outputs.push_back(next_node.buffers[i]);
+                next_output_buffers.push_back(next_node.buffers[i]);
             }
         }
 
-        for (const auto &out_buf : next_outputs)
+        for (const auto &output_buffer : next_output_buffers)
         {
-            for (const auto &fused_op : fused_node.fused_operations)
+            for (const auto &fused_operation : fused_node.fused_operations)
             {
-                for (std::uint32_t in_idx : fused_op.input_buffer_indices)
+                for (std::uint32_t input_index : fused_operation.input_buffer_indices)
                 {
-                    if (in_idx < fused_node.buffers.size())
+                    if (input_index < fused_node.buffers.size())
                     {
-                        const auto &fused_in_buf = fused_node.buffers[in_idx];
-                        if (fused_in_buf && (out_buf == fused_in_buf || (out_buf->getBuffer() != VK_NULL_HANDLE && out_buf->getBuffer() == fused_in_buf->getBuffer())))
+                        const auto &fused_input_buffer = fused_node.buffers[input_index];
+                        if (fused_input_buffer &&
+                            (output_buffer == fused_input_buffer ||
+                             (output_buffer->getBuffer() != VK_NULL_HANDLE &&
+                              output_buffer->getBuffer() == fused_input_buffer->getBuffer())))
                         {
                             return true;
                         }
@@ -248,17 +336,20 @@ static bool isFusible(
             }
         }
 
-        for (const auto &out_buf : next_outputs)
+        for (const auto &output_buffer : next_output_buffers)
         {
-            for (std::size_t op_idx = 0; op_idx < fused_node.fused_operations.size() - 1; ++op_idx)
+            for (std::size_t operation_index = 0; operation_index < fused_node.fused_operations.size() - 1; ++operation_index)
             {
-                const auto &fused_op = fused_node.fused_operations[op_idx];
-                for (std::uint32_t out_idx : fused_op.output_buffer_indices)
+                const auto &fused_operation = fused_node.fused_operations[operation_index];
+                for (std::uint32_t output_index : fused_operation.output_buffer_indices)
                 {
-                    if (out_idx < fused_node.buffers.size())
+                    if (output_index < fused_node.buffers.size())
                     {
-                        const auto &fused_out_buf = fused_node.buffers[out_idx];
-                        if (fused_out_buf && (out_buf == fused_out_buf || (out_buf->getBuffer() != VK_NULL_HANDLE && out_buf->getBuffer() == fused_out_buf->getBuffer())))
+                        const auto &fused_output_buffer = fused_node.buffers[output_index];
+                        if (fused_output_buffer &&
+                            (output_buffer == fused_output_buffer ||
+                             (output_buffer->getBuffer() != VK_NULL_HANDLE &&
+                              output_buffer->getBuffer() == fused_output_buffer->getBuffer())))
                         {
                             return true;
                         }
@@ -270,297 +361,293 @@ static bool isFusible(
         return false;
     }
 
-    static void markExternalOutputs(Compute_Node &fused_node, const std::vector<Compute_Node> &nodes, std::size_t next_raw_index)
+    static void markExternalOutputs(
+        Compute_Node &fused_node,
+        const std::vector<Compute_Node> &nodes,
+        std::size_t next_raw_node_index)
     {
-        std::unordered_set<std::uint32_t> internal_consumed_outputs;
+        std::unordered_set<std::uint32_t> internal_consumed_output_indices;
         for (std::size_t i = 0; i < fused_node.fused_operations.size(); ++i)
         {
             for (std::size_t j = i + 1; j < fused_node.fused_operations.size(); ++j)
             {
-                for (std::uint32_t in_idx : fused_node.fused_operations[j].input_buffer_indices)
+                for (std::uint32_t input_index : fused_node.fused_operations[j].input_buffer_indices)
                 {
-                    for (std::uint32_t out_idx : fused_node.fused_operations[i].output_buffer_indices)
+                    for (std::uint32_t output_index : fused_node.fused_operations[i].output_buffer_indices)
                     {
-                        if (in_idx == out_idx)
+                        if (input_index == output_index)
                         {
-                            internal_consumed_outputs.insert(out_idx);
+                            internal_consumed_output_indices.insert(output_index);
                         }
                     }
                 }
             }
         }
 
-        for (const auto &op : fused_node.fused_operations)
+        for (const auto &operation : fused_node.fused_operations)
         {
-            for (std::uint32_t out_idx : op.output_buffer_indices)
+            for (std::uint32_t output_index : operation.output_buffer_indices)
             {
-                if (!internal_consumed_outputs.contains(out_idx))
+                if (!internal_consumed_output_indices.contains(output_index))
                 {
-                    fused_node.external_output_indices.insert(out_idx);
+                    fused_node.external_output_indices.insert(output_index);
                 }
             }
         }
 
-        if (next_raw_index >= nodes.size())
+        if (next_raw_node_index >= nodes.size())
         {
-            for (std::size_t op_buf_idx = 0; op_buf_idx < fused_node.buffers.size(); ++op_buf_idx)
+            for (std::size_t operation_buffer_index = 0; operation_buffer_index < fused_node.buffers.size(); ++operation_buffer_index)
             {
-                if (fused_node.buffers[op_buf_idx])
+                if (fused_node.buffers[operation_buffer_index])
                 {
-                    fused_node.external_output_indices.insert(static_cast<std::uint32_t>(op_buf_idx));
+                    fused_node.external_output_indices.insert(static_cast<std::uint32_t>(operation_buffer_index));
                 }
             }
             return;
         }
 
-        for (std::size_t op_buf_idx = 0; op_buf_idx < fused_node.buffers.size(); ++op_buf_idx)
+        for (std::size_t operation_buffer_index = 0; operation_buffer_index < fused_node.buffers.size(); ++operation_buffer_index)
         {
-            const auto &buf = fused_node.buffers[op_buf_idx];
-            if (!buf)
+            const auto &buffer = fused_node.buffers[operation_buffer_index];
+            if (!buffer)
             {
                 continue;
             }
 
-            for (std::size_t j = next_raw_index; j < nodes.size(); ++j)
+            for (std::size_t j = next_raw_node_index; j < nodes.size(); ++j)
             {
-                for (const auto &future_buf : nodes[j].buffers)
+                for (const auto &future_buffer : nodes[j].buffers)
                 {
-                    if (future_buf && (buf == future_buf || (buf->getBuffer() != VK_NULL_HANDLE && buf->getBuffer() == future_buf->getBuffer())))
+                    if (future_buffer &&
+                        (buffer == future_buffer ||
+                         (buffer->getBuffer() != VK_NULL_HANDLE &&
+                          buffer->getBuffer() == future_buffer->getBuffer())))
                     {
-                        fused_node.external_output_indices.insert(static_cast<std::uint32_t>(op_buf_idx));
+                        fused_node.external_output_indices.insert(static_cast<std::uint32_t>(operation_buffer_index));
                     }
                 }
             }
         }
     }
 
-    static Cached_Graph_Template optimizeInternal(const std::vector<Compute_Node> &original_nodes, bool track_mappings)
+    static Cached_Graph_Template optimizeInternal(const std::vector<Compute_Node> &original_nodes, bool is_tracking_mappings)
     {
-        const Shader_Dictionary &shader_dict = Shader_Dictionary::getInstance();
-        Cached_Graph_Template tmpl;
+        const Shader_Dictionary &shader_dictionary = Shader_Dictionary::getInstance();
+        Cached_Graph_Template graph_template;
         if (original_nodes.empty())
         {
-            return tmpl;
+            return graph_template;
         }
 
-        Compute_Node current_fused;
-        current_fused.pipeline_id = original_nodes[0].pipeline_id;
-        current_fused.push_constants_data = original_nodes[0].push_constants_data;
-        current_fused.group_x = original_nodes[0].group_x;
-        current_fused.group_y = original_nodes[0].group_y;
-        current_fused.group_z = original_nodes[0].group_z;
-        current_fused.is_fused = false;
+        Compute_Node current_fused_node;
+        current_fused_node.pipeline_id = original_nodes[0].pipeline_id;
+        current_fused_node.push_constants_data = original_nodes[0].push_constants_data;
+        current_fused_node.workgroup_count_x = original_nodes[0].workgroup_count_x;
+        current_fused_node.workgroup_count_y = original_nodes[0].workgroup_count_y;
+        current_fused_node.workgroup_count_z = original_nodes[0].workgroup_count_z;
+        current_fused_node.is_fused = false;
 
-        std::vector<Buffer_Binding_Map> current_buf_map;
-        std::vector<Push_Constant_Map> current_pc_map;
-        std::vector<std::uint32_t> current_raw_indices;
+        std::vector<Buffer_Binding_Mapping> current_buffer_mappings;
+        std::vector<Push_Constant_Mapping> current_push_constants_mappings;
+        std::vector<std::uint32_t> current_raw_node_indices;
 
-        const Snippet_Metadata &first_meta = shader_dict.getMetadata(original_nodes[0].pipeline_id);
-        current_fused.fused_operations.push_back(
-            buildFusedOperation(current_fused, original_nodes[0], 0, first_meta, 0, track_mappings ? &current_buf_map : nullptr));
+        const Snippet_Metadata &first_metadata = shader_dictionary.getMetadata(original_nodes[0].pipeline_id);
+        current_fused_node.fused_operations.push_back(
+            buildFusedOperation(current_fused_node, original_nodes[0], 0, first_metadata, 0, is_tracking_mappings ? &current_buffer_mappings : nullptr));
 
-        if (track_mappings)
+        if (is_tracking_mappings)
         {
-            current_pc_map.push_back({0, 0, static_cast<std::uint32_t>(original_nodes[0].push_constants_data.size())});
-            current_raw_indices.push_back(0);
+            current_push_constants_mappings.push_back(Push_Constant_Mapping{
+                .raw_node_index = 0,
+                .fused_push_constants_offset = 0,
+                .push_constants_size = static_cast<std::uint32_t>(original_nodes[0].push_constants_data.size())});
+            current_raw_node_indices.push_back(0);
         }
 
         for (std::size_t i = 1; i < original_nodes.size(); ++i)
         {
             const Compute_Node &next_node = original_nodes[i];
 
-            bool share_buffer = false;
-            for (const auto &buf_a : current_fused.buffers)
+            bool is_sharing_buffer = false;
+            for (const auto &buffer_a : current_fused_node.buffers)
             {
-                if (!buf_a)
+                if (!buffer_a)
                 {
                     continue;
                 }
-                for (const auto &buf_b : next_node.buffers)
+                for (const auto &buffer_b : next_node.buffers)
                 {
-                    if (!buf_b)
+                    if (!buffer_b)
                     {
                         continue;
                     }
-                    if (buf_a == buf_b || (buf_a->getBuffer() != VK_NULL_HANDLE && buf_a->getBuffer() == buf_b->getBuffer()))
+                    if (buffer_a == buffer_b ||
+                        (buffer_a->getBuffer() != VK_NULL_HANDLE &&
+                         buffer_a->getBuffer() == buffer_b->getBuffer()))
                     {
-                        share_buffer = true;
+                        is_sharing_buffer = true;
                         break;
                     }
                 }
-                if (share_buffer)
+                if (is_sharing_buffer)
                 {
                     break;
                 }
             }
 
-            std::vector<std::shared_ptr<GVector>> unique_buffers;
-            for (const auto &new_buf : next_node.buffers)
+            std::vector<std::shared_ptr<gpu::vector>> unique_buffers;
+            for (const auto &new_buffer : next_node.buffers)
             {
-                bool exists = false;
-                for (const auto &exist_buf : current_fused.buffers)
+                bool is_existing = false;
+                for (const auto &existing_buffer : current_fused_node.buffers)
                 {
-                    if (new_buf && exist_buf && (new_buf == exist_buf || (new_buf->getBuffer() != VK_NULL_HANDLE && new_buf->getBuffer() == exist_buf->getBuffer())))
+                    if (new_buffer && existing_buffer &&
+                        (new_buffer == existing_buffer ||
+                         (new_buffer->getBuffer() != VK_NULL_HANDLE &&
+                          new_buffer->getBuffer() == existing_buffer->getBuffer())))
                     {
-                        exists = true;
+                        is_existing = true;
                         break;
                     }
                 }
-                if (!exists)
+                if (!is_existing)
                 {
-                    unique_buffers.push_back(new_buf);
+                    unique_buffers.push_back(new_buffer);
                 }
             }
 
-            std::size_t current_pc_bytes = current_fused.push_constants_data.size();
-            std::size_t aligned_pc_offset = alignTo4Bytes(current_pc_bytes);
-            std::size_t total_pc_size = aligned_pc_offset + next_node.push_constants_data.size();
+            std::size_t current_push_constants_bytes = current_fused_node.push_constants_data.size();
+            std::size_t aligned_push_constants_offset = alignTo4Bytes(current_push_constants_bytes);
+            std::size_t total_push_constants_size = aligned_push_constants_offset + next_node.push_constants_data.size();
 
-            bool pc_fits = (total_pc_size <= MAX_PUSH_CONSTANTS_BYTES);
-            if (!pc_fits)
+            bool does_push_constants_fit = (total_push_constants_size <= MAX_PUSH_CONSTANTS_BYTES);
+            std::size_t total_bindings = current_fused_node.buffers.size() + unique_buffers.size();
+            bool do_bindings_fit = (total_bindings <= MAX_STORAGE_BUFFER_BINDINGS);
+            bool does_chain_fit = (current_fused_node.fused_operations.size() < MAX_FUSED_OPERATIONS);
+
+            Compute_Pipeline producer_pipeline = current_fused_node.fused_operations[0].pipeline_id;
+            Compute_Pipeline consumer_pipeline = next_node.pipeline_id;
+
+            Operation_Class producer_class = shader_dictionary.getMetadata(producer_pipeline).operation_class;
+            Operation_Class consumer_class = shader_dictionary.getMetadata(consumer_pipeline).operation_class;
+
+            bool is_fusible_operation = !current_fused_node.fused_operations.empty() &&
+                                        isFusible(producer_class, consumer_class, producer_pipeline, consumer_pipeline);
+            bool are_dimensions_matching = hasCompatibleDimensions(current_fused_node, next_node, producer_class, consumer_class);
+            bool has_aliasing_hazard = hasAliasingHazard(current_fused_node, next_node, shader_dictionary);
+
+            if (is_sharing_buffer && does_push_constants_fit && do_bindings_fit && does_chain_fit &&
+                is_fusible_operation && are_dimensions_matching && !has_aliasing_hazard)
             {
-                Logger::logMessage(std::format("Graph_Optimizer::optimize: Push constants limit exceeded ({} > {} bytes) at pair {} -> {}",
-                                               total_pc_size, MAX_PUSH_CONSTANTS_BYTES, i - 1, i),
-                                   LOG_WARNING);
-            }
-
-            std::size_t total_bindings = current_fused.buffers.size() + unique_buffers.size();
-            bool bindings_fit = (total_bindings <= MAX_SSBO_BINDINGS);
-            if (!bindings_fit)
-            {
-                Logger::logMessage(std::format("Graph_Optimizer::optimize: SSBO bindings limit exceeded ({} > {}) at pair {} -> {}",
-                                               total_bindings, MAX_SSBO_BINDINGS, i - 1, i),
-                                   LOG_WARNING);
-            }
-
-            bool chain_fits = (current_fused.fused_operations.size() < MAX_FUSED_OPERATIONS);
-            if (!chain_fits)
-            {
-                GRAPH_OPTIMIZER_LOG_DEBUG(std::format("Graph_Optimizer::optimize: Max fused operations chain length reached ({}) at pair {} -> {}",
-                                                      MAX_FUSED_OPERATIONS, i - 1, i));
-            }
-
-            Compute_Pipeline producer_op = current_fused.fused_operations[0].pipeline_id;
-            Compute_Pipeline tail_op = current_fused.fused_operations.back().pipeline_id;
-            Compute_Pipeline consumer_op = next_node.pipeline_id;
-
-            Op_Class tail_class = shader_dict.getMetadata(tail_op).op_class;
-            Op_Class prod_class = shader_dict.getMetadata(producer_op).op_class;
-            Op_Class cons_class = shader_dict.getMetadata(consumer_op).op_class;
-
-            bool is_fusible_flag = !current_fused.fused_operations.empty() && isFusible(prod_class, cons_class, producer_op, tail_op);
-            bool check_dims = checkDimensions(current_fused, next_node, prod_class, cons_class);
-            bool has_hazard = hasAliasingHazard(current_fused, next_node, shader_dict);
-
-            if (has_hazard)
-            {
-                GRAPH_OPTIMIZER_LOG_DEBUG(std::format("Graph_Optimizer::optimize: Aliasing hazard detected between group and node {} ({}), preventing fusion",
-                                                      i, std::string(magic_enum::enum_name(consumer_op))));
-            }
-
-            if (share_buffer && pc_fits && bindings_fit && chain_fits && is_fusible_flag && check_dims && !has_hazard)
-            {
-                std::size_t padding_bytes = aligned_pc_offset - current_pc_bytes;
+                std::size_t padding_bytes = aligned_push_constants_offset - current_push_constants_bytes;
                 if (padding_bytes > 0)
                 {
-                    current_fused.push_constants_data.insert(
-                        current_fused.push_constants_data.end(),
+                    current_fused_node.push_constants_data.insert(
+                        current_fused_node.push_constants_data.end(),
                         padding_bytes,
                         0);
                 }
 
-                std::uint32_t current_pc_offset = static_cast<std::uint32_t>(aligned_pc_offset);
-                const Snippet_Metadata &next_meta = shader_dict.getMetadata(next_node.pipeline_id);
+                std::uint32_t current_push_constants_offset_val = static_cast<std::uint32_t>(aligned_push_constants_offset);
+                const Snippet_Metadata &next_metadata = shader_dictionary.getMetadata(next_node.pipeline_id);
 
-                current_fused.fused_operations.push_back(
-                    buildFusedOperation(current_fused, next_node, current_pc_offset, next_meta, static_cast<std::uint32_t>(i), track_mappings ? &current_buf_map : nullptr));
+                current_fused_node.fused_operations.push_back(
+                    buildFusedOperation(current_fused_node, next_node, current_push_constants_offset_val, next_metadata, static_cast<std::uint32_t>(i), is_tracking_mappings ? &current_buffer_mappings : nullptr));
 
-                if (track_mappings)
+                if (is_tracking_mappings)
                 {
-                    current_pc_map.push_back({static_cast<std::uint32_t>(i), current_pc_offset, static_cast<std::uint32_t>(next_node.push_constants_data.size())});
-                    current_raw_indices.push_back(static_cast<std::uint32_t>(i)); // Thêm node i vào cụm
+                    current_push_constants_mappings.push_back(Push_Constant_Mapping{
+                        .raw_node_index = static_cast<std::uint32_t>(i),
+                        .fused_push_constants_offset = current_push_constants_offset_val,
+                        .push_constants_size = static_cast<std::uint32_t>(next_node.push_constants_data.size())});
+                    current_raw_node_indices.push_back(static_cast<std::uint32_t>(i));
                 }
 
-                current_fused.push_constants_data.insert(
-                    current_fused.push_constants_data.end(),
+                current_fused_node.push_constants_data.insert(
+                    current_fused_node.push_constants_data.end(),
                     next_node.push_constants_data.begin(),
                     next_node.push_constants_data.end());
 
-                updateDispatchGrid(current_fused, next_node, prod_class, cons_class);
-                current_fused.is_fused = true;
+                updateDispatchGrid(current_fused_node, next_node, producer_class, consumer_class);
+                current_fused_node.is_fused = true;
             }
             else
             {
-                markExternalOutputs(current_fused, original_nodes, i);
+                markExternalOutputs(current_fused_node, original_nodes, i);
 
-                tmpl.fused_nodes.push_back(current_fused);
-                if (track_mappings)
+                graph_template.fused_nodes.push_back(current_fused_node);
+                if (is_tracking_mappings)
                 {
-                    tmpl.buffer_mappings.push_back(std::move(current_buf_map));
-                    tmpl.pc_mappings.push_back(std::move(current_pc_map));
-                    tmpl.raw_node_indices.push_back(std::move(current_raw_indices));
-                    current_buf_map.clear();
-                    current_pc_map.clear();
-                    current_raw_indices.clear();
+                    graph_template.buffer_mappings.push_back(std::move(current_buffer_mappings));
+                    graph_template.push_constants_mappings.push_back(std::move(current_push_constants_mappings));
+                    graph_template.raw_node_indices.push_back(std::move(current_raw_node_indices));
+                    current_buffer_mappings.clear();
+                    current_push_constants_mappings.clear();
+                    current_raw_node_indices.clear();
                 }
 
-                current_fused = Compute_Node{};
-                current_fused.pipeline_id = next_node.pipeline_id;
-                current_fused.push_constants_data = next_node.push_constants_data;
-                current_fused.group_x = next_node.group_x;
-                current_fused.group_y = next_node.group_y;
-                current_fused.group_z = next_node.group_z;
-                current_fused.is_fused = false;
+                current_fused_node = Compute_Node{};
+                current_fused_node.pipeline_id = next_node.pipeline_id;
+                current_fused_node.push_constants_data = next_node.push_constants_data;
+                current_fused_node.workgroup_count_x = next_node.workgroup_count_x;
+                current_fused_node.workgroup_count_y = next_node.workgroup_count_y;
+                current_fused_node.workgroup_count_z = next_node.workgroup_count_z;
+                current_fused_node.is_fused = false;
 
-                const Snippet_Metadata &meta = shader_dict.getMetadata(next_node.pipeline_id);
-                current_fused.fused_operations.push_back(
-                    buildFusedOperation(current_fused, next_node, 0, meta, static_cast<std::uint32_t>(i), track_mappings ? &current_buf_map : nullptr));
+                const Snippet_Metadata &metadata = shader_dictionary.getMetadata(next_node.pipeline_id);
+                current_fused_node.fused_operations.push_back(
+                    buildFusedOperation(current_fused_node, next_node, 0, metadata, static_cast<std::uint32_t>(i), is_tracking_mappings ? &current_buffer_mappings : nullptr));
 
-                if (track_mappings)
+                if (is_tracking_mappings)
                 {
-                    current_pc_map.push_back({static_cast<std::uint32_t>(i), 0, static_cast<std::uint32_t>(next_node.push_constants_data.size())});
-                    current_raw_indices.push_back(static_cast<std::uint32_t>(i));
+                    current_push_constants_mappings.push_back(Push_Constant_Mapping{
+                        .raw_node_index = static_cast<std::uint32_t>(i),
+                        .fused_push_constants_offset = 0,
+                        .push_constants_size = static_cast<std::uint32_t>(next_node.push_constants_data.size())});
+                    current_raw_node_indices.push_back(static_cast<std::uint32_t>(i));
                 }
             }
         }
 
-        markExternalOutputs(current_fused, original_nodes, original_nodes.size());
+        markExternalOutputs(current_fused_node, original_nodes, original_nodes.size());
 
-        tmpl.fused_nodes.push_back(current_fused);
-        if (track_mappings)
+        graph_template.fused_nodes.push_back(current_fused_node);
+        if (is_tracking_mappings)
         {
-            tmpl.buffer_mappings.push_back(std::move(current_buf_map));
-            tmpl.pc_mappings.push_back(std::move(current_pc_map));
-            tmpl.raw_node_indices.push_back(std::move(current_raw_indices));
+            graph_template.buffer_mappings.push_back(std::move(current_buffer_mappings));
+            graph_template.push_constants_mappings.push_back(std::move(current_push_constants_mappings));
+            graph_template.raw_node_indices.push_back(std::move(current_raw_node_indices));
         }
-        tmpl.is_valid = true;
 
-        return tmpl;
+        assignPipelineBarriers(graph_template.fused_nodes);
+        graph_template.is_valid = true;
+
+        return graph_template;
     }
 
 public:
     static void optimize(Compute_Graph &graph)
     {
 #if !ENABLE_SHADER_FUSION
-        Logger::logMessage("Graph_Optimizer::optimize: Shader fusion disabled via ENABLE_SHADER_FUSION", LOG_INFO, true);
+        auto nodes = graph.getNodes();
+        assignPipelineBarriers(nodes);
+        graph.clear();
+        for (const auto &node : nodes)
+        {
+            graph.addNode(node);
+        }
         return;
 #else
         const auto &original_nodes = graph.getNodes();
         if (original_nodes.empty())
         {
-            Logger::logMessage("Graph_Optimizer::optimize: Graph contains no nodes to optimize", LOG_WARNING);
             return;
         }
 
-        GRAPH_OPTIMIZER_LOG_DEBUG(std::format("Graph_Optimizer::optimize: Starting graph optimization for {} nodes", original_nodes.size()));
-
-        Cached_Graph_Template tmpl = optimizeInternal(original_nodes, false);
-
-        GRAPH_OPTIMIZER_LOG_DEBUG(std::format("Graph_Optimizer::optimize: Graph optimization complete. Nodes reduced from {} to {}",
-                                              original_nodes.size(), tmpl.fused_nodes.size()));
-
+        Cached_Graph_Template graph_template = optimizeInternal(original_nodes, false);
         graph.clear();
-        for (const auto &node : tmpl.fused_nodes)
+        for (const auto &node : graph_template.fused_nodes)
         {
             graph.addNode(node);
         }
@@ -583,92 +670,116 @@ public:
     }
 
     static void applyCachedTemplate(
-        const Compute_Graph &raw_graph,
-        const Cached_Graph_Template &tmpl,
-        Compute_Graph &out_graph)
+        const Compute_Graph &_raw_graph,
+        const Cached_Graph_Template &_graph_template,
+        Compute_Graph &_output_graph)
     {
 #if !ENABLE_SHADER_FUSION
-        out_graph = raw_graph;
-#else
-        if (!tmpl.is_valid)
+        _output_graph = _raw_graph;
+        auto nodes = _output_graph.getNodes();
+        assignPipelineBarriers(nodes);
+        _output_graph.clear();
+        for (const auto &node : nodes)
         {
-            out_graph = raw_graph;
+            _output_graph.addNode(node);
+        }
+#else
+        if (!_graph_template.is_valid)
+        {
+            _output_graph = _raw_graph;
+            auto nodes = _output_graph.getNodes();
+            assignPipelineBarriers(nodes);
+            _output_graph.clear();
+            for (const auto &node : nodes)
+            {
+                _output_graph.addNode(node);
+            }
             return;
         }
 
-        const auto &raw_nodes = raw_graph.getNodes();
-        const Shader_Dictionary &shader_dict = Shader_Dictionary::getInstance();
-        out_graph.clear();
+        const auto &raw_nodes = _raw_graph.getNodes();
+        const Shader_Dictionary &shader_dictionary = Shader_Dictionary::getInstance();
+        _output_graph.clear();
 
-        for (std::size_t node_idx = 0; node_idx < tmpl.fused_nodes.size(); ++node_idx)
+        for (std::size_t node_index = 0; node_index < _graph_template.fused_nodes.size(); ++node_index)
         {
-            Compute_Node node = tmpl.fused_nodes[node_idx];
+            Compute_Node node = _graph_template.fused_nodes[node_index];
 
-            for (const auto &b_map : tmpl.buffer_mappings[node_idx])
+            for (const auto &buffer_binding_mapping : _graph_template.buffer_mappings[node_index])
             {
-                if (b_map.raw_node_index < raw_nodes.size() && b_map.raw_buffer_index < raw_nodes[b_map.raw_node_index].buffers.size())
+                if (buffer_binding_mapping.raw_node_index < raw_nodes.size() &&
+                    buffer_binding_mapping.raw_buffer_index < raw_nodes[buffer_binding_mapping.raw_node_index].buffers.size())
                 {
-                    node.buffers[b_map.fused_buffer_index] = raw_nodes[b_map.raw_node_index].buffers[b_map.raw_buffer_index];
+                    auto old_buffer = node.buffers[buffer_binding_mapping.fused_buffer_index];
+                    auto new_buffer = raw_nodes[buffer_binding_mapping.raw_node_index].buffers[buffer_binding_mapping.raw_buffer_index];
+
+                    Logger::logMessage(std::format(
+                                           "Graph_Optimizer::applyCachedTemplate: Fused Node {} | Binding buffer_{} <- Raw Node {}[Buffer {}] (Old ID: {}, New ID: {})",
+                                           node_index,
+                                           buffer_binding_mapping.fused_buffer_index,
+                                           buffer_binding_mapping.raw_node_index,
+                                           buffer_binding_mapping.raw_buffer_index,
+                                           old_buffer ? old_buffer->getId() : 0,
+                                           new_buffer ? new_buffer->getId() : 0),
+                                       Log_Level::LOG_DEBUG,
+                                       true,
+                                       0,
+                                       Log_Feature::OPERATOR_FUSION);
+
+                    node.buffers[buffer_binding_mapping.fused_buffer_index] = raw_nodes[buffer_binding_mapping.raw_node_index].buffers[buffer_binding_mapping.raw_buffer_index];
                 }
             }
 
-            for (const auto &pc_map : tmpl.pc_mappings[node_idx])
+            for (const auto &push_constant_mapping : _graph_template.push_constants_mappings[node_index])
             {
-                if (pc_map.raw_node_index < raw_nodes.size())
+                if (push_constant_mapping.raw_node_index < raw_nodes.size())
                 {
-                    const auto &src_pc = raw_nodes[pc_map.raw_node_index].push_constants_data;
-
-                    if (src_pc.size() != pc_map.pc_size)
+                    const auto &source_push_constants = raw_nodes[push_constant_mapping.raw_node_index].push_constants_data;
+                    std::size_t copy_bytes = std::min<std::size_t>(source_push_constants.size(), push_constant_mapping.push_constants_size);
+                    if (push_constant_mapping.fused_push_constants_offset + copy_bytes <= node.push_constants_data.size())
                     {
-                        std::string err_msg = std::format("Graph_Optimizer::applyCachedTemplate: Push Constants size mismatch at raw node {}. Expected {}, got {}. Stale data hazard prevented.", pc_map.raw_node_index, pc_map.pc_size, src_pc.size());
-                        Logger::logMessage(err_msg, LOG_ERROR, true);
-                        throw std::runtime_error(err_msg);
-                    }
-
-                    if (pc_map.fused_pc_offset + pc_map.pc_size <= node.push_constants_data.size())
-                    {
-                        std::copy(src_pc.begin(), src_pc.end(), node.push_constants_data.begin() + pc_map.fused_pc_offset);
+                        std::copy_n(source_push_constants.begin(), copy_bytes, node.push_constants_data.begin() + push_constant_mapping.fused_push_constants_offset);
                     }
                 }
             }
 
-            if (node_idx < tmpl.raw_node_indices.size())
+            if (node_index < _graph_template.raw_node_indices.size())
             {
-                const auto &mapped_raw_indices = tmpl.raw_node_indices[node_idx];
+                const auto &mapped_raw_indices = _graph_template.raw_node_indices[node_index];
                 if (!mapped_raw_indices.empty())
                 {
-                    std::uint32_t first_raw_idx = mapped_raw_indices[0];
-                    node.group_x = raw_nodes[first_raw_idx].group_x;
-                    node.group_y = raw_nodes[first_raw_idx].group_y;
-                    node.group_z = raw_nodes[first_raw_idx].group_z;
+                    std::uint32_t first_raw_index = mapped_raw_indices[0];
+                    node.workgroup_count_x = raw_nodes[first_raw_index].workgroup_count_x;
+                    node.workgroup_count_y = raw_nodes[first_raw_index].workgroup_count_y;
+                    node.workgroup_count_z = raw_nodes[first_raw_index].workgroup_count_z;
 
                     if (!node.fused_operations.empty())
                     {
-                        node.fused_operations[0].group_x = raw_nodes[first_raw_idx].group_x;
-                        node.fused_operations[0].group_y = raw_nodes[first_raw_idx].group_y;
-                        node.fused_operations[0].group_z = raw_nodes[first_raw_idx].group_z;
+                        node.fused_operations[0].workgroup_count_x = raw_nodes[first_raw_index].workgroup_count_x;
+                        node.fused_operations[0].workgroup_count_y = raw_nodes[first_raw_index].workgroup_count_y;
+                        node.fused_operations[0].workgroup_count_z = raw_nodes[first_raw_index].workgroup_count_z;
                     }
 
-                    Op_Class prod_class = shader_dict.getMetadata(node.fused_operations[0].pipeline_id).op_class;
+                    Operation_Class producer_class = shader_dictionary.getMetadata(node.fused_operations[0].pipeline_id).operation_class;
 
                     for (std::size_t k = 1; k < mapped_raw_indices.size(); ++k)
                     {
-                        std::uint32_t next_raw_idx = mapped_raw_indices[k];
-                        Op_Class cons_class = shader_dict.getMetadata(raw_nodes[next_raw_idx].pipeline_id).op_class;
+                        std::uint32_t next_raw_index = mapped_raw_indices[k];
+                        Operation_Class consumer_class = shader_dictionary.getMetadata(raw_nodes[next_raw_index].pipeline_id).operation_class;
 
                         if (k < node.fused_operations.size())
                         {
-                            node.fused_operations[k].group_x = raw_nodes[next_raw_idx].group_x;
-                            node.fused_operations[k].group_y = raw_nodes[next_raw_idx].group_y;
-                            node.fused_operations[k].group_z = raw_nodes[next_raw_idx].group_z;
+                            node.fused_operations[k].workgroup_count_x = raw_nodes[next_raw_index].workgroup_count_x;
+                            node.fused_operations[k].workgroup_count_y = raw_nodes[next_raw_index].workgroup_count_y;
+                            node.fused_operations[k].workgroup_count_z = raw_nodes[next_raw_index].workgroup_count_z;
                         }
 
-                        updateDispatchGrid(node, raw_nodes[next_raw_idx], prod_class, cons_class);
+                        updateDispatchGrid(node, raw_nodes[next_raw_index], producer_class, consumer_class);
                     }
                 }
             }
 
-            out_graph.addNode(node);
+            _output_graph.addNode(node);
         }
 #endif
     }

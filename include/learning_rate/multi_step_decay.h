@@ -3,9 +3,11 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <format>
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "helper/logger.h"
@@ -14,41 +16,61 @@
 class Multi_Step_Decay : public ILearning_Rate
 {
 private:
-    float learning_rate;
-    float min_learning_rate;
-    float decay_rate;
-    float current_rate;
-    int current_epoch{0};
+    float learning_rate = 0.001f;
+    float minimum_learning_rate = 1e-6f;
+    float decay_rate = 0.1f;
+    float current_learning_rate = 0.001f;
+    int current_epoch = 0;
     std::vector<float> decay_epochs;
 
     void validateParameters()
     {
         if (learning_rate <= 0.0f)
         {
-            Logger::logMessage("Multi_Step_Decay::validateParameters: Initial learning rate must be greater than 0.", LOG_ERROR, true);
+            Logger::logMessage("Multi_Step_Decay::validateParameters: Initial learning rate must be greater than 0.",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::LR_SCHEDULER);
             throw std::invalid_argument("Initial learning rate must be greater than 0.");
         }
-        if (min_learning_rate < 0.0f || min_learning_rate > learning_rate)
+        if (minimum_learning_rate < 0.0f || minimum_learning_rate > learning_rate)
         {
-            Logger::logMessage("Multi_Step_Decay::validateParameters: min_learning_rate is out of valid bounds.", LOG_ERROR, true);
-            throw std::invalid_argument("min_learning_rate is out of valid bounds.");
+            Logger::logMessage("Multi_Step_Decay::validateParameters: minimum_learning_rate is out of valid bounds.",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::LR_SCHEDULER);
+            throw std::invalid_argument("minimum_learning_rate is out of valid bounds.");
         }
         if (decay_rate <= 0.0f || decay_rate >= 1.0f)
         {
-            Logger::logMessage("Multi_Step_Decay::validateParameters: decay_rate should be in range (0, 1).", LOG_ERROR, true);
+            Logger::logMessage("Multi_Step_Decay::validateParameters: decay_rate should be in range (0, 1).",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::LR_SCHEDULER);
             throw std::invalid_argument("decay_rate should be in range (0, 1).");
         }
         if (decay_epochs.empty())
         {
-            Logger::logMessage("Multi_Step_Decay::validateParameters: decay_epochs cannot be empty.", LOG_ERROR, true);
+            Logger::logMessage("Multi_Step_Decay::validateParameters: decay_epochs cannot be empty.",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::LR_SCHEDULER);
             throw std::invalid_argument("decay_epochs cannot be empty.");
         }
 
-        for (float epoch : decay_epochs)
+        for (float epoch_milestone : decay_epochs)
         {
-            if (epoch <= 0.0f)
+            if (epoch_milestone <= 0.0f)
             {
-                Logger::logMessage("Multi_Step_Decay::validateParameters: decay_epochs must contain positive values.", LOG_ERROR, true);
+                Logger::logMessage("Multi_Step_Decay::validateParameters: decay_epochs must contain positive values.",
+                                   Log_Level::LOG_ERROR,
+                                   true,
+                                   0,
+                                   Log_Feature::LR_SCHEDULER);
                 throw std::invalid_argument("decay_epochs must contain positive values.");
             }
         }
@@ -56,16 +78,22 @@ private:
     }
 
 public:
-    Multi_Step_Decay(float init_lr = 0.001f, float min_lr = 1e-6f, float lr_decay_rate = 0.1f, std::vector<float> epochs_list = {30.0f, 60.0f, 80.0f})
-        : learning_rate(init_lr), min_learning_rate(min_lr), decay_rate(lr_decay_rate),
-          current_rate(init_lr), decay_epochs(std::move(epochs_list))
+    Multi_Step_Decay(float _initial_learning_rate = 0.001f,
+                     float _minimum_learning_rate = 1e-6f,
+                     float _decay_rate = 0.1f,
+                     std::vector<float> _decay_epochs = {30.0f, 60.0f, 80.0f})
+        : learning_rate(_initial_learning_rate),
+          minimum_learning_rate(_minimum_learning_rate),
+          decay_rate(_decay_rate),
+          current_learning_rate(_initial_learning_rate),
+          decay_epochs(std::move(_decay_epochs))
     {
         validateParameters();
     }
 
-    ~Multi_Step_Decay() override = default;
+    ~Multi_Step_Decay() noexcept override = default;
 
-    Decay_Mode getType() const override
+    [[nodiscard]] Decay_Mode getType() const noexcept override
     {
         return Decay_Mode::MULTI_STEP_DECAY;
     }
@@ -81,61 +109,72 @@ public:
             }
         }
         float calculated_rate = learning_rate * std::pow(decay_rate, static_cast<float>(milestone_count));
-        if (calculated_rate < min_learning_rate)
+        if (calculated_rate < minimum_learning_rate)
         {
-            Logger::logMessage("Multi_Step_Decay::updateRate: Learning rate decayed below min_learning_rate, clamped.", LOG_WARNING);
+            Logger::logMessage("Multi_Step_Decay::updateRate: Learning rate decayed below minimum_learning_rate, clamped.",
+                               Log_Level::LOG_WARNING,
+                               false,
+                               0,
+                               Log_Feature::LR_SCHEDULER);
         }
-        current_rate = std::max(min_learning_rate, calculated_rate);
-        LR_LOG_DEBUG("Multi_Step_Decay::updateRate: epoch=" + std::to_string(current_epoch) + ", milestones_hit=" + std::to_string(milestone_count) + ", current_rate=" + std::to_string(current_rate));
-        return current_rate;
+        current_learning_rate = std::max(minimum_learning_rate, calculated_rate);
+        Logger::logMessage(std::format("Multi_Step_Decay::updateRate: epoch={}, milestones_hit={}, current_rate={}",
+                                       current_epoch,
+                                       milestone_count,
+                                       current_learning_rate),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::LR_SCHEDULER);
+        return current_learning_rate;
     }
 
-    void step(float current_val = 0.0f) override
+    void step(float _current_value = 0.0f) override
     {
         current_epoch++;
         updateRate();
     }
 
-    float getCurrentRate() const override
+    [[nodiscard]] float getCurrentRate() const noexcept override
     {
-        return current_rate;
+        return current_learning_rate;
     }
 
-    float getLearningRate() const override
+    [[nodiscard]] float getLearningRate() const noexcept override
     {
         return learning_rate;
     }
 
-    void saveCheckpoint(std::ofstream &stream) const override
+    void saveCheckpoint(std::ofstream &_output_file_stream) const override
     {
-        stream.write(reinterpret_cast<const char *>(&learning_rate), sizeof(learning_rate));
-        stream.write(reinterpret_cast<const char *>(&min_learning_rate), sizeof(min_learning_rate));
-        stream.write(reinterpret_cast<const char *>(&decay_rate), sizeof(decay_rate));
-        stream.write(reinterpret_cast<const char *>(&current_rate), sizeof(current_rate));
-        stream.write(reinterpret_cast<const char *>(&current_epoch), sizeof(current_epoch));
+        _output_file_stream.write(reinterpret_cast<const char *>(&learning_rate), sizeof(learning_rate));
+        _output_file_stream.write(reinterpret_cast<const char *>(&minimum_learning_rate), sizeof(minimum_learning_rate));
+        _output_file_stream.write(reinterpret_cast<const char *>(&decay_rate), sizeof(decay_rate));
+        _output_file_stream.write(reinterpret_cast<const char *>(&current_learning_rate), sizeof(current_learning_rate));
+        _output_file_stream.write(reinterpret_cast<const char *>(&current_epoch), sizeof(current_epoch));
 
         std::uint32_t vector_size = static_cast<std::uint32_t>(decay_epochs.size());
-        stream.write(reinterpret_cast<const char *>(&vector_size), sizeof(vector_size));
+        _output_file_stream.write(reinterpret_cast<const char *>(&vector_size), sizeof(vector_size));
         if (vector_size > 0)
         {
-            stream.write(reinterpret_cast<const char *>(decay_epochs.data()), vector_size * sizeof(float));
+            _output_file_stream.write(reinterpret_cast<const char *>(decay_epochs.data()), vector_size * sizeof(float));
         }
     }
 
-    void loadCheckpoint(std::ifstream &stream) override
+    void loadCheckpoint(std::ifstream &_input_file_stream) override
     {
-        stream.read(reinterpret_cast<char *>(&learning_rate), sizeof(learning_rate));
-        stream.read(reinterpret_cast<char *>(&min_learning_rate), sizeof(min_learning_rate));
-        stream.read(reinterpret_cast<char *>(&decay_rate), sizeof(decay_rate));
-        stream.read(reinterpret_cast<char *>(&current_rate), sizeof(current_rate));
-        stream.read(reinterpret_cast<char *>(&current_epoch), sizeof(current_epoch));
+        _input_file_stream.read(reinterpret_cast<char *>(&learning_rate), sizeof(learning_rate));
+        _input_file_stream.read(reinterpret_cast<char *>(&minimum_learning_rate), sizeof(minimum_learning_rate));
+        _input_file_stream.read(reinterpret_cast<char *>(&decay_rate), sizeof(decay_rate));
+        _input_file_stream.read(reinterpret_cast<char *>(&current_learning_rate), sizeof(current_learning_rate));
+        _input_file_stream.read(reinterpret_cast<char *>(&current_epoch), sizeof(current_epoch));
 
-        std::uint32_t vector_size{0};
-        stream.read(reinterpret_cast<char *>(&vector_size), sizeof(vector_size));
+        std::uint32_t vector_size = 0;
+        _input_file_stream.read(reinterpret_cast<char *>(&vector_size), sizeof(vector_size));
         decay_epochs.resize(vector_size);
         if (vector_size > 0)
         {
-            stream.read(reinterpret_cast<char *>(decay_epochs.data()), vector_size * sizeof(float));
+            _input_file_stream.read(reinterpret_cast<char *>(decay_epochs.data()), vector_size * sizeof(float));
         }
     }
 };

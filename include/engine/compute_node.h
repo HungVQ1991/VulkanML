@@ -1,35 +1,37 @@
 #pragma once
 
-#include <vector>
 #include <cstdint>
 #include <memory>
 #include <unordered_set>
-#include "vulkan_network.h"
+#include <vector>
+
 #include "gpu_vector.h"
+#include "vulkan_network.h"
 
 struct Fused_Operation
 {
-    Compute_Pipeline pipeline_id;
-    std::uint32_t pc_offset;
-    std::uint32_t pc_size;
-    std::vector<std::uint32_t> input_buffer_indices;  
+    Compute_Pipeline pipeline_id = Compute_Pipeline::ADD;
+    std::uint32_t push_constants_offset = 0;
+    std::uint32_t push_constants_size = 0;
+    std::vector<std::uint32_t> input_buffer_indices;
     std::vector<std::uint32_t> output_buffer_indices;
-    std::uint32_t group_x = 1;
-    std::uint32_t group_y = 1;
-    std::uint32_t group_z = 1;
+    std::uint32_t workgroup_count_x = 1;
+    std::uint32_t workgroup_count_y = 1;
+    std::uint32_t workgroup_count_z = 1;
 };
 
 struct Compute_Node
 {
-    Compute_Pipeline pipeline_id;
-    std::vector<std::shared_ptr<GVector>> buffers;
+    Compute_Pipeline pipeline_id = Compute_Pipeline::ADD;
+    std::vector<std::shared_ptr<gpu::vector>> buffers;
     std::vector<std::uint8_t> push_constants_data;
     std::unordered_set<std::uint32_t> external_output_indices;
 
-    std::uint32_t group_x;
-    std::uint32_t group_y;
-    std::uint32_t group_z;
+    std::uint32_t workgroup_count_x = 1;
+    std::uint32_t workgroup_count_y = 1;
+    std::uint32_t workgroup_count_z = 1;
 
     bool is_fused = false;
+    bool is_barrier_required_after = false;
     std::vector<Fused_Operation> fused_operations;
 };

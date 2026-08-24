@@ -1,205 +1,168 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
+#include <format>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
+#include "engine/gpu_vector.h"
 #include "helper/logger.h"
 
-#ifndef ENABLE_MATRIX_DEBUG_LOGS
-#define ENABLE_MATRIX_DEBUG_LOGS 0
-#endif
-
-#if ENABLE_MATRIX_DEBUG_LOGS
-#define MATRIX_LOG_DEBUG(msg) Logger::logMessage(msg, LOG_DEBUG)
-#else
-#define MATRIX_LOG_DEBUG(msg) ((void)0)
-#endif
+using Storage_Handle = std::variant<std::reference_wrapper<const std::vector<float>>, std::shared_ptr<gpu::vector>>;
+using Mutable_Storage_Handle = std::variant<std::reference_wrapper<std::vector<float>>, std::shared_ptr<gpu::vector>>;
 
 class Impl
 {
 public:
     virtual ~Impl() noexcept = default;
 
-    virtual std::size_t getRows() const = 0;
-    virtual std::size_t getCols() const = 0;
-    virtual const std::vector<float> &getData() const = 0;
+    [[nodiscard]] virtual Storage_Handle getStorage() const = 0;
+    [[nodiscard]] virtual Mutable_Storage_Handle getStorage() = 0;
+    [[nodiscard]] virtual std::size_t getRows() const noexcept = 0;
+    [[nodiscard]] virtual std::size_t getColumns() const noexcept = 0;
+    [[nodiscard]] virtual std::size_t getCols() const noexcept { return getColumns(); }
+    [[nodiscard]] virtual const std::vector<float> &getData() const noexcept = 0;
 
-    void validateSameDimensions(const Impl &other_impl) const
+    virtual void reshape(std::size_t _rows, std::size_t _columns) = 0;
+
+    void validateSameDimensions(const Impl &_other_implementation) const
     {
-        if (getRows() != other_impl.getRows() || getCols() != other_impl.getCols())
+        if (getRows() != _other_implementation.getRows() || getColumns() != _other_implementation.getColumns())
         {
-            std::string err_msg = "Impl::validateSameDimensions: Matrix dimension mismatch: (" + std::to_string(getRows()) + "x" +
-                                  std::to_string(getCols()) + ") vs (" + std::to_string(other_impl.getRows()) + "x" +
-                                  std::to_string(other_impl.getCols()) + ")";
-            Logger::logMessage(err_msg, LOG_ERROR, true);
-            throw std::invalid_argument(err_msg);
+            std::string error_message = std::format("Impl::validateSameDimensions: Matrix dimension mismatch: ({}x{}) vs ({}x{})",
+                                                    getRows(), getColumns(), _other_implementation.getRows(), _other_implementation.getColumns());
+            Logger::logMessage(error_message, Log_Level::LOG_ERROR, true, 0, Log_Feature::TENSOR_INSPECTION);
+            throw std::invalid_argument(error_message);
         }
     }
 
-    void validateMatmulDimensions(const Impl &other_impl) const
+    void validateMatmulDimensions(const Impl &_other_implementation) const
     {
-        if (getCols() != other_impl.getRows())
+        if (getColumns() != _other_implementation.getRows())
         {
-            std::string err_msg = "Impl::validateMatmulDimensions: Matrix matmul dimension mismatch: cols_a (" + std::to_string(getCols()) +
-                                  ") != rows_b (" + std::to_string(other_impl.getRows()) + ")";
-            Logger::logMessage(err_msg, LOG_ERROR, true);
-            throw std::invalid_argument(err_msg);
+            std::string error_message = std::format("Impl::validateMatmulDimensions: Matrix matmul dimension mismatch: columns_a ({}) != rows_b ({})",
+                                                    getColumns(), _other_implementation.getRows());
+            Logger::logMessage(error_message, Log_Level::LOG_ERROR, true, 0, Log_Feature::DENSE_COMPUTE | Log_Feature::TENSOR_INSPECTION);
+            throw std::invalid_argument(error_message);
         }
     }
 
     void validateSquare() const
     {
-        if (getRows() != getCols())
+        if (getRows() != getColumns())
         {
-            std::string err_msg = "Impl::validateSquare: Matrix is not square: (" + std::to_string(getRows()) + "x" +
-                                  std::to_string(getCols()) + ")";
-            Logger::logMessage(err_msg, LOG_ERROR, true);
-            throw std::invalid_argument(err_msg);
+            std::string error_message = std::format("Impl::validateSquare: Matrix is not square: ({}x{})",
+                                                    getRows(), getColumns());
+            Logger::logMessage(error_message, Log_Level::LOG_ERROR, true, 0, Log_Feature::TENSOR_INSPECTION);
+            throw std::invalid_argument(error_message);
         }
     }
 
-    virtual std::shared_ptr<GVector> getGVector() { return {}; }
+    [[nodiscard]] virtual std::shared_ptr<gpu::vector> getVector() { return {}; }
 
-    virtual std::shared_ptr<Impl> matmul(const std::shared_ptr<Impl> &other_impl) const = 0;
-    virtual std::shared_ptr<Impl> matdiv(const std::shared_ptr<Impl> &other_impl) const = 0;
-    virtual std::shared_ptr<Impl> add(const std::shared_ptr<Impl> &other_impl) const = 0;
-    virtual std::shared_ptr<Impl> sub(const std::shared_ptr<Impl> &other_impl) const = 0;
-    virtual std::shared_ptr<Impl> mulScalar(float scalar) const = 0;
-    virtual std::shared_ptr<Impl> divScalar(float scalar) const = 0;
-    virtual std::shared_ptr<Impl> hadamardMul(const std::shared_ptr<Impl> &other_impl) const = 0;
-    virtual std::shared_ptr<Impl> hadamardDiv(const std::shared_ptr<Impl> &other_impl) const = 0;
-    virtual std::shared_ptr<Impl> transpose() const = 0;
-    virtual std::shared_ptr<Impl> inverse() const = 0;
-    virtual std::shared_ptr<Impl> normalize() const = 0;
-    virtual std::shared_ptr<Impl> relu() const = 0;
-    virtual std::shared_ptr<Impl> reluBackward(const std::shared_ptr<Impl> &gradient) const = 0;
-    virtual std::shared_ptr<Impl> gelu() const = 0;
-    virtual std::shared_ptr<Impl> geluBackward(const std::shared_ptr<Impl> &gradient) const = 0;
-    virtual std::shared_ptr<Impl> softmax() const = 0;
-    virtual std::shared_ptr<Impl> softmaxBackward(const std::shared_ptr<Impl> &gradient) const = 0;
-    virtual void sgdUpdate(const std::shared_ptr<Impl> &grad_impl, float learning_rate, float max_gradient = 0.0f) = 0;
+    virtual void matmul(const Impl &_other_implementation, Impl &_output_result) const = 0;
+    virtual void matdiv(const Impl &_other_implementation, Impl &_output_result) const = 0;
+    virtual void add(const Impl &_other_implementation, Impl &_output_result) const = 0;
+    virtual void sub(const Impl &_other_implementation, Impl &_output_result) const = 0;
+    virtual void mulScalar(float _scalar, Impl &_output_result) const = 0;
+    virtual void divScalar(float _scalar, Impl &_output_result) const = 0;
+    virtual void hadamardMul(const Impl &_other_implementation, Impl &_output_result) const = 0;
+    virtual void hadamardDiv(const Impl &_other_implementation, Impl &_output_result) const = 0;
+    virtual void transpose(Impl &_output_result) const = 0;
+    virtual void inverse(Impl &_output_result) const = 0;
+    virtual void normalize(Impl &_output_result) const = 0;
+    virtual void relu(Impl &_output_result) const = 0;
+    virtual void reluBackward(const Impl &_output_gradient, Impl &_input_gradient) const = 0;
+    virtual void gelu(Impl &_output_result) const = 0;
+    virtual void geluBackward(const Impl &_output_gradient, Impl &_input_gradient) const = 0;
+    virtual void softmax(Impl &_output_result) const = 0;
+    virtual void softmaxBackward(const Impl &_output_gradient, Impl &_input_gradient) const = 0;
+
+    virtual void sgdUpdate(const Impl &_gradient_implementation, float _learning_rate, float _max_gradient = 0.0f) = 0;
     virtual void adamUpdate(
-        const std::shared_ptr<Impl> &grad_impl,
-        const std::shared_ptr<Impl> &m_impl,
-        const std::shared_ptr<Impl> &v_impl,
-        float learning_rate,
-        float beta1,
-        float beta2,
-        float epsilon,
-        std::size_t timestep,
-        float max_gradient = 1.0f) = 0;
-    virtual std::shared_ptr<Impl> matmulAdd(const std::shared_ptr<Impl> &other, const std::shared_ptr<Impl> &bias) const = 0;
-    virtual void uploadData(const std::vector<float> &host_data) = 0;
-    virtual std::shared_ptr<Impl> conv2d(
-        const std::shared_ptr<Impl> &weights,
-        const std::shared_ptr<Impl> &bias,
-        std::uint32_t in_h, std::uint32_t in_w, std::uint32_t in_c,
-        std::uint32_t out_c, std::uint32_t kernel_size,
-        std::uint32_t stride, std::uint32_t padding) const = 0;
+        const Impl &_gradient_implementation,
+        const Impl &_first_moment_implementation,
+        const Impl &_second_moment_implementation,
+        float _learning_rate,
+        float _beta1,
+        float _beta2,
+        float _epsilon,
+        std::size_t _timestep,
+        float _max_gradient = 1.0f) = 0;
 
-    virtual std::shared_ptr<Impl> conv2dBackwardInput(
-        const std::shared_ptr<Impl> &weights,
-        std::uint32_t in_h, std::uint32_t in_w, std::uint32_t in_c,
-        std::uint32_t out_h, std::uint32_t out_w, std::uint32_t out_c,
-        std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const = 0;
+    virtual void matmulAdd(const Impl &_other_implementation, const Impl &_bias_implementation, Impl &_output_result) const = 0;
+
+    virtual void uploadData(const std::vector<float> &_host_data) = 0;
+
+    virtual void conv2d(
+        const Impl &_weights, const Impl &_biases, Impl &_output_result,
+        std::uint32_t _input_height, std::uint32_t _input_width, std::uint32_t _input_channels,
+        std::uint32_t _output_channels, std::uint32_t _kernel_size,
+        std::uint32_t _stride, std::uint32_t _padding) const = 0;
+
+    virtual void conv2dBackwardInput(
+        const Impl &_weights, Impl &_input_gradient,
+        std::uint32_t _input_height, std::uint32_t _input_width, std::uint32_t _input_channels,
+        std::uint32_t _output_height, std::uint32_t _output_width, std::uint32_t _output_channels,
+        std::uint32_t _kernel_size, std::uint32_t _stride, std::uint32_t _padding) const = 0;
 
     virtual void conv2dBackwardWeight(
-        const std::shared_ptr<Impl> &grad_output,
-        const std::shared_ptr<Impl> &grad_weights,
-        const std::shared_ptr<Impl> &grad_biases,
-        std::uint32_t in_h, std::uint32_t in_w, std::uint32_t in_c,
-        std::uint32_t out_h, std::uint32_t out_w, std::uint32_t out_c,
-        std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const = 0;
+        const Impl &_output_gradient, Impl &_weight_gradient, Impl &_bias_gradient,
+        std::uint32_t _input_height, std::uint32_t _input_width, std::uint32_t _input_channels,
+        std::uint32_t _output_height, std::uint32_t _output_width, std::uint32_t _output_channels,
+        std::uint32_t _kernel_size, std::uint32_t _stride, std::uint32_t _padding) const = 0;
 
     virtual void maxpool2d(
-        Impl &out_result,
-        Impl &out_mask,
-        std::uint32_t in_h, std::uint32_t in_w, std::uint32_t channels,
-        std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const = 0;
+        Impl &_output_result, Impl &_output_mask,
+        std::uint32_t _input_height, std::uint32_t _input_width, std::uint32_t _input_channels,
+        std::uint32_t _kernel_size, std::uint32_t _stride, std::uint32_t _padding) const = 0;
 
     virtual void maxpool2dBackward(
-        const Impl &mask,
-        Impl &grad_input,
-        std::uint32_t in_h, std::uint32_t in_w, std::uint32_t channels,
-        std::uint32_t out_h, std::uint32_t out_w,
-        std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const = 0;
+        const Impl &_mask, Impl &_input_gradient,
+        std::uint32_t _input_height, std::uint32_t _input_width, std::uint32_t _input_channels,
+        std::uint32_t _output_height, std::uint32_t _output_width,
+        std::uint32_t _kernel_size, std::uint32_t _stride, std::uint32_t _padding) const = 0;
 
-    virtual std::shared_ptr<Impl> globalAvgPool2d(std::uint32_t in_h, std::uint32_t in_w, std::uint32_t channels) const = 0;
-    virtual std::shared_ptr<Impl> globalAvgPool2dBackward(std::uint32_t in_h, std::uint32_t in_w, std::uint32_t channels) const = 0;
-    virtual std::shared_ptr<Impl> batchNormForward(
-        const std::shared_ptr<Impl> &gamma,
-        const std::shared_ptr<Impl> &beta,
-        std::shared_ptr<Impl> &running_mean,
-        std::shared_ptr<Impl> &running_var,
-        std::shared_ptr<Impl> &batch_mean,
-        std::shared_ptr<Impl> &batch_var,
-        std::shared_ptr<Impl> &x_hat,
-        float epsilon,
-        float momentum,
-        bool is_training) const = 0;
+    virtual void globalAvgPool2d(Impl &_output_result, std::uint32_t _input_height, std::uint32_t _input_width, std::uint32_t _channels) const = 0;
+    virtual void globalAvgPool2dBackward(Impl &_input_gradient, std::uint32_t _input_height, std::uint32_t _input_width, std::uint32_t _channels) const = 0;
 
-    virtual std::shared_ptr<Impl> batchNormBackward(
-        const std::shared_ptr<Impl> &grad_output,
-        const std::shared_ptr<Impl> &gamma,
-        const std::shared_ptr<Impl> &batch_var,
-        const std::shared_ptr<Impl> &x_hat,
-        std::shared_ptr<Impl> &grad_gamma,
-        std::shared_ptr<Impl> &grad_beta,
-        float epsilon) const = 0;
+    virtual void batchNormForward(
+        const Impl &_gamma, const Impl &_beta, Impl &_running_mean, Impl &_running_variance,
+        Impl &_batch_mean, Impl &_batch_variance, Impl &_normalized_input, Impl &_output_result,
+        float _epsilon, float _momentum, bool _is_training) const = 0;
 
-    virtual void linearForward(
-        const Impl &weights_w,
-        const Impl &biases_b,
-        Impl &output_y) const = 0;
+    virtual void batchNormBackward(
+        const Impl &_output_gradient, const Impl &_gamma, const Impl &_batch_variance, const Impl &_normalized_input,
+        Impl &_gamma_gradient, Impl &_beta_gradient, Impl &_input_gradient, float _epsilon) const = 0;
 
-    virtual void linearBackwardInput(
-        const Impl &weights_w,
-        Impl &grad_x) const = 0;
-
-    virtual void linearBackwardWeightBias(
-        const Impl &grad_y,
-        Impl &grad_w,
-        Impl &grad_b) const = 0;
+    virtual void linearForward(const Impl &_weights, const Impl &_biases, Impl &_output_result) const = 0;
+    virtual void linearBackwardInput(const Impl &_weights, Impl &_input_gradient) const = 0;
+    virtual void linearBackwardWeightBias(const Impl &_output_gradient, Impl &_weight_gradient, Impl &_bias_gradient) const = 0;
 
     virtual void batchNorm2dForward(
-        const Impl &gamma,
-        const Impl &beta,
-        Impl &running_mean,
-        Impl &running_var,
-        Impl &batch_mean,
-        Impl &batch_var,
-        Impl &x_hat,
-        Impl &output_y,
-        std::uint32_t in_h, std::uint32_t in_w, std::uint32_t in_c,
-        float epsilon, float momentum, bool is_training) const = 0;
+        const Impl &_gamma, const Impl &_beta,
+        Impl &_running_mean, Impl &_running_variance,
+        Impl &_batch_mean, Impl &_batch_variance,
+        Impl &_normalized_input, Impl &_output_result,
+        std::uint32_t _input_height, std::uint32_t _input_width, std::uint32_t _input_channels,
+        float _epsilon, float _momentum, bool _is_training) const = 0;
 
     virtual void batchNorm2dBackward(
-        const Impl &gamma,
-        const Impl &batch_var,
-        const Impl &x_hat,
-        Impl &grad_gamma,
-        Impl &grad_beta,
-        Impl &grad_input,
-        std::uint32_t in_h,
-        std::uint32_t in_w,
-        std::uint32_t in_c,
-        float epsilon) const = 0;
+        const Impl &_gamma, const Impl &_batch_variance, const Impl &_normalized_input,
+        Impl &_gamma_gradient, Impl &_beta_gradient, Impl &_input_gradient,
+        std::uint32_t _input_height, std::uint32_t _input_width, std::uint32_t _input_channels, float _epsilon) const = 0;
 
-    virtual std::shared_ptr<Impl> cceLoss(
-        const std::shared_ptr<Impl> &target_impl,
-        float epsilon_val) const = 0;
-    virtual std::shared_ptr<Impl> mseLoss(
-        const std::shared_ptr<Impl> &target_impl) const = 0;
+    virtual void cceLoss(const Impl &_target_implementation, Impl &_output_result, float _epsilon) const = 0;
+    virtual void mseLoss(const Impl &_target_implementation, Impl &_output_result) const = 0;
+    virtual void maeLoss(const Impl &_target_implementation, Impl &_output_result) const = 0;
+    virtual void bceLoss(const Impl &_target_implementation, Impl &_output_result, float _epsilon) const = 0;
 
-    virtual std::shared_ptr<Impl> maeLoss(
-        const std::shared_ptr<Impl> &target_impl) const = 0;
-
-    virtual std::shared_ptr<Impl> bceLoss(
-        const std::shared_ptr<Impl> &target_impl,
-        float epsilon_val) const = 0;
+    [[nodiscard]] virtual bool isEmpty() const noexcept = 0;
 };
