@@ -32,7 +32,7 @@ private:
     std::unique_ptr<Graph_Executor> graph_executor;
 
     std::unordered_map<std::size_t, Cached_Graph_Template> cached_graph_templates;
-    bool is_graph_cache_enabled = false;
+    bool is_graph_cache_enabled = true;
 
     std::size_t computeGraphSignature(const Compute_Graph &graph) const
     {
@@ -77,6 +77,19 @@ private:
             }
         }
         return graph_signature_hash;
+    }
+
+    void precompileTemplatePipelines(Cached_Graph_Template &_template)
+    {
+        for (auto &fused_node : _template.fused_nodes)
+        {
+            if (fused_node.is_fused && fused_node.fused_operations.size() > 1)
+            {
+                graph_executor->getExternalBufferIndices(fused_node, fused_node.cached_external_buffer_indices);
+                fused_node.fused_glsl_code = graph_executor->generateFusedGlsl(fused_node);
+                fused_node.cached_pipeline = pipeline_cache_manager->getOrCreatePipeline(fused_node.fused_glsl_code);
+            }
+        }
     }
 
     Execution_Engine()
@@ -136,77 +149,77 @@ public:
         return instance;
     }
 
-     const Vulkan_Context &getContext() const noexcept
+    [[nodiscard]] const Vulkan_Context &getContext() const noexcept
     {
         return *context;
     }
 
-     Vulkan_Context &getContext() noexcept
+    [[nodiscard]] Vulkan_Context &getContext() noexcept
     {
         return *context;
     }
 
-     const Vulkan_Network &getNetwork() const noexcept
+    [[nodiscard]] const Vulkan_Network &getNetwork() const noexcept
     {
         return *network;
     }
 
-     Vulkan_Network &getNetwork() noexcept
+    [[nodiscard]] Vulkan_Network &getNetwork() noexcept
     {
         return *network;
     }
 
-     const Pipeline_Cache_Manager &getPipelineCacheManager() const noexcept
+    [[nodiscard]] const Pipeline_Cache_Manager &getPipelineCacheManager() const noexcept
     {
         return *pipeline_cache_manager;
     }
 
-     Pipeline_Cache_Manager &getPipelineCacheManager() noexcept
+    [[nodiscard]] Pipeline_Cache_Manager &getPipelineCacheManager() noexcept
     {
         return *pipeline_cache_manager;
     }
 
-     const Shader_Dictionary &getShaderDictionary() const noexcept
+    [[nodiscard]] const Shader_Dictionary &getShaderDictionary() const noexcept
     {
         return *shader_dictionary;
     }
 
-     Shader_Dictionary &getShaderDictionary() noexcept
+    [[nodiscard]] Shader_Dictionary &getShaderDictionary() noexcept
     {
         return *shader_dictionary;
     }
 
-     const Graph_Executor &getGraphExecutor() const noexcept
+    [[nodiscard]] const Graph_Executor &getGraphExecutor() const noexcept
     {
         return *graph_executor;
     }
 
-     Graph_Executor &getGraphExecutor() noexcept
+    [[nodiscard]] Graph_Executor &getGraphExecutor() noexcept
     {
         return *graph_executor;
     }
 
-     const Compute_Graph &getCurrentGraph() const noexcept
+    [[nodiscard]] const Compute_Graph &getCurrentGraph() const noexcept
     {
         return current_graph;
     }
 
-     Compute_Graph &getCurrentGraph() noexcept
+    [[nodiscard]] Compute_Graph &getCurrentGraph() noexcept
     {
         return current_graph;
     }
 
-     const std::string &getShaderFolderPath() const noexcept
+    [[nodiscard]] const std::string &getShaderFolderPath() const noexcept
     {
         return shader_folder_path;
     }
 
-     const std::unordered_map<std::size_t, Cached_Graph_Template> &getCachedGraphTemplates() const noexcept
+    [[nodiscard]] const std::unordered_map<std::size_t, Cached_Graph_Template> &getCachedGraphTemplates() const noexcept
     {
         return cached_graph_templates;
     }
 
-     bool isGraphCacheEnabled() const noexcept
+    [[nodiscard]] bool isGraphCacheEnabled() const noexcept
     {
         return is_graph_cache_enabled;
     }
@@ -245,7 +258,9 @@ public:
         auto template_iterator = cached_graph_templates.find(graph_signature);
         if (template_iterator == cached_graph_templates.end())
         {
-            template_iterator = cached_graph_templates.emplace(graph_signature, Graph_Optimizer::buildCachedTemplate(_raw_graph)).first;
+            auto [inserted_iterator, is_inserted] = cached_graph_templates.emplace(graph_signature, Graph_Optimizer::buildCachedTemplate(_raw_graph));
+            template_iterator = inserted_iterator;
+            precompileTemplatePipelines(template_iterator->second);
         }
 
         Compute_Graph optimized_graph;
@@ -285,7 +300,9 @@ public:
             auto template_iterator = cached_graph_templates.find(graph_signature);
             if (template_iterator == cached_graph_templates.end())
             {
-                template_iterator = cached_graph_templates.emplace(graph_signature, Graph_Optimizer::buildCachedTemplate(current_graph)).first;
+                auto [inserted_iterator, is_inserted] = cached_graph_templates.emplace(graph_signature, Graph_Optimizer::buildCachedTemplate(current_graph));
+                template_iterator = inserted_iterator;
+                precompileTemplatePipelines(template_iterator->second);
             }
 
             Compute_Graph optimized_graph;

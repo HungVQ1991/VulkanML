@@ -262,7 +262,7 @@ double runBenchmark(Execution_Target _execution_target,
         _images_count,
         BATCH_SIZE,
         Execution_Engine::getInstance().getContext().getDevice(),
-        true);
+        false);
 
     data_pipeline.initializeBuffers(BATCH_SIZE, INPUT_DIMENSION, OUTPUT_DIMENSION, _execution_target);
 
@@ -391,7 +391,7 @@ void evaluateModel(Neural_Network &_neural_network,
 
 int main()
 {
-    Logger::setFileLogging(true);
+    Logger::setFileLogging(false);
     Logger::setOnlyActiveFeatures(Log_Feature::NONE);
     Logger::setConsoleOutput(true);
 

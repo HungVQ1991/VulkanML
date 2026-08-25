@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <format>
@@ -27,6 +28,7 @@ private:
 
     std::unordered_map<std::size_t, VkPipeline> cached_pipelines;
     mutable std::mutex cache_mutex;
+    std::atomic<bool> is_frozen{false};
     VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
     std::string cache_file_path = "temp/pipeline_cache.bin";
 
@@ -58,54 +60,72 @@ public:
     Pipeline_Cache_Manager(const Pipeline_Cache_Manager &) = delete;
     Pipeline_Cache_Manager &operator=(const Pipeline_Cache_Manager &) = delete;
 
-    Pipeline_Cache_Manager(Pipeline_Cache_Manager &&other) noexcept = default;
-    Pipeline_Cache_Manager &operator=(Pipeline_Cache_Manager &&other) noexcept = default;
+    Pipeline_Cache_Manager(Pipeline_Cache_Manager &&_other) noexcept = default;
+    Pipeline_Cache_Manager &operator=(Pipeline_Cache_Manager &&_other) noexcept = default;
 
-     const Vulkan_Context &getContext() const noexcept
+    [[nodiscard]] const Vulkan_Context &getContext() const noexcept
     {
         return context;
     }
 
-     VkPipelineLayout getPipelineLayout() const noexcept
+    [[nodiscard]] VkPipelineLayout getPipelineLayout() const noexcept
     {
         return pipeline_layout;
     }
 
-     const Shader_Compiler &getShaderCompiler() const noexcept
+    [[nodiscard]] const Shader_Compiler &getShaderCompiler() const noexcept
     {
         return shader_compiler;
     }
 
-     Shader_Compiler &getShaderCompiler() noexcept
+    [[nodiscard]] Shader_Compiler &getShaderCompiler() noexcept
     {
         return shader_compiler;
     }
 
-     VkPipelineCache getPipelineCache() const noexcept
+    [[nodiscard]] VkPipelineCache getPipelineCache() const noexcept
     {
         return pipeline_cache;
     }
 
-     const std::string &getCacheFilePath() const noexcept
+    [[nodiscard]] const std::string &getCacheFilePath() const noexcept
     {
         return cache_file_path;
     }
 
-     const std::unordered_map<std::size_t, VkPipeline> &getCachedPipelines() const noexcept
+    [[nodiscard]] const std::unordered_map<std::size_t, VkPipeline> &getCachedPipelines() const noexcept
     {
         return cached_pipelines;
     }
 
-     std::size_t getCachedPipelineCount() const noexcept
+    void freezeCache(bool _freeze = true) noexcept
     {
+        is_frozen.store(_freeze, std::memory_order_release);
+    }
+
+    [[nodiscard]] bool isFrozen() const noexcept
+    {
+        return is_frozen.load(std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] std::size_t getCachedPipelineCount() const noexcept
+    {
+        if (is_frozen.load(std::memory_order_relaxed))
+        {
+            return cached_pipelines.size();
+        }
         std::lock_guard<std::mutex> lock(cache_mutex);
         return cached_pipelines.size();
     }
 
-     bool hasPipeline(std::size_t code_hash) const noexcept
+    [[nodiscard]] bool hasPipeline(std::size_t _code_hash) const noexcept
     {
+        if (is_frozen.load(std::memory_order_relaxed))
+        {
+            return cached_pipelines.contains(_code_hash);
+        }
         std::lock_guard<std::mutex> lock(cache_mutex);
-        return cached_pipelines.contains(code_hash);
+        return cached_pipelines.contains(_code_hash);
     }
 
     void setCacheFilePath(const std::string &_cache_file_path)
@@ -237,9 +257,17 @@ public:
         }
     }
 
-    VkPipeline getOrCreatePipeline(const std::string &glsl_code)
+    VkPipeline getOrCreatePipeline(const std::string &_glsl_code)
     {
-        std::size_t code_hash = std::hash<std::string>{}(glsl_code);
+        std::size_t code_hash = std::hash<std::string>{}(_glsl_code);
+
+        if (is_frozen.load(std::memory_order_acquire))
+        {
+            if (auto pipeline_iterator = cached_pipelines.find(code_hash); pipeline_iterator != cached_pipelines.end())
+            {
+                return pipeline_iterator->second;
+            }
+        }
 
         {
             std::lock_guard<std::mutex> lock(cache_mutex);
@@ -260,7 +288,7 @@ public:
                            0,
                            Log_Feature::SHADER_GENERATION);
 
-        std::vector<std::uint32_t> spirv_code = shader_compiler.compileGlslToSpirv(glsl_code, "fused_compute_shader");
+        std::vector<std::uint32_t> spirv_code = shader_compiler.compileGlslToSpirv(_glsl_code, "fused_compute_shader");
 
         VkShaderModuleCreateInfo shader_module_create_information{
             .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,

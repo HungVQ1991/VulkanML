@@ -839,27 +839,31 @@ public:
         }
     }
 
-    void prepareFrame() const
+    void prepareFrame()
     {
-        if (!is_frame_ready[current_frame])
+        if (is_frame_ready[current_frame])
         {
-            if (device != VK_NULL_HANDLE && fences[current_frame] != VK_NULL_HANDLE)
-            {
-                vkWaitForFences(device, 1, &fences[current_frame], VK_TRUE, UINT64_MAX);
-
-                cleanGarbage(current_frame);
-                is_frame_ready[current_frame] = true;
-            }
-            else
-            {
-                Logger::logMessage(std::format("Vulkan_Context::prepareFrame: Invalid device or fence handle for frame {}", current_frame),
-                                   Log_Level::LOG_ERROR,
-                                   true,
-                                   0,
-                                   Log_Feature::DEVICE_MANAGEMENT | Log_Feature::SYNCHRONIZATION);
-                throw std::runtime_error("invalid handle");
-            }
+            return;
         }
+
+        if (device == VK_NULL_HANDLE || fences[current_frame] == VK_NULL_HANDLE)
+        {
+            Logger::logMessage(std::format("Vulkan_Context::prepareFrame: Invalid device or fence handle for frame {}", current_frame),
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::DEVICE_MANAGEMENT | Log_Feature::SYNCHRONIZATION);
+            throw std::runtime_error("invalid handle");
+        }
+
+        VkResult fence_status = vkGetFenceStatus(device, fences[current_frame]);
+        if (fence_status == VK_NOT_READY)
+        {
+            vkWaitForFences(device, 1, &fences[current_frame], VK_TRUE, UINT64_MAX);
+        }
+
+        cleanGarbage(current_frame);
+        is_frame_ready[current_frame] = true;
     }
 
     void advanceFrame() const

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -205,6 +206,320 @@ private:
             }
         }
         return _text;
+    }
+
+    void executeFallbackNode(VkCommandBuffer _command_buffer, const Compute_Node &_node, std::size_t _node_index, std::uint32_t _frame_index)
+    {
+        VkDevice device = context.getDevice();
+        VkDescriptorSetLayout layout = network.getDescriptorSetLayout();
+
+        if (_node_index >= fallback_descriptor_caches[_frame_index].size())
+        {
+            fallback_descriptor_caches[_frame_index].resize(_node_index + 1);
+        }
+
+        auto &node_fallback_entries = fallback_descriptor_caches[_frame_index][_node_index];
+        if (node_fallback_entries.size() < _node.fused_operations.size())
+        {
+            node_fallback_entries.resize(_node.fused_operations.size());
+        }
+
+        for (std::size_t operation_index = 0; operation_index < _node.fused_operations.size(); ++operation_index)
+        {
+            const auto &operation = _node.fused_operations[operation_index];
+
+            shared_fused_buffers.clear();
+            for (std::uint32_t index : operation.input_buffer_indices)
+            {
+                if (index < _node.buffers.size())
+                {
+                    shared_fused_buffers.push_back(_node.buffers[index]);
+                }
+            }
+            for (std::uint32_t index : operation.output_buffer_indices)
+            {
+                if (index < _node.buffers.size())
+                {
+                    shared_fused_buffers.push_back(_node.buffers[index]);
+                }
+            }
+
+            auto &entry = node_fallback_entries[operation_index];
+            if (entry.descriptor_set == VK_NULL_HANDLE)
+            {
+                VkDescriptorSetAllocateInfo allocate_information{
+                    .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                    .pNext = nullptr,
+                    .descriptorPool = descriptor_pools[_frame_index],
+                    .descriptorSetCount = 1,
+                    .pSetLayouts = &layout};
+
+                if (vkAllocateDescriptorSets(device, &allocate_information, &entry.descriptor_set) != VK_SUCCESS)
+                {
+                    Logger::logMessage(std::format("Graph_Executor::executeFallbackNode: Failed to allocate descriptor set for fallback op {}", operation_index),
+                                       Log_Level::LOG_ERROR,
+                                       true,
+                                       0,
+                                       Log_Feature::DISPATCH_EXECUTION);
+                    throw std::runtime_error("Failed to allocate descriptor set");
+                }
+            }
+
+            if (!isBuffersMatching(entry, shared_fused_buffers))
+            {
+                updateDescriptorSet(entry.descriptor_set, shared_fused_buffers);
+                entry.bound_binding_indices.clear();
+                entry.bound_buffers.resize(shared_fused_buffers.size());
+                for (std::size_t j = 0; j < shared_fused_buffers.size(); ++j)
+                {
+                    entry.bound_buffers[j] = shared_fused_buffers[j] ? shared_fused_buffers[j]->getBuffer() : VK_NULL_HANDLE;
+                }
+            }
+
+            VkPipeline static_pipeline = network.getPipeline(operation.pipeline_id);
+
+            vkCmdBindPipeline(_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, static_pipeline);
+            vkCmdBindDescriptorSets(_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, network.getPipelineLayout(), 0, 1, &entry.descriptor_set, 0, nullptr);
+
+            if (operation.push_constants_size > 0 && operation.push_constants_offset + operation.push_constants_size <= _node.push_constants_data.size())
+            {
+                vkCmdPushConstants(
+                    _command_buffer,
+                    network.getPipelineLayout(),
+                    VK_SHADER_STAGE_COMPUTE_BIT,
+                    0,
+                    operation.push_constants_size,
+                    _node.push_constants_data.data() + operation.push_constants_offset);
+            }
+
+            vkCmdDispatch(_command_buffer, operation.workgroup_count_x, operation.workgroup_count_y, operation.workgroup_count_z);
+
+            if (operation_index < _node.fused_operations.size() - 1)
+            {
+                insertMemoryBarrier(_command_buffer);
+            }
+        }
+    }
+
+    void initializeResources()
+    {
+        Logger::logMessage("Graph_Executor::initializeResources: Allocating compute command buffers and descriptor pools",
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::DEVICE_MANAGEMENT | Log_Feature::DISPATCH_EXECUTION);
+
+        VkDevice device = context.getDevice();
+
+        VkCommandBufferAllocateInfo allocate_information{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .pNext = nullptr,
+            .commandPool = context.getCommandPool(),
+            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = MAX_FRAMES_IN_FLIGHT};
+
+        if (vkAllocateCommandBuffers(device, &allocate_information, command_buffers) != VK_SUCCESS)
+        {
+            Logger::logMessage("Graph_Executor::initializeResources: Failed to allocate command buffers",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::DEVICE_MANAGEMENT | Log_Feature::DISPATCH_EXECUTION);
+            throw std::runtime_error("Failed to allocate command buffers");
+        }
+
+        VkDescriptorPoolSize pool_sizes[] = {
+            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 16000}};
+
+        VkDescriptorPoolCreateInfo pool_create_information{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .maxSets = 4000,
+            .poolSizeCount = 1,
+            .pPoolSizes = pool_sizes};
+
+        for (std::uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        {
+            if (vkCreateDescriptorPool(device, &pool_create_information, nullptr, &descriptor_pools[i]) != VK_SUCCESS)
+            {
+                Logger::logMessage(std::format("Graph_Executor::initializeResources: Failed to create descriptor pool for frame {}", i),
+                                   Log_Level::LOG_ERROR,
+                                   true,
+                                   0,
+                                   Log_Feature::DEVICE_MANAGEMENT | Log_Feature::DISPATCH_EXECUTION);
+                throw std::runtime_error("Failed to create descriptor pool");
+            }
+        }
+
+        shared_descriptor_buffer_informations.reserve(32);
+        shared_write_descriptor_sets.reserve(32);
+        shared_fused_buffers.reserve(32);
+        shared_external_buffer_indices.reserve(32);
+    }
+
+    void insertMemoryBarrier(VkCommandBuffer _command_buffer) const
+    {
+        VkMemoryBarrier memory_barrier{
+            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+            .pNext = nullptr,
+            .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT};
+
+        vkCmdPipelineBarrier(
+            _command_buffer,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0,
+            1, &memory_barrier,
+            0, nullptr,
+            0, nullptr);
+    }
+
+    void updateDescriptorSet(VkDescriptorSet _descriptor_set, const std::vector<std::shared_ptr<gpu::vector>> &_buffers) const
+    {
+        if (_buffers.empty())
+        {
+            Logger::logMessage("Graph_Executor::updateDescriptorSet: Node buffers vector is empty",
+                               Log_Level::LOG_WARNING,
+                               false,
+                               0,
+                               Log_Feature::DISPATCH_EXECUTION);
+            return;
+        }
+
+        VkDevice device = context.getDevice();
+        std::size_t count = _buffers.size();
+
+        shared_descriptor_buffer_informations.clear();
+        shared_write_descriptor_sets.clear();
+
+        for (std::size_t i = 0; i < count; ++i)
+        {
+            if (!_buffers[i] || _buffers[i]->getBuffer() == VK_NULL_HANDLE)
+            {
+                Logger::logMessage(std::format("Graph_Executor::updateDescriptorSet: Null buffer encountered at index {}", i),
+                                   Log_Level::LOG_WARNING,
+                                   true,
+                                   0,
+                                   Log_Feature::DISPATCH_EXECUTION);
+                continue;
+            }
+
+            shared_descriptor_buffer_informations.push_back(VkDescriptorBufferInfo{
+                .buffer = _buffers[i]->getBuffer(),
+                .offset = 0,
+                .range = VK_WHOLE_SIZE});
+
+            shared_write_descriptor_sets.push_back(VkWriteDescriptorSet{
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = nullptr,
+                .dstSet = _descriptor_set,
+                .dstBinding = static_cast<std::uint32_t>(i),
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .pImageInfo = nullptr,
+                .pBufferInfo = nullptr,
+                .pTexelBufferView = nullptr});
+        }
+
+        for (std::size_t i = 0; i < shared_write_descriptor_sets.size(); ++i)
+        {
+            shared_write_descriptor_sets[i].pBufferInfo = &shared_descriptor_buffer_informations[i];
+        }
+
+        if (!shared_write_descriptor_sets.empty())
+        {
+            vkUpdateDescriptorSets(device, static_cast<std::uint32_t>(shared_write_descriptor_sets.size()), shared_write_descriptor_sets.data(), 0, nullptr);
+        }
+    }
+
+    void updateDescriptorSet(VkDescriptorSet _descriptor_set,
+                             const std::vector<std::uint32_t> &_binding_indices,
+                             const std::vector<std::shared_ptr<gpu::vector>> &_buffers) const
+    {
+        if (_buffers.empty() || _binding_indices.size() != _buffers.size())
+        {
+            Logger::logMessage("Graph_Executor::updateDescriptorSet: Mismatched or empty binding/buffer list",
+                               Log_Level::LOG_WARNING,
+                               true,
+                               0,
+                               Log_Feature::DISPATCH_EXECUTION);
+            return;
+        }
+
+        VkDevice device = context.getDevice();
+        std::size_t count = _buffers.size();
+
+        shared_descriptor_buffer_informations.clear();
+        shared_write_descriptor_sets.clear();
+
+        for (std::size_t i = 0; i < count; ++i)
+        {
+            if (!_buffers[i] || _buffers[i]->getBuffer() == VK_NULL_HANDLE)
+            {
+                continue;
+            }
+
+            shared_descriptor_buffer_informations.push_back(VkDescriptorBufferInfo{
+                .buffer = _buffers[i]->getBuffer(),
+                .offset = 0,
+                .range = VK_WHOLE_SIZE});
+
+            shared_write_descriptor_sets.push_back(VkWriteDescriptorSet{
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = nullptr,
+                .dstSet = _descriptor_set,
+                .dstBinding = _binding_indices[i],
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .pImageInfo = nullptr,
+                .pBufferInfo = nullptr,
+                .pTexelBufferView = nullptr});
+        }
+
+        for (std::size_t i = 0; i < shared_write_descriptor_sets.size(); ++i)
+        {
+            shared_write_descriptor_sets[i].pBufferInfo = &shared_descriptor_buffer_informations[i];
+        }
+
+        if (!shared_write_descriptor_sets.empty())
+        {
+            vkUpdateDescriptorSets(device, static_cast<std::uint32_t>(shared_write_descriptor_sets.size()), shared_write_descriptor_sets.data(), 0, nullptr);
+        }
+    }
+
+public:
+    Graph_Executor(const Vulkan_Context &_context,
+                   const Vulkan_Network &_network,
+                   Pipeline_Cache_Manager &_pipeline_cache_manager,
+                   const Shader_Dictionary &_shader_dictionary)
+        : context(_context),
+          network(_network),
+          pipeline_cache_manager(_pipeline_cache_manager),
+          shader_dictionary(_shader_dictionary)
+    {
+        initializeResources();
+    }
+
+    ~Graph_Executor()
+    {
+        Logger::logMessage("Graph_Executor::~Graph_Executor: Cleaning up Vulkan descriptor pools and command buffers",
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::DEVICE_MANAGEMENT | Log_Feature::DISPATCH_EXECUTION);
+        VkDevice device = context.getDevice();
+        for (std::uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        {
+            if (descriptor_pools[i] != VK_NULL_HANDLE)
+            {
+                vkDestroyDescriptorPool(device, descriptor_pools[i], nullptr);
+            }
+        }
+        vkFreeCommandBuffers(device, context.getCommandPool(), MAX_FRAMES_IN_FLIGHT, command_buffers);
     }
 
     void getExternalBufferIndices(const Compute_Node &_node, std::vector<std::uint32_t> &_output_indices) const
@@ -692,350 +1007,35 @@ private:
                                0,
                                Log_Feature::SHADER_GENERATION | Log_Feature::OPERATOR_FUSION);
         }
-
         return glsl_code;
     }
 
-    void executeFallbackNode(VkCommandBuffer _command_buffer, const Compute_Node &_node, std::size_t _node_index, std::uint32_t _frame_index)
-    {
-        VkDevice device = context.getDevice();
-        VkDescriptorSetLayout layout = network.getDescriptorSetLayout();
-
-        if (_node_index >= fallback_descriptor_caches[_frame_index].size())
-        {
-            fallback_descriptor_caches[_frame_index].resize(_node_index + 1);
-        }
-
-        auto &node_fallback_entries = fallback_descriptor_caches[_frame_index][_node_index];
-        if (node_fallback_entries.size() < _node.fused_operations.size())
-        {
-            node_fallback_entries.resize(_node.fused_operations.size());
-        }
-
-        for (std::size_t operation_index = 0; operation_index < _node.fused_operations.size(); ++operation_index)
-        {
-            const auto &operation = _node.fused_operations[operation_index];
-
-            shared_fused_buffers.clear();
-            for (std::uint32_t index : operation.input_buffer_indices)
-            {
-                if (index < _node.buffers.size())
-                {
-                    shared_fused_buffers.push_back(_node.buffers[index]);
-                }
-            }
-            for (std::uint32_t index : operation.output_buffer_indices)
-            {
-                if (index < _node.buffers.size())
-                {
-                    shared_fused_buffers.push_back(_node.buffers[index]);
-                }
-            }
-
-            auto &entry = node_fallback_entries[operation_index];
-            if (entry.descriptor_set == VK_NULL_HANDLE)
-            {
-                VkDescriptorSetAllocateInfo allocate_information{
-                    .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-                    .pNext = nullptr,
-                    .descriptorPool = descriptor_pools[_frame_index],
-                    .descriptorSetCount = 1,
-                    .pSetLayouts = &layout};
-
-                if (vkAllocateDescriptorSets(device, &allocate_information, &entry.descriptor_set) != VK_SUCCESS)
-                {
-                    Logger::logMessage(std::format("Graph_Executor::executeFallbackNode: Failed to allocate descriptor set for fallback op {}", operation_index),
-                                       Log_Level::LOG_ERROR,
-                                       true,
-                                       0,
-                                       Log_Feature::DISPATCH_EXECUTION);
-                    throw std::runtime_error("Failed to allocate descriptor set");
-                }
-            }
-
-            if (!isBuffersMatching(entry, shared_fused_buffers))
-            {
-                updateDescriptorSet(entry.descriptor_set, shared_fused_buffers);
-                entry.bound_binding_indices.clear();
-                entry.bound_buffers.resize(shared_fused_buffers.size());
-                for (std::size_t j = 0; j < shared_fused_buffers.size(); ++j)
-                {
-                    entry.bound_buffers[j] = shared_fused_buffers[j] ? shared_fused_buffers[j]->getBuffer() : VK_NULL_HANDLE;
-                }
-            }
-
-            VkPipeline static_pipeline = network.getPipeline(operation.pipeline_id);
-
-            vkCmdBindPipeline(_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, static_pipeline);
-            vkCmdBindDescriptorSets(_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, network.getPipelineLayout(), 0, 1, &entry.descriptor_set, 0, nullptr);
-
-            if (operation.push_constants_size > 0 && operation.push_constants_offset + operation.push_constants_size <= _node.push_constants_data.size())
-            {
-                vkCmdPushConstants(
-                    _command_buffer,
-                    network.getPipelineLayout(),
-                    VK_SHADER_STAGE_COMPUTE_BIT,
-                    0,
-                    operation.push_constants_size,
-                    _node.push_constants_data.data() + operation.push_constants_offset);
-            }
-
-            vkCmdDispatch(_command_buffer, operation.workgroup_count_x, operation.workgroup_count_y, operation.workgroup_count_z);
-
-            if (operation_index < _node.fused_operations.size() - 1)
-            {
-                insertMemoryBarrier(_command_buffer);
-            }
-        }
-    }
-
-    void initializeResources()
-    {
-        Logger::logMessage("Graph_Executor::initializeResources: Allocating compute command buffers and descriptor pools",
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::DEVICE_MANAGEMENT | Log_Feature::DISPATCH_EXECUTION);
-
-        VkDevice device = context.getDevice();
-
-        VkCommandBufferAllocateInfo allocate_information{
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-            .pNext = nullptr,
-            .commandPool = context.getCommandPool(),
-            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-            .commandBufferCount = MAX_FRAMES_IN_FLIGHT};
-
-        if (vkAllocateCommandBuffers(device, &allocate_information, command_buffers) != VK_SUCCESS)
-        {
-            Logger::logMessage("Graph_Executor::initializeResources: Failed to allocate command buffers",
-                               Log_Level::LOG_ERROR,
-                               true,
-                               0,
-                               Log_Feature::DEVICE_MANAGEMENT | Log_Feature::DISPATCH_EXECUTION);
-            throw std::runtime_error("Failed to allocate command buffers");
-        }
-
-        VkDescriptorPoolSize pool_sizes[] = {
-            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 16000}};
-
-        VkDescriptorPoolCreateInfo pool_create_information{
-            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .maxSets = 4000,
-            .poolSizeCount = 1,
-            .pPoolSizes = pool_sizes};
-
-        for (std::uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
-        {
-            if (vkCreateDescriptorPool(device, &pool_create_information, nullptr, &descriptor_pools[i]) != VK_SUCCESS)
-            {
-                Logger::logMessage(std::format("Graph_Executor::initializeResources: Failed to create descriptor pool for frame {}", i),
-                                   Log_Level::LOG_ERROR,
-                                   true,
-                                   0,
-                                   Log_Feature::DEVICE_MANAGEMENT | Log_Feature::DISPATCH_EXECUTION);
-                throw std::runtime_error("Failed to create descriptor pool");
-            }
-        }
-
-        shared_descriptor_buffer_informations.reserve(32);
-        shared_write_descriptor_sets.reserve(32);
-        shared_fused_buffers.reserve(32);
-        shared_external_buffer_indices.reserve(32);
-    }
-
-    void insertMemoryBarrier(VkCommandBuffer _command_buffer) const
-    {
-        VkMemoryBarrier memory_barrier{
-            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
-            .pNext = nullptr,
-            .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
-            .dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT};
-
-        vkCmdPipelineBarrier(
-            _command_buffer,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            0,
-            1, &memory_barrier,
-            0, nullptr,
-            0, nullptr);
-    }
-
-    void updateDescriptorSet(VkDescriptorSet _descriptor_set, const std::vector<std::shared_ptr<gpu::vector>> &_buffers) const
-    {
-        if (_buffers.empty())
-        {
-            Logger::logMessage("Graph_Executor::updateDescriptorSet: Node buffers vector is empty",
-                               Log_Level::LOG_WARNING,
-                               false,
-                               0,
-                               Log_Feature::DISPATCH_EXECUTION);
-            return;
-        }
-
-        VkDevice device = context.getDevice();
-        std::size_t count = _buffers.size();
-
-        shared_descriptor_buffer_informations.clear();
-        shared_write_descriptor_sets.clear();
-
-        for (std::size_t i = 0; i < count; ++i)
-        {
-            if (!_buffers[i] || _buffers[i]->getBuffer() == VK_NULL_HANDLE)
-            {
-                Logger::logMessage(std::format("Graph_Executor::updateDescriptorSet: Null buffer encountered at index {}", i),
-                                   Log_Level::LOG_WARNING,
-                                   true,
-                                   0,
-                                   Log_Feature::DISPATCH_EXECUTION);
-                continue;
-            }
-
-            shared_descriptor_buffer_informations.push_back(VkDescriptorBufferInfo{
-                .buffer = _buffers[i]->getBuffer(),
-                .offset = 0,
-                .range = VK_WHOLE_SIZE});
-
-            shared_write_descriptor_sets.push_back(VkWriteDescriptorSet{
-                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .pNext = nullptr,
-                .dstSet = _descriptor_set,
-                .dstBinding = static_cast<std::uint32_t>(i),
-                .dstArrayElement = 0,
-                .descriptorCount = 1,
-                .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                .pImageInfo = nullptr,
-                .pBufferInfo = nullptr,
-                .pTexelBufferView = nullptr});
-        }
-
-        for (std::size_t i = 0; i < shared_write_descriptor_sets.size(); ++i)
-        {
-            shared_write_descriptor_sets[i].pBufferInfo = &shared_descriptor_buffer_informations[i];
-        }
-
-        if (!shared_write_descriptor_sets.empty())
-        {
-            vkUpdateDescriptorSets(device, static_cast<std::uint32_t>(shared_write_descriptor_sets.size()), shared_write_descriptor_sets.data(), 0, nullptr);
-        }
-    }
-
-    void updateDescriptorSet(VkDescriptorSet _descriptor_set,
-                             const std::vector<std::uint32_t> &_binding_indices,
-                             const std::vector<std::shared_ptr<gpu::vector>> &_buffers) const
-    {
-        if (_buffers.empty() || _binding_indices.size() != _buffers.size())
-        {
-            Logger::logMessage("Graph_Executor::updateDescriptorSet: Mismatched or empty binding/buffer list",
-                               Log_Level::LOG_WARNING,
-                               true,
-                               0,
-                               Log_Feature::DISPATCH_EXECUTION);
-            return;
-        }
-
-        VkDevice device = context.getDevice();
-        std::size_t count = _buffers.size();
-
-        shared_descriptor_buffer_informations.clear();
-        shared_write_descriptor_sets.clear();
-
-        for (std::size_t i = 0; i < count; ++i)
-        {
-            if (!_buffers[i] || _buffers[i]->getBuffer() == VK_NULL_HANDLE)
-            {
-                continue;
-            }
-
-            shared_descriptor_buffer_informations.push_back(VkDescriptorBufferInfo{
-                .buffer = _buffers[i]->getBuffer(),
-                .offset = 0,
-                .range = VK_WHOLE_SIZE});
-
-            shared_write_descriptor_sets.push_back(VkWriteDescriptorSet{
-                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .pNext = nullptr,
-                .dstSet = _descriptor_set,
-                .dstBinding = _binding_indices[i],
-                .dstArrayElement = 0,
-                .descriptorCount = 1,
-                .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                .pImageInfo = nullptr,
-                .pBufferInfo = nullptr,
-                .pTexelBufferView = nullptr});
-        }
-
-        for (std::size_t i = 0; i < shared_write_descriptor_sets.size(); ++i)
-        {
-            shared_write_descriptor_sets[i].pBufferInfo = &shared_descriptor_buffer_informations[i];
-        }
-
-        if (!shared_write_descriptor_sets.empty())
-        {
-            vkUpdateDescriptorSets(device, static_cast<std::uint32_t>(shared_write_descriptor_sets.size()), shared_write_descriptor_sets.data(), 0, nullptr);
-        }
-    }
-
-public:
-    Graph_Executor(const Vulkan_Context &_context,
-                   const Vulkan_Network &_network,
-                   Pipeline_Cache_Manager &_pipeline_cache_manager,
-                   const Shader_Dictionary &_shader_dictionary)
-        : context(_context),
-          network(_network),
-          pipeline_cache_manager(_pipeline_cache_manager),
-          shader_dictionary(_shader_dictionary)
-    {
-        initializeResources();
-    }
-
-    ~Graph_Executor()
-    {
-        Logger::logMessage("Graph_Executor::~Graph_Executor: Cleaning up Vulkan descriptor pools and command buffers",
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::DEVICE_MANAGEMENT | Log_Feature::DISPATCH_EXECUTION);
-        VkDevice device = context.getDevice();
-        for (std::uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
-        {
-            if (descriptor_pools[i] != VK_NULL_HANDLE)
-            {
-                vkDestroyDescriptorPool(device, descriptor_pools[i], nullptr);
-            }
-        }
-        vkFreeCommandBuffers(device, context.getCommandPool(), MAX_FRAMES_IN_FLIGHT, command_buffers);
-    }
-
-     const Vulkan_Context &getContext() const noexcept
+    const Vulkan_Context &getContext() const noexcept
     {
         return context;
     }
 
-     const Vulkan_Network &getNetwork() const noexcept
+    const Vulkan_Network &getNetwork() const noexcept
     {
         return network;
     }
 
-     Pipeline_Cache_Manager &getPipelineCacheManager() noexcept
+    Pipeline_Cache_Manager &getPipelineCacheManager() noexcept
     {
         return pipeline_cache_manager;
     }
 
-     const Pipeline_Cache_Manager &getPipelineCacheManager() const noexcept
+    const Pipeline_Cache_Manager &getPipelineCacheManager() const noexcept
     {
         return pipeline_cache_manager;
     }
 
-     const Shader_Dictionary &getShaderDictionary() const noexcept
+    const Shader_Dictionary &getShaderDictionary() const noexcept
     {
         return shader_dictionary;
     }
 
-     VkCommandBuffer getCommandBuffer(std::uint32_t _frame_index) const
+    VkCommandBuffer getCommandBuffer(std::uint32_t _frame_index) const
     {
         if (_frame_index >= MAX_FRAMES_IN_FLIGHT)
         {
@@ -1049,7 +1049,7 @@ public:
         return command_buffers[_frame_index];
     }
 
-     VkDescriptorPool getDescriptorPool(std::uint32_t _frame_index) const
+    VkDescriptorPool getDescriptorPool(std::uint32_t _frame_index) const
     {
         if (_frame_index >= MAX_FRAMES_IN_FLIGHT)
         {
@@ -1219,14 +1219,21 @@ public:
             {
                 try
                 {
-                    std::string glsl_code = generateFusedGlsl(node);
-                    VkPipeline target_pipeline = pipeline_cache_manager.getOrCreatePipeline(glsl_code);
+                    VkPipeline target_pipeline = node.cached_pipeline;
+                    if (target_pipeline == VK_NULL_HANDLE)
+                    {
+                        std::string glsl_code = node.fused_glsl_code.empty() ? generateFusedGlsl(node) : node.fused_glsl_code;
+                        target_pipeline = pipeline_cache_manager.getOrCreatePipeline(glsl_code);
+                    }
 
                     if (target_pipeline != VK_NULL_HANDLE)
                     {
-                        getExternalBufferIndices(node, shared_external_buffer_indices);
+                        const std::vector<std::uint32_t> &external_indices = !node.cached_external_buffer_indices.empty()
+                                                                                 ? node.cached_external_buffer_indices
+                                                                                 : (getExternalBufferIndices(node, shared_external_buffer_indices), shared_external_buffer_indices);
+
                         shared_fused_buffers.clear();
-                        for (std::uint32_t buffer_index : shared_external_buffer_indices)
+                        for (std::uint32_t buffer_index : external_indices)
                         {
                             if (buffer_index < node.buffers.size())
                             {
@@ -1256,10 +1263,10 @@ public:
                             }
                         }
 
-                        if (!isBuffersMatching(entry, shared_external_buffer_indices, shared_fused_buffers))
+                        if (!isBuffersMatching(entry, external_indices, shared_fused_buffers))
                         {
-                            updateDescriptorSet(entry.descriptor_set, shared_external_buffer_indices, shared_fused_buffers);
-                            entry.bound_binding_indices = shared_external_buffer_indices;
+                            updateDescriptorSet(entry.descriptor_set, external_indices, shared_fused_buffers);
+                            entry.bound_binding_indices = external_indices;
                             entry.bound_buffers.resize(shared_fused_buffers.size());
                             for (std::size_t j = 0; j < shared_fused_buffers.size(); ++j)
                             {
@@ -1392,9 +1399,9 @@ public:
         }
     }
 
-    void warmupPipelineCache(const Compute_Graph &_graph)
+    void warmupPipelineCache(Compute_Graph &_graph)
     {
-        const std::vector<Compute_Node> &nodes = _graph.getNodes();
+        auto &nodes = _graph.getNodes();
         if (nodes.empty())
         {
             return;
@@ -1406,14 +1413,21 @@ public:
                            0,
                            Log_Feature::SHADER_GENERATION | Log_Feature::DISPATCH_EXECUTION);
 
-        for (const auto &node : nodes)
+        for (Compute_Node &node : nodes)
         {
             if (node.is_fused && node.fused_operations.size() > 1)
             {
                 try
                 {
-                    std::string glsl_code = generateFusedGlsl(node);
-                    pipeline_cache_manager.getOrCreatePipeline(glsl_code);
+                    if (node.cached_external_buffer_indices.empty())
+                    {
+                        getExternalBufferIndices(node, node.cached_external_buffer_indices);
+                    }
+                    if (node.fused_glsl_code.empty())
+                    {
+                        node.fused_glsl_code = generateFusedGlsl(node);
+                    }
+                    node.cached_pipeline = pipeline_cache_manager.getOrCreatePipeline(node.fused_glsl_code);
                 }
                 catch (const std::exception &exception)
                 {
@@ -1429,5 +1443,7 @@ public:
                 network.getPipeline(node.pipeline_id);
             }
         }
+
+        pipeline_cache_manager.freezeCache(true);
     }
 };

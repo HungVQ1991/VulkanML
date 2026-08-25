@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -100,10 +101,10 @@ private:
     static constexpr std::size_t MAX_RING_BUFFER_ENTRIES = 2048;
     static constexpr std::size_t MAX_LOG_FILES = 15;
 
-    Log_Feature active_features = Log_Feature::ALL;
-    bool is_console_enabled = true;
-    bool is_file_logging_enabled = false;
-    bool is_force_all_console_enabled = false;
+    std::atomic<std::uint64_t> active_features{static_cast<std::uint64_t>(Log_Feature::ALL)};
+    std::atomic<bool> is_console_enabled{true};
+    std::atomic<bool> is_file_logging_enabled{false};
+    std::atomic<bool> is_force_all_console_enabled{false};
 
     std::filesystem::path log_directory{"logs"};
     std::filesystem::path current_log_file;
@@ -146,9 +147,9 @@ private:
         return std::format("{:%Y-%m-%d %H:%M:%S}", zt);
     }
 
-    static constexpr std::string_view levelToString(Log_Level level) noexcept
+    static constexpr std::string_view levelToString(Log_Level _level) noexcept
     {
-        switch (level)
+        switch (_level)
         {
         case Log_Level::LOG_DEBUG:
             return "DEBUG";
@@ -163,9 +164,9 @@ private:
         }
     }
 
-    static constexpr std::string_view levelToAnsiColor(Log_Level level) noexcept
+    static constexpr std::string_view levelToAnsiColor(Log_Level _level) noexcept
     {
-        switch (level)
+        switch (_level)
         {
         case Log_Level::LOG_DEBUG:
             return "\033[36m";
@@ -180,65 +181,65 @@ private:
         }
     }
 
-    static std::string featureToString(Log_Feature feature)
+    static std::string featureToString(Log_Feature _feature)
     {
         std::string result;
-        auto append_tag = [&result](std::string_view tag)
+        auto append_tag = [&result](std::string_view _tag)
         {
             if (!result.empty())
             {
                 result += "|";
             }
-            result += tag;
+            result += _tag;
         };
 
-        if ((feature & Log_Feature::DEVICE_MANAGEMENT) != Log_Feature::NONE)
+        if ((_feature & Log_Feature::DEVICE_MANAGEMENT) != Log_Feature::NONE)
             append_tag("Device");
-        if ((feature & Log_Feature::MEMORY_ALLOCATION) != Log_Feature::NONE)
+        if ((_feature & Log_Feature::MEMORY_ALLOCATION) != Log_Feature::NONE)
             append_tag("MemAlloc");
-        if ((feature & Log_Feature::MEMORY_TRANSFER) != Log_Feature::NONE)
+        if ((_feature & Log_Feature::MEMORY_TRANSFER) != Log_Feature::NONE)
             append_tag("MemTransfer");
-        if ((feature & Log_Feature::SYNCHRONIZATION) != Log_Feature::NONE)
+        if ((_feature & Log_Feature::SYNCHRONIZATION) != Log_Feature::NONE)
             append_tag("Sync");
 
-        if ((feature & Log_Feature::GRAPH_RECORDING) != Log_Feature::NONE)
+        if ((_feature & Log_Feature::GRAPH_RECORDING) != Log_Feature::NONE)
             append_tag("GraphRecord");
-        if ((feature & Log_Feature::OPERATOR_FUSION) != Log_Feature::NONE)
+        if ((_feature & Log_Feature::OPERATOR_FUSION) != Log_Feature::NONE)
             append_tag("Fusion");
-        if ((feature & Log_Feature::SHADER_GENERATION) != Log_Feature::NONE)
+        if ((_feature & Log_Feature::SHADER_GENERATION) != Log_Feature::NONE)
             append_tag("ShaderGen");
-        if ((feature & Log_Feature::DISPATCH_EXECUTION) != Log_Feature::NONE)
+        if ((_feature & Log_Feature::DISPATCH_EXECUTION) != Log_Feature::NONE)
             append_tag("Dispatch");
 
-        if ((feature & Log_Feature::FORWARD_EVALUATION) != Log_Feature::NONE)
+        if ((_feature & Log_Feature::FORWARD_EVALUATION) != Log_Feature::NONE)
             append_tag("Forward");
-        if ((feature & Log_Feature::BACKWARD_PROPAGATION) != Log_Feature::NONE)
+        if ((_feature & Log_Feature::BACKWARD_PROPAGATION) != Log_Feature::NONE)
             append_tag("Backward");
 
-        if ((feature & Log_Feature::DENSE_COMPUTE) != Log_Feature::NONE)
+        if ((_feature & Log_Feature::DENSE_COMPUTE) != Log_Feature::NONE)
             append_tag("Dense");
-        if ((feature & Log_Feature::CONV2D_COMPUTE) != Log_Feature::NONE)
+        if ((_feature & Log_Feature::CONV2D_COMPUTE) != Log_Feature::NONE)
             append_tag("Conv2D");
-        if ((feature & Log_Feature::POOLING_COMPUTE) != Log_Feature::NONE)
+        if ((_feature & Log_Feature::POOLING_COMPUTE) != Log_Feature::NONE)
             append_tag("Pooling");
-        if ((feature & Log_Feature::NORMALIZATION_COMPUTE) != Log_Feature::NONE)
+        if ((_feature & Log_Feature::NORMALIZATION_COMPUTE) != Log_Feature::NONE)
             append_tag("Norm");
-        if ((feature & Log_Feature::ACTIVATION_COMPUTE) != Log_Feature::NONE)
+        if ((_feature & Log_Feature::ACTIVATION_COMPUTE) != Log_Feature::NONE)
             append_tag("Activation");
-        if ((feature & Log_Feature::LOSS_COMPUTE) != Log_Feature::NONE)
+        if ((_feature & Log_Feature::LOSS_COMPUTE) != Log_Feature::NONE)
             append_tag("Loss");
 
-        if ((feature & Log_Feature::OPTIMIZER_STEP) != Log_Feature::NONE)
+        if ((_feature & Log_Feature::OPTIMIZER_STEP) != Log_Feature::NONE)
             append_tag("Optimizer");
-        if ((feature & Log_Feature::LR_SCHEDULER) != Log_Feature::NONE)
+        if ((_feature & Log_Feature::LR_SCHEDULER) != Log_Feature::NONE)
             append_tag("LRScheduler");
-        if ((feature & Log_Feature::DATA_PIPELINE) != Log_Feature::NONE)
+        if ((_feature & Log_Feature::DATA_PIPELINE) != Log_Feature::NONE)
             append_tag("DataPipeline");
-        if ((feature & Log_Feature::MODEL_SERIALIZATION) != Log_Feature::NONE)
+        if ((_feature & Log_Feature::MODEL_SERIALIZATION) != Log_Feature::NONE)
             append_tag("Serialize");
-        if ((feature & Log_Feature::TENSOR_INSPECTION) != Log_Feature::NONE)
+        if ((_feature & Log_Feature::TENSOR_INSPECTION) != Log_Feature::NONE)
             append_tag("TensorDump");
-        if ((feature & Log_Feature::LAYER_INSPECTION) != Log_Feature::NONE)
+        if ((_feature & Log_Feature::LAYER_INSPECTION) != Log_Feature::NONE)
             append_tag("LayerInspect");
 
         if (result.empty())
@@ -266,8 +267,8 @@ private:
             }
         }
 
-        std::ranges::sort(log_files, [](const auto &a, const auto &b)
-                          { return std::filesystem::last_write_time(a) < std::filesystem::last_write_time(b); });
+        std::ranges::sort(log_files, [](const auto &_a, const auto &_b)
+                          { return std::filesystem::last_write_time(_a) < std::filesystem::last_write_time(_b); });
 
         while (log_files.size() >= MAX_LOG_FILES)
         {
@@ -309,7 +310,7 @@ public:
             instance.log_file_stream.close();
         }
         instance.log_directory = _directory;
-        if (instance.is_file_logging_enabled)
+        if (instance.is_file_logging_enabled.load(std::memory_order_relaxed))
         {
             instance.openNewLogFile();
         }
@@ -324,7 +325,7 @@ public:
     {
         Logger &instance = getInstance();
         std::lock_guard<std::mutex> lock(instance.logger_mutex);
-        instance.is_file_logging_enabled = _enable;
+        instance.is_file_logging_enabled.store(_enable, std::memory_order_relaxed);
         if (_enable && !instance.log_file_stream.is_open())
         {
             instance.openNewLogFile();
@@ -341,18 +342,14 @@ public:
         setFileLogging(_enable);
     }
 
-     static bool isFileLoggingEnabled() noexcept
+    [[nodiscard]] static bool isFileLoggingEnabled() noexcept
     {
-        Logger &instance = getInstance();
-        std::lock_guard<std::mutex> lock(instance.logger_mutex);
-        return instance.is_file_logging_enabled;
+        return getInstance().is_file_logging_enabled.load(std::memory_order_relaxed);
     }
 
     static void setForceAllConsoleOutput(bool _enable = true) noexcept
     {
-        Logger &instance = getInstance();
-        std::lock_guard<std::mutex> lock(instance.logger_mutex);
-        instance.is_force_all_console_enabled = _enable;
+        getInstance().is_force_all_console_enabled.store(_enable, std::memory_order_relaxed);
     }
 
     static void forceAllConsoleOutput(bool _enable = true) noexcept
@@ -360,11 +357,9 @@ public:
         setForceAllConsoleOutput(_enable);
     }
 
-     static bool isForceAllConsoleOutputEnabled() noexcept
+    [[nodiscard]] static bool isForceAllConsoleOutputEnabled() noexcept
     {
-        Logger &instance = getInstance();
-        std::lock_guard<std::mutex> lock(instance.logger_mutex);
-        return instance.is_force_all_console_enabled;
+        return getInstance().is_force_all_console_enabled.load(std::memory_order_relaxed);
     }
 
     static std::string getCurrentLogFilepath()
@@ -374,41 +369,37 @@ public:
         return instance.current_log_file.string();
     }
 
-    static void enableFeature(Log_Feature feature, bool enable = true) noexcept
+    static void enableFeature(Log_Feature _feature, bool _enable = true) noexcept
     {
         Logger &instance = getInstance();
-        std::lock_guard<std::mutex> lock(instance.logger_mutex);
-        if (enable)
+        std::uint64_t feature_mask = static_cast<std::uint64_t>(_feature);
+        if (_enable)
         {
-            instance.active_features = instance.active_features | feature;
+            instance.active_features.fetch_or(feature_mask, std::memory_order_relaxed);
         }
         else
         {
-            instance.active_features = instance.active_features & ~feature;
+            instance.active_features.fetch_and(~feature_mask, std::memory_order_relaxed);
         }
     }
 
-    static void setOnlyActiveFeatures(Log_Feature feature_mask) noexcept
+    static void setOnlyActiveFeatures(Log_Feature _feature_mask) noexcept
     {
-        Logger &instance = getInstance();
-        std::lock_guard<std::mutex> lock(instance.logger_mutex);
-        instance.active_features = feature_mask;
+        getInstance().active_features.store(static_cast<std::uint64_t>(_feature_mask), std::memory_order_relaxed);
     }
 
-    static void setConsoleOutput(bool enable) noexcept
+    static void setConsoleOutput(bool _enable) noexcept
     {
-        Logger &instance = getInstance();
-        std::lock_guard<std::mutex> lock(instance.logger_mutex);
-        instance.is_console_enabled = enable;
+        getInstance().is_console_enabled.store(_enable, std::memory_order_relaxed);
     }
 
     static bool logMessage(
-        const std::string &message,
-        Log_Level level = Log_Level::LOG_INFO,
-        bool print_to_console = false,
-        std::size_t repetition_count = 0,
-        Log_Feature feature = Log_Feature::NONE,
-        const std::source_location location = std::source_location::current())
+        const std::string &_message,
+        Log_Level _level = Log_Level::LOG_INFO,
+        bool _print_to_console = false,
+        std::size_t _repetition_count = 0,
+        Log_Feature _feature = Log_Feature::NONE,
+        const std::source_location _location = std::source_location::current())
     {
 #if !ENABLE_LOGGING
         return false;
@@ -416,9 +407,10 @@ public:
 
         Logger &instance = getInstance();
 
-        if (level == Log_Level::LOG_DEBUG)
+        if (_level == Log_Level::LOG_DEBUG)
         {
-            if (feature != Log_Feature::NONE && (static_cast<std::uint64_t>(instance.active_features & feature) == 0))
+            std::uint64_t current_features = instance.active_features.load(std::memory_order_relaxed);
+            if (_feature != Log_Feature::NONE && ((current_features & static_cast<std::uint64_t>(_feature)) == 0))
             {
                 return false;
             }
@@ -426,11 +418,11 @@ public:
 
         std::lock_guard<std::mutex> lock(instance.logger_mutex);
 
-        if (repetition_count > 0)
+        if (_repetition_count > 0)
         {
-            auto &line_map = instance.call_site_counters[location.file_name()];
-            std::size_t &current_count = line_map[location.line()];
-            if (current_count >= repetition_count)
+            auto &line_map = instance.call_site_counters[_location.file_name()];
+            std::size_t &current_count = line_map[_location.line()];
+            if (current_count >= _repetition_count)
             {
                 return false;
             }
@@ -439,11 +431,11 @@ public:
 
         Log_Record record{
             .timestamp = timestamp(),
-            .level = level,
-            .feature = feature,
-            .message = message,
-            .file = location.file_name(),
-            .line = location.line()};
+            .level = _level,
+            .feature = _feature,
+            .message = _message,
+            .file = _location.file_name(),
+            .line = _location.line()};
 
         if (instance.ring_buffer.size() >= MAX_RING_BUFFER_ENTRIES)
         {
@@ -451,51 +443,51 @@ public:
         }
         instance.ring_buffer.push_back(record);
 
-        std::string feat_str = featureToString(feature);
+        std::string feat_str = featureToString(_feature);
 
-        if (instance.is_file_logging_enabled && instance.log_file_stream.is_open())
+        if (instance.is_file_logging_enabled.load(std::memory_order_relaxed) && instance.log_file_stream.is_open())
         {
             instance.log_file_stream << std::format("[{}] [{:<5}] [{:<18}] {}\n",
                                                     record.timestamp,
-                                                    levelToString(level),
+                                                    levelToString(_level),
                                                     feat_str,
-                                                    message);
+                                                    _message);
             instance.log_file_stream.flush();
         }
 
-        bool should_print_to_console = instance.is_force_all_console_enabled ||
-                                       print_to_console ||
-                                       level == Log_Level::LOG_ERROR;
+        bool force_console = instance.is_force_all_console_enabled.load(std::memory_order_relaxed);
+        bool console_enabled = instance.is_console_enabled.load(std::memory_order_relaxed);
+        bool should_print_to_console = force_console || _print_to_console || _level == Log_Level::LOG_ERROR;
 
-        if (should_print_to_console && (instance.is_console_enabled || level == Log_Level::LOG_ERROR || instance.is_force_all_console_enabled))
+        if (should_print_to_console && (console_enabled || _level == Log_Level::LOG_ERROR || force_console))
         {
             std::cout << std::format("{}[{}] [{:<5}] [{:<18}] {}\033[0m\n",
-                                     levelToAnsiColor(level),
+                                     levelToAnsiColor(_level),
                                      record.timestamp,
-                                     levelToString(level),
+                                     levelToString(_level),
                                      feat_str,
-                                     message);
+                                     _message);
         }
         return true;
     }
 
-    static void dumpRecentLogs(std::ostream &output_stream = std::cerr)
+    static void dumpRecentLogs(std::ostream &_output_stream = std::cerr)
     {
         Logger &instance = getInstance();
         std::lock_guard<std::mutex> lock(instance.logger_mutex);
 
-        output_stream << "\n=== IN-MEMORY LOG DUMP (" << instance.ring_buffer.size() << " ENTRIES) ===\n";
+        _output_stream << "\n=== IN-MEMORY LOG DUMP (" << instance.ring_buffer.size() << " ENTRIES) ===\n";
         for (const auto &rec : instance.ring_buffer)
         {
-            output_stream << std::format("[{}] [{:<5}] [{:<18}] ({}:{}) {}\n",
-                                         rec.timestamp,
-                                         levelToString(rec.level),
-                                         featureToString(rec.feature),
-                                         rec.file,
-                                         rec.line,
-                                         rec.message);
+            _output_stream << std::format("[{}] [{:<5}] [{:<18}] ({}:{}) {}\n",
+                                          rec.timestamp,
+                                          levelToString(rec.level),
+                                          featureToString(rec.feature),
+                                          rec.file,
+                                          rec.line,
+                                          rec.message);
         }
-        output_stream << "=== END OF DUMP ===\n\n";
+        _output_stream << "=== END OF DUMP ===\n\n";
     }
 
     static void clearCallSiteCounters()

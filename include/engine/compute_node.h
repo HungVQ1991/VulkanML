@@ -34,4 +34,8 @@ struct Compute_Node
     bool is_fused = false;
     bool is_barrier_required_after = false;
     std::vector<Fused_Operation> fused_operations;
+
+    std::string fused_glsl_code;
+    std::vector<std::uint32_t> cached_external_buffer_indices;
+    VkPipeline cached_pipeline = VK_NULL_HANDLE;
 };

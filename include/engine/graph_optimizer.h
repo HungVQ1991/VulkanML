@@ -47,27 +47,27 @@ struct Cached_Graph_Template
     mutable bool is_mapping_log_enabled = true;
     bool is_valid = false;
 
-     const std::vector<Compute_Node> &getFusedNodes() const noexcept
+    [[nodiscard]] const std::vector<Compute_Node> &getFusedNodes() const noexcept
     {
         return fused_nodes;
     }
 
-     const std::vector<std::vector<Buffer_Binding_Mapping>> &getBufferMappings() const noexcept
+    [[nodiscard]] const std::vector<std::vector<Buffer_Binding_Mapping>> &getBufferMappings() const noexcept
     {
         return buffer_mappings;
     }
 
-     const std::vector<std::vector<Push_Constant_Mapping>> &getPushConstantsMappings() const noexcept
+    [[nodiscard]] const std::vector<std::vector<Push_Constant_Mapping>> &getPushConstantsMappings() const noexcept
     {
         return push_constants_mappings;
     }
 
-     const std::vector<std::vector<std::uint32_t>> &getRawNodeIndices() const noexcept
+    [[nodiscard]] const std::vector<std::vector<std::uint32_t>> &getRawNodeIndices() const noexcept
     {
         return raw_node_indices;
     }
 
-     bool isValid() const noexcept
+    [[nodiscard]] bool isValid() const noexcept
     {
         return is_valid;
     }
@@ -96,14 +96,87 @@ private:
         return (_offset + 3) & ~std::size_t(3);
     }
 
-    static bool isOptimizerNode(const Compute_Node &_node) noexcept
+    static void getNodeBufferAccess(
+        const Compute_Node &_node,
+        const Shader_Dictionary &_shader_dictionary,
+        std::vector<VkBuffer> &_reads,
+        std::vector<VkBuffer> &_writes)
     {
-        if (_node.is_fused)
+        _reads.clear();
+        _writes.clear();
+
+        if (_node.is_fused && !_node.fused_operations.empty())
         {
-            return false;
+            for (const auto &op : _node.fused_operations)
+            {
+                for (std::uint32_t in_idx : op.input_buffer_indices)
+                {
+                    if (in_idx < _node.buffers.size() && _node.buffers[in_idx])
+                    {
+                        VkBuffer buf = _node.buffers[in_idx]->getBuffer();
+                        if (buf != VK_NULL_HANDLE)
+                        {
+                            _reads.push_back(buf);
+                        }
+                    }
+                }
+                for (std::uint32_t out_idx : op.output_buffer_indices)
+                {
+                    if (out_idx < _node.buffers.size() && _node.buffers[out_idx])
+                    {
+                        VkBuffer buf = _node.buffers[out_idx]->getBuffer();
+                        if (buf != VK_NULL_HANDLE)
+                        {
+                            _writes.push_back(buf);
+                        }
+                    }
+                }
+            }
+            return;
         }
-        return _node.pipeline_id == Compute_Pipeline::ADAM_UPDATE ||
-               _node.pipeline_id == Compute_Pipeline::SGD_UPDATE;
+
+        const auto &metadata = _shader_dictionary.getMetadata(_node.pipeline_id);
+
+        for (std::uint32_t i = 0; i < metadata.input_count && i < _node.buffers.size(); ++i)
+        {
+            if (_node.buffers[i] && _node.buffers[i]->getBuffer() != VK_NULL_HANDLE)
+            {
+                _reads.push_back(_node.buffers[i]->getBuffer());
+            }
+        }
+
+        for (std::uint32_t i = metadata.input_count;
+             i < metadata.input_count + metadata.output_count && i < _node.buffers.size();
+             ++i)
+        {
+            if (_node.buffers[i] && _node.buffers[i]->getBuffer() != VK_NULL_HANDLE)
+            {
+                _writes.push_back(_node.buffers[i]->getBuffer());
+            }
+        }
+
+        if (_node.pipeline_id == Compute_Pipeline::ADAM_UPDATE)
+        {
+            if (_node.buffers.size() > 0 && _node.buffers[0] && _node.buffers[0]->getBuffer() != VK_NULL_HANDLE)
+            {
+                _writes.push_back(_node.buffers[0]->getBuffer());
+            }
+            if (_node.buffers.size() > 2 && _node.buffers[2] && _node.buffers[2]->getBuffer() != VK_NULL_HANDLE)
+            {
+                _writes.push_back(_node.buffers[2]->getBuffer());
+            }
+            if (_node.buffers.size() > 3 && _node.buffers[3] && _node.buffers[3]->getBuffer() != VK_NULL_HANDLE)
+            {
+                _writes.push_back(_node.buffers[3]->getBuffer());
+            }
+        }
+        else if (_node.pipeline_id == Compute_Pipeline::SGD_UPDATE)
+        {
+            if (_node.buffers.size() > 0 && _node.buffers[0] && _node.buffers[0]->getBuffer() != VK_NULL_HANDLE)
+            {
+                _writes.push_back(_node.buffers[0]->getBuffer());
+            }
+        }
     }
 
     static void assignPipelineBarriers(std::vector<Compute_Node> &_nodes)
@@ -113,26 +186,63 @@ private:
             return;
         }
 
+        const auto &shader_dictionary = Shader_Dictionary::getInstance();
+        for (auto &node : _nodes)
+        {
+            node.is_barrier_required_after = false;
+        }
+
+        std::unordered_set<VkBuffer> pending_writes;
+        std::unordered_set<VkBuffer> pending_reads;
+
+        std::vector<VkBuffer> current_reads;
+        std::vector<VkBuffer> current_writes;
+
         for (std::size_t i = 0; i < _nodes.size(); ++i)
         {
-            if (i == _nodes.size() - 1)
+            getNodeBufferAccess(_nodes[i], shader_dictionary, current_reads, current_writes);
+
+            bool has_hazard = false;
+
+            for (VkBuffer read_buffer : current_reads)
             {
-                _nodes[i].is_barrier_required_after = true;
-                continue;
+                if (pending_writes.contains(read_buffer))
+                {
+                    has_hazard = true;
+                    break;
+                }
             }
 
-            bool current_is_optimizer = isOptimizerNode(_nodes[i]);
-            bool next_is_optimizer = isOptimizerNode(_nodes[i + 1]);
-
-            if (current_is_optimizer && next_is_optimizer)
+            if (!has_hazard)
             {
-                _nodes[i].is_barrier_required_after = false;
+                for (VkBuffer write_buffer : current_writes)
+                {
+                    if (pending_writes.contains(write_buffer) || pending_reads.contains(write_buffer))
+                    {
+                        has_hazard = true;
+                        break;
+                    }
+                }
             }
-            else
+
+            if (has_hazard && i > 0)
             {
-                _nodes[i].is_barrier_required_after = true;
+                _nodes[i - 1].is_barrier_required_after = true;
+                pending_writes.clear();
+                pending_reads.clear();
+            }
+
+            for (VkBuffer read_buffer : current_reads)
+            {
+                pending_reads.insert(read_buffer);
+            }
+            for (VkBuffer write_buffer : current_writes)
+            {
+                pending_writes.insert(write_buffer);
             }
         }
+
+        _nodes.back().is_barrier_required_after = true;
     }
 
     static bool isFusible(
