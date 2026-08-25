@@ -87,7 +87,7 @@ public:
                                            magic_enum::enum_name(_new_execution_target)),
                                Log_Level::LOG_WARNING,
                                true,
-                               0,
+                               1,
                                Log_Feature::DEVICE_MANAGEMENT);
         }
         execution_target = _new_execution_target;
@@ -295,6 +295,8 @@ public:
         forward(_input_matrix);
         backward(_target_matrix);
 
+        // printL2Norms();
+
         IOptimizer &optimizer = training_context.getOptimizer();
         optimizer.step(getParametersAndGradients());
 
@@ -386,6 +388,7 @@ public:
                 layer->saveInference(output_file_stream);
             }
         }
+        Logger::logMessage("Inference saved to " + _file_path, Log_Level::LOG_INFO, 1, true);
     }
 
     void loadInference(const std::string &_file_path, Execution_Target _execution_target = Execution_Target::CPU)
@@ -450,6 +453,7 @@ public:
         }
 
         setExecutionTarget(_execution_target);
+        Logger::logMessage("Inference loaded from {}" + _file_path, Log_Level::LOG_INFO, true, 1);
     }
 
     void saveTrainingCheckpoint(const std::string &_file_path, std::size_t _current_epoch) const

@@ -402,7 +402,7 @@ public:
         instance.is_console_enabled = enable;
     }
 
-    static void logMessage(
+    static bool logMessage(
         const std::string &message,
         Log_Level level = Log_Level::LOG_INFO,
         bool print_to_console = false,
@@ -411,15 +411,16 @@ public:
         const std::source_location location = std::source_location::current())
     {
 #if !ENABLE_LOGGING
-        return;
+        return false;
 #endif
+
         Logger &instance = getInstance();
 
         if (level == Log_Level::LOG_DEBUG)
         {
             if (feature != Log_Feature::NONE && (static_cast<std::uint64_t>(instance.active_features & feature) == 0))
             {
-                return;
+                return false;
             }
         }
 
@@ -431,7 +432,7 @@ public:
             std::size_t &current_count = line_map[location.line()];
             if (current_count >= repetition_count)
             {
-                return;
+                return false;
             }
             current_count++;
         }
@@ -475,6 +476,7 @@ public:
                                      feat_str,
                                      message);
         }
+        return true;
     }
 
     static void dumpRecentLogs(std::ostream &output_stream = std::cerr)

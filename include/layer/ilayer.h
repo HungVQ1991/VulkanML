@@ -29,6 +29,8 @@ enum class Layer_Type
     RELU,
     GELU,
     SOFTMAX,
+    RES_NET_BLOCK_2D,
+    RES_NET_20,
     LAYER_TYPE_END
 };
 

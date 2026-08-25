@@ -38,7 +38,7 @@
 
 constexpr std::size_t INPUT_DIMENSION = 784;
 constexpr std::size_t OUTPUT_DIMENSION = 10;
-constexpr std::size_t BATCH_SIZE = 64;
+constexpr std::size_t BATCH_SIZE = 512;
 constexpr std::size_t TOTAL_EPOCHS = 1;
 
 std::uint32_t swapByteOrder(std::uint32_t _value)
@@ -391,7 +391,7 @@ void evaluateModel(Neural_Network &_neural_network,
 
 int main()
 {
-    Logger::setFileLogging(false);
+    Logger::setFileLogging(true);
     Logger::setOnlyActiveFeatures(Log_Feature::NONE);
     Logger::setConsoleOutput(true);
 
@@ -424,14 +424,14 @@ int main()
     neural_network.addLayer<Conv2d_Layer>(28, 28, 1, 16, 3, 1, 1);
     neural_network.addLayer<Batch_Norm_2d_Layer>(28, 28, 16);
     neural_network.addLayer<Gelu_Layer>();
-
     neural_network.addLayer<Max_Pool_2d_Layer>(28, 28, 16, 2, 2, 0);
 
     neural_network.addLayer<Conv2d_Layer>(14, 14, 16, 32, 3, 1, 1);
     neural_network.addLayer<Batch_Norm_2d_Layer>(14, 14, 32);
     neural_network.addLayer<Gelu_Layer>();
+    neural_network.addLayer<Max_Pool_2d_Layer>(14, 14, 32, 2, 2, 0);
 
-    neural_network.addLayer<Linear_Layer>(14 * 14 * 32, 128);
+    neural_network.addLayer<Linear_Layer>(7 * 7 * 32, 128);
     neural_network.addLayer<Batch_Norm_Layer>(128);
     neural_network.addLayer<Gelu_Layer>();
 
@@ -457,13 +457,6 @@ int main()
     evaluateModel(neural_network, test_images_data, test_labels_data, test_images_count, execution_target);
 
     std::filesystem::create_directories("output/mnist");
-
     neural_network.saveInference("output/mnist/model.bin");
-    Logger::logMessage("Inference model exported to model.bin",
-                       Log_Level::LOG_INFO,
-                       true,
-                       0,
-                       Log_Feature::MODEL_SERIALIZATION);
-
     return 0;
 }

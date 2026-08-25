@@ -283,7 +283,7 @@ private:
         }
     }
 
-    std::string generateFusedGlsl(const Compute_Node &node) const
+    std::string generateFusedGlsl(const Compute_Node &_node) const
     {
         std::uint32_t local_size_x = 256;
         std::uint32_t local_size_y = 1;
@@ -297,9 +297,9 @@ private:
         bool has_matrix_tiles = false;
         std::uint32_t max_shared_memory_size = 0;
 
-        if (!node.fused_operations.empty())
+        if (!_node.fused_operations.empty())
         {
-            primary_pipeline = node.fused_operations[0].pipeline_id;
+            primary_pipeline = _node.fused_operations[0].pipeline_id;
             primary_operation_class = shader_dictionary.getMetadata(primary_pipeline).operation_class;
 
             if (primary_operation_class == Operation_Class::MATRIX_2D || primary_operation_class == Operation_Class::TENSOR_3D)
@@ -309,7 +309,7 @@ private:
                 local_size_z = 1;
             }
 
-            for (const auto &operation : node.fused_operations)
+            for (const auto &operation : _node.fused_operations)
             {
                 const auto &metadata = shader_dictionary.getMetadata(operation.pipeline_id);
                 if (metadata.operation_class == Operation_Class::STANDALONE)
@@ -358,18 +358,41 @@ private:
         }
 
         std::vector<std::uint32_t> external_indices;
-        getExternalBufferIndices(node, external_indices);
+        getExternalBufferIndices(_node, external_indices);
         std::unordered_set<std::uint32_t> external_buffer_set(external_indices.begin(), external_indices.end());
 
         std::unordered_set<std::uint32_t> read_buffer_indices;
         std::unordered_set<std::uint32_t> written_buffer_indices;
 
-        for (const auto &operation : node.fused_operations)
+        for (std::size_t op_idx = 0; op_idx < _node.fused_operations.size(); ++op_idx)
         {
+            const auto &operation = _node.fused_operations[op_idx];
+
             for (std::uint32_t input_index : operation.input_buffer_indices)
             {
-                read_buffer_indices.insert(input_index);
+                // Nếu buffer này là output trung gian của op trước (được truyền qua register), không tính là read từ VRAM
+                bool is_passed_via_register = false;
+                for (std::size_t prev_idx = 0; prev_idx < op_idx; ++prev_idx)
+                {
+                    const auto &prev_op = _node.fused_operations[prev_idx];
+                    for (std::uint32_t prev_out : prev_op.output_buffer_indices)
+                    {
+                        if (prev_out == input_index)
+                        {
+                            is_passed_via_register = true;
+                            break;
+                        }
+                    }
+                    if (is_passed_via_register)
+                        break;
+                }
+
+                if (!is_passed_via_register)
+                {
+                    read_buffer_indices.insert(input_index);
+                }
             }
+
             for (std::uint32_t output_index : operation.output_buffer_indices)
             {
                 written_buffer_indices.insert(output_index);
@@ -379,7 +402,7 @@ private:
         for (std::uint32_t buffer_index : external_indices)
         {
             bool is_read = read_buffer_indices.contains(buffer_index);
-            bool is_written = written_buffer_indices.contains(buffer_index) || node.external_output_indices.contains(buffer_index);
+            bool is_written = written_buffer_indices.contains(buffer_index) || _node.external_output_indices.contains(buffer_index);
 
             Buffer_Access buffer_access = Buffer_Access::READ_WRITE;
             if (is_read && !is_written)
@@ -484,9 +507,9 @@ private:
             shader_generator.addLogicSnippet("    if (global_id >= pc.data[0]) return;");
         }
 
-        for (std::size_t operation_index = 0; operation_index < node.fused_operations.size(); ++operation_index)
+        for (std::size_t operation_index = 0; operation_index < _node.fused_operations.size(); ++operation_index)
         {
-            const Fused_Operation &operation = node.fused_operations[operation_index];
+            const Fused_Operation &operation = _node.fused_operations[operation_index];
             const Snippet_Metadata &metadata = shader_dictionary.getMetadata(operation.pipeline_id);
 
             std::vector<std::string> inputs;
@@ -629,6 +652,18 @@ private:
                         position += replacement.length();
                     }
                 }
+
+                if (has_matrix_tiles)
+                {
+                    shader_generator.addLogicSnippet("    if (r >= M || c >= N) return;");
+                }
+                else if (primary_operation_class == Operation_Class::MATRIX_2D)
+                {
+                    shader_generator.addLogicSnippet(std::format("    if (r >= pc.data[{}] || c >= pc.data[{}]) return;",
+                                                                 push_constants_word_offset,
+                                                                 push_constants_word_offset + 1));
+                }
+
                 shader_generator.addLogicSnippet(std::format("    global_id = {};", resolved_expression));
             }
         }
@@ -636,10 +671,10 @@ private:
         std::string glsl_code = shader_generator.build();
 
         std::string node_chain_name = "[";
-        for (std::size_t op_idx = 0; op_idx < node.fused_operations.size(); ++op_idx)
+        for (std::size_t op_idx = 0; op_idx < _node.fused_operations.size(); ++op_idx)
         {
-            node_chain_name += std::string(magic_enum::enum_name(node.fused_operations[op_idx].pipeline_id));
-            if (op_idx + 1 < node.fused_operations.size())
+            node_chain_name += std::string(magic_enum::enum_name(_node.fused_operations[op_idx].pipeline_id));
+            if (op_idx + 1 < _node.fused_operations.size())
             {
                 node_chain_name += " -> ";
             }
@@ -781,13 +816,13 @@ private:
         }
 
         VkDescriptorPoolSize pool_sizes[] = {
-            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 8000}};
+            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 16000}};
 
         VkDescriptorPoolCreateInfo pool_create_information{
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
             .pNext = nullptr,
             .flags = 0,
-            .maxSets = 2000,
+            .maxSets = 4000,
             .poolSizeCount = 1,
             .pPoolSizes = pool_sizes};
 
