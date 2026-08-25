@@ -1,88 +1,139 @@
 #pragma once
 
+#include <format>
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "helper/logger.h"
+#include "helper/magic_enum.hpp"
 #include "layer/ilayer.h"
 #include "math/matrix.h"
 
-class ReLU : public ILayer
+class Relu_Layer : public ILayer
 {
 private:
-    Matrix outputs;
-    bool has_forward;
-    Execution_Target target;
+    Matrix input_matrix;
+    Matrix output_matrix;
+    Matrix input_gradient;
+    bool is_forward_completed = false;
+    Execution_Target execution_target = Execution_Target::CPU;
 
 public:
-    explicit ReLU(Execution_Target exec_target = Execution_Target::CPU)
-        : outputs(0, 0, exec_target),
-          has_forward(false),
-          target(exec_target) {}
-
-    ~ReLU() override = default;
-
-    Matrix forward(const Matrix &inputs) override
+    explicit Relu_Layer(Execution_Target _execution_target = Execution_Target::CPU)
+        : input_matrix(0, 0, _execution_target),
+          output_matrix(0, 0, _execution_target),
+          input_gradient(0, 0, _execution_target),
+          is_forward_completed(false),
+          execution_target(_execution_target)
     {
-        LAYER_LOG_DEBUG("ReLU::forward: rows=" + std::to_string(inputs.getRows()) + ", cols=" + std::to_string(inputs.getCols()));
-
-        outputs = inputs.relu();
-        has_forward = true;
-        return outputs;
     }
 
-    Matrix backward(const Matrix &gradient_output) override
+    ~Relu_Layer() noexcept override = default;
+
+    Matrix forward(const Matrix &_input_matrix) override
     {
-        if (!has_forward)
+        Logger::logMessage(std::format("Relu_Layer::forward: rows={}, columns={}",
+                                       _input_matrix.getRows(),
+                                       _input_matrix.getColumns()),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::ACTIVATION_COMPUTE | Log_Feature::FORWARD_EVALUATION);
+
+        input_matrix = _input_matrix;
+        input_matrix.relu(output_matrix);
+        is_forward_completed = true;
+        return output_matrix;
+    }
+
+    Matrix backward(const Matrix &_output_gradient) override
+    {
+        if (!is_forward_completed)
         {
-            Logger::logMessage("Relu::backward: Relu backward called before forward", LOG_ERROR, true);
+            Logger::logMessage("Relu_Layer::backward: Relu backward called before forward",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::ACTIVATION_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
             throw std::logic_error("Relu backward called before forward");
         }
 
-        if (gradient_output.getRows() != outputs.getRows() || gradient_output.getCols() != outputs.getCols())
+        if (_output_gradient.getRows() != output_matrix.getRows() || _output_gradient.getColumns() != output_matrix.getColumns())
         {
-            Logger::logMessage("Relu::backward: Relu gradient dimensions must match output dimensions", LOG_ERROR, true);
+            Logger::logMessage("Relu_Layer::backward: Relu gradient dimensions must match output dimensions",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::ACTIVATION_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
             throw std::invalid_argument("Relu gradient dimensions must match output dimensions");
         }
 
-        LAYER_LOG_DEBUG("ReLU::backward: grad_output rows=" + std::to_string(gradient_output.getRows()) + ", cols=" + std::to_string(gradient_output.getCols()));
+        Logger::logMessage(std::format("Relu_Layer::backward: output_gradient rows={}, columns={}",
+                                       _output_gradient.getRows(),
+                                       _output_gradient.getColumns()),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::ACTIVATION_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
-        return outputs.reluBackward(gradient_output);
+        output_matrix.reluBackward(_output_gradient, input_gradient);
+        return input_gradient;
     }
 
     void resetGradient() override
     {
-        outputs = Matrix(0, 0, target);
-        has_forward = false;
+        is_forward_completed = false;
     }
 
-    bool hasParameters() const override
+     bool hasParameters() const noexcept override
     {
         return false;
     }
 
-    Layer_Type getLayerType() const override
+     Layer_Type getLayerType() const noexcept override
     {
         return Layer_Type::RELU;
     }
 
-    void saveConfig(std::ofstream &out_file) const override {}
-
-    void saveInference(std::ofstream &out_file) const override {}
-    void loadInference(std::ifstream &in_file) override {}
-
-    void saveCheckpoint(std::ofstream &out_file) const override {}
-    void loadCheckpoint(std::ifstream &in_file) override {}
-
-    void setTarget(Execution_Target new_target) override
+     Matrix getInput() override
     {
-        if (target == new_target)
+        return input_matrix;
+    }
+
+     Matrix getOutput() override
+    {
+        return output_matrix;
+    }
+
+    void saveConfiguration(std::ofstream &_output_file_stream) const override {}
+    void saveInference(std::ofstream &_output_file_stream) const override {}
+    void loadInference(std::ifstream &_input_file_stream) override {}
+    void saveCheckpoint(std::ofstream &_output_file_stream) const override {}
+    void loadCheckpoint(std::ifstream &_input_file_stream) override {}
+
+    void setExecutionTarget(Execution_Target _new_execution_target) override
+    {
+        if (execution_target == _new_execution_target)
+        {
             return;
+        }
 
-        Logger::logMessage("ReLU::setTarget: Changing execution target from " + static_cast<std::string>(magic_enum::enum_name<Execution_Target>(target)) + " to " + static_cast<std::string>(magic_enum::enum_name<Execution_Target>(new_target)), LOG_WARNING);
+        Logger::logMessage(std::format("Relu_Layer::setExecutionTarget: Changing execution target from {} to {}",
+                                       magic_enum::enum_name(execution_target),
+                                       magic_enum::enum_name(_new_execution_target)),
+                           Log_Level::LOG_WARNING,
+                           true,
+                           0,
+                           Log_Feature::DEVICE_MANAGEMENT);
 
-        target = new_target;
-        outputs.setExecutionTarget(new_target);
+        execution_target = _new_execution_target;
+        input_matrix.setExecutionTarget(_new_execution_target);
+        output_matrix.setExecutionTarget(_new_execution_target);
+        input_gradient.setExecutionTarget(_new_execution_target);
     }
 };
+
+using ReLU = Relu_Layer;

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <chrono>
+#include <cmath>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <format>
@@ -15,131 +17,179 @@
 #include "cost_function/icost_function.h"
 #include "engine/async_data_pipeline.h"
 #include "engine/execution_engine.h"
-#include "helper/layer.h"
+#include "engine/graph_optimizer.h"
 #include "helper/logger.h"
+#include "helper/magic_enum.hpp"
+#include "layer/ilayer.h"
 #include "math/matrix.h"
 #include "training_context.h"
-
-#ifndef ENABLE_NEURAL_NETWORK_DEBUG_LOGS
-#define ENABLE_NEURAL_NETWORK_DEBUG_LOGS 0
-#endif
-
-#if ENABLE_NEURAL_NETWORK_DEBUG_LOGS
-#define NEURAL_NETWORK_LOG_DEBUG(msg) Logger::logMessage(msg, LOG_DEBUG)
-#else
-#define NEURAL_NETWORK_LOG_DEBUG(msg) ((void)0)
-#endif
 
 class Neural_Network
 {
 private:
     std::vector<std::unique_ptr<ILayer>> layers;
     Matrix last_prediction;
-    Execution_Target target = Execution_Target::CPU;
-    Training_Context context;
-
-    bool is_target_synced = false;
+    Execution_Target execution_target = Execution_Target::CPU;
+    Training_Context training_context;
+    bool is_target_synchronized = false;
 
 public:
-    explicit Neural_Network(Execution_Target exec_target = Execution_Target::CPU)
-        : last_prediction(0, 0, exec_target),
-          target(exec_target) {}
+    explicit Neural_Network(Execution_Target _execution_target = Execution_Target::CPU)
+        : last_prediction(0, 0, _execution_target),
+          execution_target(_execution_target)
+    {
+    }
 
     ~Neural_Network()
     {
-        if (target == Execution_Target::VULKAN_GPU)
+        if (execution_target == Execution_Target::VULKAN_GPU)
+        {
             Execution_Engine::getInstance().waitIdle();
+        }
     }
 
-    void addLayer(std::unique_ptr<ILayer> layer)
+    void addLayer(std::unique_ptr<ILayer> _layer)
     {
-        if (!layer)
+        if (!_layer)
         {
-            Logger::logMessage("Neural_Network::addLayer: Attempted to add a null layer pointer", LOG_ERROR, true);
+            Logger::logMessage("Neural_Network::addLayer: Attempted to add a null layer pointer",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::LAYER_INSPECTION);
             throw std::invalid_argument("Cannot add null layer pointer");
         }
-        layer->setTarget(target);
-        NEURAL_NETWORK_LOG_DEBUG("Neural_Network::addLayer: Added layer type " + static_cast<std::string>(magic_enum::enum_name<Layer_Type>(layer->getLayerType())));
-        layers.push_back(std::move(layer));
+        _layer->setExecutionTarget(execution_target);
+        Logger::logMessage(std::format("Neural_Network::addLayer: Added layer type {}",
+                                       magic_enum::enum_name<Layer_Type>(_layer->getLayerType())),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::LAYER_INSPECTION);
+        layers.push_back(std::move(_layer));
     }
 
-    void setTarget(Execution_Target new_target)
+    template <std::derived_from<ILayer> Layer_Type_T, typename... Args>
+    Layer_Type_T &addLayer(Args &&...args)
     {
-        if (target != new_target)
+        auto new_layer = std::make_unique<Layer_Type_T>(std::forward<Args>(args)...);
+        Layer_Type_T &layer_reference = *new_layer;
+        addLayer(std::move(new_layer));
+        return layer_reference;
+    }
+
+    void setExecutionTarget(Execution_Target _new_execution_target)
+    {
+        if (execution_target != _new_execution_target)
         {
-            Logger::logMessage("Neural_Network::setTarget: Changing network execution target from " + std::to_string(static_cast<int>(target)) + " to " + std::to_string(static_cast<int>(new_target)), LOG_WARNING);
+            Logger::logMessage(std::format("Neural_Network::setExecutionTarget: Changing network execution target from {} to {}",
+                                           magic_enum::enum_name(execution_target),
+                                           magic_enum::enum_name(_new_execution_target)),
+                               Log_Level::LOG_WARNING,
+                               true,
+                               1,
+                               Log_Feature::DEVICE_MANAGEMENT);
         }
-        target = new_target;
-        last_prediction.setExecutionTarget(new_target);
+        execution_target = _new_execution_target;
+        last_prediction.setExecutionTarget(_new_execution_target);
         for (auto &layer : layers)
         {
-            layer->setTarget(new_target);
+            layer->setExecutionTarget(_new_execution_target);
         }
-        is_target_synced = true;
+        is_target_synchronized = true;
     }
 
-    void setTrainingMode(bool is_training_mode)
+    void setTarget(Execution_Target _new_execution_target)
     {
-        NEURAL_NETWORK_LOG_DEBUG("Neural_Network::setTrainingMode: Setting training mode to " + std::string(is_training_mode ? "true" : "false"));
+        setExecutionTarget(_new_execution_target);
+    }
+
+    void setTrainingMode(bool _is_training_mode)
+    {
+        Logger::logMessage(std::format("Neural_Network::setTrainingMode: Setting training mode to {}",
+                                       _is_training_mode ? "true" : "false"),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::TRAINING);
         for (auto &layer : layers)
         {
-            layer->setTrainingMode(is_training_mode);
+            layer->setTrainingMode(_is_training_mode);
         }
     }
 
-    Matrix forward(const Matrix &input_matrix)
+    Matrix forward(const Matrix &_input_matrix)
     {
         if (layers.empty())
         {
-            Logger::logMessage("Neural_Network::forward: Network has no layers", LOG_ERROR, true);
+            Logger::logMessage("Neural_Network::forward: Network has no layers",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::FORWARD_EVALUATION);
             throw std::logic_error("Neural network has no layers to execute forward pass");
         }
 
-        NEURAL_NETWORK_LOG_DEBUG("Neural_Network::forward: input rows=" + std::to_string(input_matrix.getRows()) + ", cols=" + std::to_string(input_matrix.getCols()));
-
-        Matrix current_output = input_matrix;
+        Matrix current_output = _input_matrix;
         for (const auto &layer : layers)
+        {
             current_output = layer->forward(current_output);
+        }
         last_prediction = current_output;
         return current_output;
     }
 
-    Matrix backward(const Matrix &target_matrix)
+    Matrix backward(const Matrix &_target_matrix)
     {
-        const ICost_Function &cost_fn = context.getCostFunction();
         if (layers.empty())
         {
-            Logger::logMessage("Neural_Network::backward: Network has no layers", LOG_ERROR, true);
-            throw std::logic_error("Neural network has no layers to execute backward pass");
+            Logger::logMessage("Neural_Network::backward: Network has no layers",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::BACKWARD_PROPAGATION);
+            throw std::runtime_error("Network has no layers");
+        }
+        const ICost_Function &cost_function = training_context.getCostFunction();
+
+        Matrix last_prediction_output = layers.back()->getOutput();
+        Matrix gradient_matrix = cost_function.computeGradient(last_prediction_output, _target_matrix);
+        for (std::size_t i = layers.size(); i > 0; --i)
+        {
+            gradient_matrix = layers[i - 1]->backward(gradient_matrix);
         }
 
-        NEURAL_NETWORK_LOG_DEBUG("Neural_Network::backward: target rows=" + std::to_string(target_matrix.getRows()) + ", cols=" + std::to_string(target_matrix.getCols()));
-
-        Matrix gradient_matrix = cost_fn.computeGradient(last_prediction, target_matrix);
-        for (std::size_t i = layers.size(); i > 0; --i)
-            gradient_matrix = layers[i - 1]->backward(gradient_matrix);
         return gradient_matrix;
     }
 
-    std::vector<std::pair<Matrix *, Matrix *>> getParamsAndGrads()
+     std::vector<std::pair<Matrix *, Matrix *>> getParametersAndGradients()
     {
-        std::vector<std::pair<Matrix *, Matrix *>> param_grad_pairs;
+        std::vector<std::pair<Matrix *, Matrix *>> parameter_gradient_pairs;
         for (auto &layer : layers)
         {
             if (layer->hasParameters())
             {
-                auto pairs = layer->getParamsAndGrads();
-                param_grad_pairs.insert(param_grad_pairs.end(), pairs.begin(), pairs.end());
+                auto pairs = layer->getParametersAndGradients();
+                parameter_gradient_pairs.insert(parameter_gradient_pairs.end(), pairs.begin(), pairs.end());
             }
         }
-        return param_grad_pairs;
+        return parameter_gradient_pairs;
+    }
+
+     std::vector<std::pair<Matrix *, Matrix *>> getParamsAndGrads()
+    {
+        return getParametersAndGradients();
     }
 
     void reset()
     {
         if (layers.empty())
         {
-            Logger::logMessage("Neural_Network::reset: Network has no layers", LOG_ERROR, true);
+            Logger::logMessage("Neural_Network::reset: Network has no layers",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::TRAINING);
             throw std::logic_error("Neural network has no layers to reset gradients");
         }
 
@@ -147,326 +197,537 @@ public:
         {
             layer->resetGradient();
         }
-        last_prediction = Matrix(0, 0, target);
     }
 
-    void trainStep(const Matrix &input_matrix, const Matrix &target_matrix)
+    void resetGradients()
     {
-        auto start_gpu = std::chrono::high_resolution_clock::now();
-
-        IOptimizer &optimizer = context.getOptimizer();
-        optimizer.setLearningRate(context.getLearningRate().getCurrentRate());
-
-        forward(input_matrix);
-        backward(target_matrix);
-
-        optimizer.step(getParamsAndGrads());
         reset();
-
-        if (target == Execution_Target::VULKAN_GPU)
-        {
-            Execution_Engine::getInstance().executeGraph();
-            Execution_Engine::getInstance().waitIdle();
-        }
-        auto end_gpu = std::chrono::high_resolution_clock::now();
-        Logger::logMessage(std::format("[Thread Main {}] Finished GPU TrainStep in {:.2f} ms",
-                                       std::this_thread::get_id(),
-                                       std::chrono::duration<double, std::milli>(end_gpu - start_gpu).count()),
-                           LOG_DEBUG, true);
     }
 
-    void fit(Async_Data_Pipeline &data_pipeline, std::size_t total_epochs, std::size_t steps_per_epoch)
+    void compileAndWarmup(std::size_t _batch_size, std::size_t _input_dimension, std::size_t _output_dimension)
     {
-        if (!is_target_synced)
+        if (layers.empty())
         {
-            Logger::logMessage("Neural_Network::fit: Execution target is not synced, syncing now", LOG_WARNING);
-            setTarget(target);
-        }
-
-        if (total_epochs == 0 || steps_per_epoch == 0)
-        {
-            Logger::logMessage("Neural_Network::fit: total_epochs or steps_per_epoch is 0", LOG_WARNING);
+            Logger::logMessage("Neural_Network::compileAndWarmup: Network has no layers",
+                               Log_Level::LOG_WARNING,
+                               true,
+                               0,
+                               Log_Feature::TRAINING);
             return;
         }
 
-        NEURAL_NETWORK_LOG_DEBUG("Neural_Network::fit: Starting fit total_epochs=" + std::to_string(total_epochs) + ", steps_per_epoch=" + std::to_string(steps_per_epoch));
+        Matrix dummy_input(_batch_size, _input_dimension, execution_target);
+        Matrix dummy_target(_batch_size, _output_dimension, execution_target);
 
-        setTrainingMode(true);
-        data_pipeline.start();
+        forward(dummy_input);
+        backward(dummy_target);
 
-        for (std::size_t epoch = context.getCurrentEpoch(); epoch < total_epochs; ++epoch)
+        IOptimizer &optimizer = training_context.getOptimizer();
+        optimizer.step(getParametersAndGradients());
+
+        reset();
+        optimizer.reset();
+
+        if (execution_target == Execution_Target::VULKAN_GPU)
         {
-            context.setCurrentEpoch(epoch);
+            Execution_Engine &engine = Execution_Engine::getInstance();
+            engine.enableGraphCaching(true);
+            engine.warmCache(engine.getCurrentGraph());
+            engine.getCurrentGraph().clear();
+            engine.waitIdle();
+        }
+    }
 
-            for (std::size_t step = 0; step < steps_per_epoch; ++step)
+    void printL2Norms()
+    {
+        auto parameter_gradient_pairs = getParametersAndGradients();
+        std::size_t parameter_index = 0;
+
+        auto compute_l2_norm = [](const Matrix &_matrix) -> float
+        {
+            const auto &data = _matrix.getData();
+            float sum_of_squares = 0.0f;
+            for (float value : data)
             {
-                Batch_Data batch = data_pipeline.nextBatch();
+                sum_of_squares += value * value;
+            }
+            return std::sqrt(sum_of_squares);
+        };
 
-                if (batch.inputs.getTarget() != target)
-                {
-                    Logger::logMessage("Neural_Network::fit: Batch input target mismatch with network target, converting batch", LOG_WARNING);
-                    batch.inputs.setExecutionTarget(target);
-                    batch.targets.setExecutionTarget(target);
-                }
-
-                trainStep(batch.inputs, batch.targets);
+        std::string inspection_result = "\n--- Gradient & Parameter L2 Norm Inspection ---\n";
+        for (const auto &[parameter, gradient] : parameter_gradient_pairs)
+        {
+            if (!parameter || !gradient)
+            {
+                continue;
             }
 
-            context.getLearningRate().step();
-        }
+            float parameter_norm = compute_l2_norm(*parameter);
+            float gradient_norm = compute_l2_norm(*gradient);
+            float norm_ratio = (parameter_norm > 1e-8f) ? (gradient_norm / parameter_norm) : 0.0f;
 
-        data_pipeline.stop();
+            inspection_result += std::format("Param #{:<2} | Shape: {:>4}x{:<4} | ||W||: {:>10.4e} | ||dW||: {:>10.4e} | Ratio: {:>10.4e}\n",
+                                             parameter_index++,
+                                             parameter->getRows(),
+                                             parameter->getColumns(),
+                                             parameter_norm,
+                                             gradient_norm,
+                                             norm_ratio);
+        }
+        inspection_result += "-----------------------------------------------\n\n";
+        Logger::logMessage(inspection_result, Log_Level::LOG_DEBUG, true, 0, Log_Feature::LAYER_INSPECTION);
     }
 
-    float evaluate(const Matrix &input_matrix, const Matrix &target_matrix)
+    void trainStep(Matrix &_input_matrix, Matrix &_target_matrix, VkFence _fence = VK_NULL_HANDLE)
     {
-        setTrainingMode(false);
+        Execution_Engine &engine = Execution_Engine::getInstance();
 
-        Matrix eval_input = input_matrix;
-        Matrix eval_target = target_matrix;
-
-        if (eval_input.getTarget() != target)
+        if (_input_matrix.getExecutionTarget() != execution_target)
         {
-            Logger::logMessage("Neural_Network::evaluate: input_matrix target mismatch with network target, converting input", LOG_WARNING);
-            eval_input.setExecutionTarget(target);
+            _input_matrix.setExecutionTarget(execution_target);
         }
 
-        if (eval_target.getTarget() != target)
+        if (_target_matrix.getExecutionTarget() != execution_target)
         {
-            Logger::logMessage("Neural_Network::evaluate: target_matrix target mismatch with network target, converting target", LOG_WARNING);
-            eval_target.setExecutionTarget(target);
+            _target_matrix.setExecutionTarget(execution_target);
         }
 
-        const ICost_Function &cost_fn = context.getCostFunction();
-        Matrix pred = forward(eval_input);
+        forward(_input_matrix);
+        backward(_target_matrix);
 
-        if (target == Execution_Target::VULKAN_GPU)
-            Execution_Engine::getInstance().executeGraph();
+        // printL2Norms();
 
-        float loss_val = cost_fn.computeLoss(pred, eval_target);
+        IOptimizer &optimizer = training_context.getOptimizer();
+        optimizer.step(getParametersAndGradients());
 
-        setTrainingMode(true);
-        return loss_val;
+        if (execution_target == Execution_Target::VULKAN_GPU)
+        {
+            engine.executeGraph(_fence);
+        }
     }
 
-    void saveInference(const std::string &file_path) const
+    void fit(Async_Data_Pipeline &_data_pipeline,
+             std::size_t _total_epochs,
+             std::size_t _steps_per_epoch,
+             std::size_t _batch_size,
+             std::size_t _input_dimension,
+             std::size_t _output_dimension)
+    {
+        setTrainingMode(true);
+
+        Execution_Engine &engine = Execution_Engine::getInstance();
+
+        _data_pipeline.setDevice(engine.getContext().getDevice());
+        _data_pipeline.start();
+
+        for (std::size_t epoch = training_context.getCurrentEpoch(); epoch < _total_epochs; ++epoch)
+        {
+            training_context.setCurrentEpoch(epoch);
+
+            for (std::size_t step_index = 0; step_index < _steps_per_epoch; ++step_index)
+            {
+                Batch_Data batch_data = _data_pipeline.nextBatch(_batch_size, _input_dimension, _output_dimension);
+
+                if (batch_data.input_matrix && batch_data.target_matrix)
+                {
+                    if (batch_data.input_matrix->getExecutionTarget() != execution_target)
+                    {
+                        batch_data.input_matrix->setExecutionTarget(execution_target);
+                        batch_data.target_matrix->setExecutionTarget(execution_target);
+                    }
+
+                    trainStep(*batch_data.input_matrix, *batch_data.target_matrix, batch_data.fence);
+                }
+            }
+
+            training_context.getLearningRate().step();
+        }
+
+        engine.waitIdle();
+        training_context.setCurrentEpoch(_total_epochs);
+        _data_pipeline.stop();
+    }
+
+    void saveInference(const std::string &_file_path) const
     {
         Execution_Engine::getInstance().waitIdle();
-        std::ofstream out_file(file_path, std::ios::binary);
-        if (!out_file.is_open())
+        std::ofstream output_file_stream(_file_path, std::ios::binary);
+        if (!output_file_stream.is_open())
         {
-            Logger::logMessage("Neural_Network::saveInference: Failed to open file: " + file_path, LOG_ERROR, true);
+            Logger::logMessage(std::format("Neural_Network::saveInference: Failed to open file: {}", _file_path),
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::MODEL_SERIALIZATION);
             throw std::runtime_error("Failed to open file for saving inference model");
         }
 
-        NEURAL_NETWORK_LOG_DEBUG("Neural_Network::saveInference: Saving inference model to " + file_path);
+        Logger::logMessage(std::format("Neural_Network::saveInference: Saving inference model to {}", _file_path),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::MODEL_SERIALIZATION);
 
-        const char magic[4] = {'N', 'N', 'I', '1'};
-        out_file.write(magic, 4);
+        const char magic_header[4] = {'N', 'N', 'I', '1'};
+        output_file_stream.write(magic_header, 4);
 
         std::uint32_t total_layer_count = static_cast<std::uint32_t>(layers.size());
-        out_file.write(reinterpret_cast<const char *>(&total_layer_count), sizeof(total_layer_count));
+        output_file_stream.write(reinterpret_cast<const char *>(&total_layer_count), sizeof(total_layer_count));
 
         for (const auto &layer : layers)
         {
-            Layer_Type type_val = layer->getLayerType();
-            out_file.write(reinterpret_cast<const char *>(&type_val), sizeof(type_val));
-            layer->saveConfig(out_file);
+            Layer_Type layer_type = layer->getLayerType();
+            output_file_stream.write(reinterpret_cast<const char *>(&layer_type), sizeof(layer_type));
+            layer->saveConfiguration(output_file_stream);
         }
 
         for (const auto &layer : layers)
         {
             if (layer->hasParameters())
             {
-                layer->saveInference(out_file);
+                layer->saveInference(output_file_stream);
             }
         }
+        Logger::logMessage("Inference saved to " + _file_path, Log_Level::LOG_INFO, 1, true);
     }
 
-    void loadInference(const std::string &file_path, Execution_Target exec_target = Execution_Target::CPU)
+    void loadInference(const std::string &_file_path, Execution_Target _execution_target = Execution_Target::CPU)
     {
-        std::ifstream in_file(file_path, std::ios::binary);
-        if (!in_file.is_open())
+        std::ifstream input_file_stream(_file_path, std::ios::binary);
+        if (!input_file_stream.is_open())
         {
-            Logger::logMessage("Neural_Network::loadInference: Failed to open file: " + file_path, LOG_ERROR, true);
+            Logger::logMessage(std::format("Neural_Network::loadInference: Failed to open file: {}", _file_path),
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::MODEL_SERIALIZATION);
             throw std::runtime_error("Failed to open file for loading inference model");
         }
 
-        char magic[4];
-        in_file.read(magic, 4);
-        if (magic[0] != 'N' || magic[1] != 'N' || magic[2] != 'I' || magic[3] != '1')
+        char magic_header[4];
+        input_file_stream.read(magic_header, 4);
+        if (magic_header[0] != 'N' || magic_header[1] != 'N' || magic_header[2] != 'I' || magic_header[3] != '1')
         {
-            Logger::logMessage("Neural_Network::loadInference: Invalid magic header", LOG_ERROR, true);
+            Logger::logMessage("Neural_Network::loadInference: Invalid magic header",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::MODEL_SERIALIZATION);
             throw std::runtime_error("Invalid magic header for inference model");
         }
 
         std::uint32_t total_layer_count = 0;
-        in_file.read(reinterpret_cast<char *>(&total_layer_count), sizeof(total_layer_count));
+        input_file_stream.read(reinterpret_cast<char *>(&total_layer_count), sizeof(total_layer_count));
 
-        NEURAL_NETWORK_LOG_DEBUG("Neural_Network::loadInference: Loading inference model from " + file_path + ", total_layers=" + std::to_string(total_layer_count));
+        Logger::logMessage(std::format("Neural_Network::loadInference: Loading inference model from {}, total_layers={}",
+                                       _file_path,
+                                       total_layer_count),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::MODEL_SERIALIZATION);
 
         layers.clear();
         layers.reserve(total_layer_count);
 
         for (std::uint32_t i = 0; i < total_layer_count; ++i)
         {
-            Layer_Type type_val;
-            in_file.read(reinterpret_cast<char *>(&type_val), sizeof(type_val));
-            Logger::logMessage("Neural_Network::loadInference: Layer " + std::to_string(i) + " type = " + static_cast<std::string>(magic_enum::enum_name(type_val)), LOG_INFO, true);
-            layers.push_back(Training_Context::constructLayerFromConfig(in_file, type_val, exec_target));
+            Layer_Type layer_type;
+            input_file_stream.read(reinterpret_cast<char *>(&layer_type), sizeof(layer_type));
+            Logger::logMessage(std::format("Neural_Network::loadInference: Layer {} type = {}",
+                                           i,
+                                           magic_enum::enum_name(layer_type)),
+                               Log_Level::LOG_INFO,
+                               true,
+                               0,
+                               Log_Feature::MODEL_SERIALIZATION);
+            layers.push_back(Training_Context::constructLayerFromConfig(input_file_stream, layer_type, _execution_target));
         }
 
         for (auto &layer : layers)
         {
             if (layer->hasParameters())
             {
-                layer->loadInference(in_file);
+                layer->loadInference(input_file_stream);
             }
         }
 
-        setTarget(exec_target);
+        setExecutionTarget(_execution_target);
+        Logger::logMessage("Inference loaded from {}" + _file_path, Log_Level::LOG_INFO, true, 1);
     }
 
-    void saveTrainingCheckpoint(const std::string &file_path, std::size_t current_epoch) const
+    void saveTrainingCheckpoint(const std::string &_file_path, std::size_t _current_epoch) const
     {
-        std::ofstream out_file(file_path, std::ios::binary);
-        if (!out_file.is_open())
+        std::ofstream output_file_stream(_file_path, std::ios::binary);
+        if (!output_file_stream.is_open())
         {
-            Logger::logMessage("Neural_Network::saveTrainingCheckpoint: Failed to open file: " + file_path, LOG_ERROR, true);
+            Logger::logMessage(std::format("Neural_Network::saveTrainingCheckpoint: Failed to open file: {}", _file_path),
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::MODEL_SERIALIZATION);
             throw std::runtime_error("Failed to open file for saving training checkpoint");
         }
 
-        NEURAL_NETWORK_LOG_DEBUG("Neural_Network::saveTrainingCheckpoint: Saving checkpoint to " + file_path + ", epoch=" + std::to_string(current_epoch));
+        Logger::logMessage(std::format("Neural_Network::saveTrainingCheckpoint: Saving checkpoint to {}, epoch={}",
+                                       _file_path,
+                                       _current_epoch),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::MODEL_SERIALIZATION);
 
-        const char magic[4] = {'N', 'N', 'C', 'K'};
-        out_file.write(magic, 4);
+        const char magic_header[4] = {'N', 'N', 'C', 'K'};
+        output_file_stream.write(magic_header, 4);
 
-        std::uint32_t epoch_val = static_cast<std::uint32_t>(current_epoch);
-        out_file.write(reinterpret_cast<const char *>(&epoch_val), sizeof(epoch_val));
+        std::uint32_t epoch_value = static_cast<std::uint32_t>(_current_epoch);
+        output_file_stream.write(reinterpret_cast<const char *>(&epoch_value), sizeof(epoch_value));
 
-        const ICost_Function &cost_fn = context.getCostFunction();
-        Cost_Type cost_type = cost_fn.getType();
-        out_file.write(reinterpret_cast<const char *>(&cost_type), sizeof(cost_type));
-        cost_fn.saveCheckpoint(out_file);
+        const ICost_Function &cost_function = training_context.getCostFunction();
+        Cost_Type cost_type = cost_function.getType();
+        output_file_stream.write(reinterpret_cast<const char *>(&cost_type), sizeof(cost_type));
+        cost_function.saveCheckpoint(output_file_stream);
 
-        const ILearning_Rate &lr_scheduler = context.getLearningRate();
-        Decay_Mode decay_type = lr_scheduler.getType();
-        out_file.write(reinterpret_cast<const char *>(&decay_type), sizeof(decay_type));
-        lr_scheduler.saveCheckpoint(out_file);
+        const ILearning_Rate &learning_rate_scheduler = training_context.getLearningRate();
+        Decay_Mode decay_mode = learning_rate_scheduler.getType();
+        output_file_stream.write(reinterpret_cast<const char *>(&decay_mode), sizeof(decay_mode));
+        learning_rate_scheduler.saveCheckpoint(output_file_stream);
 
-        const IOptimizer &optimizer = context.getOptimizer();
-        Optimizer_Type opt_type = optimizer.getType();
-        out_file.write(reinterpret_cast<const char *>(&opt_type), sizeof(opt_type));
-        optimizer.saveCheckpoint(out_file);
+        const IOptimizer &optimizer = training_context.getOptimizer();
+        Optimizer_Type optimizer_type = optimizer.getType();
+        output_file_stream.write(reinterpret_cast<const char *>(&optimizer_type), sizeof(optimizer_type));
+        optimizer.saveCheckpoint(output_file_stream);
 
         std::uint32_t total_layer_count = static_cast<std::uint32_t>(layers.size());
-        out_file.write(reinterpret_cast<const char *>(&total_layer_count), sizeof(total_layer_count));
+        output_file_stream.write(reinterpret_cast<const char *>(&total_layer_count), sizeof(total_layer_count));
 
         for (const auto &layer : layers)
         {
-            Layer_Type type_val = layer->getLayerType();
-            out_file.write(reinterpret_cast<const char *>(&type_val), sizeof(type_val));
-            layer->saveConfig(out_file);
+            Layer_Type layer_type = layer->getLayerType();
+            output_file_stream.write(reinterpret_cast<const char *>(&layer_type), sizeof(layer_type));
+            layer->saveConfiguration(output_file_stream);
         }
 
         for (const auto &layer : layers)
         {
             if (layer->hasParameters())
             {
-                layer->saveCheckpoint(out_file);
+                layer->saveCheckpoint(output_file_stream);
             }
         }
     }
 
-    void loadTrainingCheckpoint(const std::string &file_path, std::size_t total_epochs, Execution_Target exec_target = Execution_Target::CPU)
+    void loadTrainingCheckpoint(const std::string &_file_path, std::size_t _total_epochs, Execution_Target _execution_target = Execution_Target::CPU)
     {
-        std::ifstream in_file(file_path, std::ios::binary);
-        if (!in_file.is_open())
+        std::ifstream input_file_stream(_file_path, std::ios::binary);
+        if (!input_file_stream.is_open())
         {
-            Logger::logMessage("Neural_Network::loadTrainingCheckpoint: Failed to open file: " + file_path, LOG_ERROR, true);
+            Logger::logMessage(std::format("Neural_Network::loadTrainingCheckpoint: Failed to open file: {}", _file_path),
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::MODEL_SERIALIZATION);
             throw std::runtime_error("Failed to open checkpoint file");
         }
 
-        if (!context.loadHeader(in_file, exec_target))
+        if (!training_context.loadHeader(input_file_stream, _execution_target))
         {
-            Logger::logMessage("Neural_Network::loadTrainingCheckpoint: Failed to load context header", LOG_ERROR, true);
+            Logger::logMessage("Neural_Network::loadTrainingCheckpoint: Failed to load context header",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::MODEL_SERIALIZATION);
             throw std::runtime_error("Failed to load context header");
         }
 
         std::uint32_t total_layer_count = 0;
-        in_file.read(reinterpret_cast<char *>(&total_layer_count), sizeof(total_layer_count));
+        input_file_stream.read(reinterpret_cast<char *>(&total_layer_count), sizeof(total_layer_count));
 
-        NEURAL_NETWORK_LOG_DEBUG("Neural_Network::loadTrainingCheckpoint: Loading checkpoint from " + file_path + ", total_layers=" + std::to_string(total_layer_count));
+        Logger::logMessage(std::format("Neural_Network::loadTrainingCheckpoint: Loading checkpoint from {}, total_layers={}",
+                                       _file_path,
+                                       total_layer_count),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::MODEL_SERIALIZATION);
 
         layers.clear();
         layers.reserve(total_layer_count);
 
         for (std::uint32_t i = 0; i < total_layer_count; ++i)
         {
-            Layer_Type type_val;
-            in_file.read(reinterpret_cast<char *>(&type_val), sizeof(type_val));
-            layers.push_back(Training_Context::constructLayerFromConfig(in_file, type_val, exec_target));
+            Layer_Type layer_type;
+            input_file_stream.read(reinterpret_cast<char *>(&layer_type), sizeof(layer_type));
+            layers.push_back(Training_Context::constructLayerFromConfig(input_file_stream, layer_type, _execution_target));
         }
 
         for (auto &layer : layers)
         {
             if (layer->hasParameters())
             {
-                layer->loadCheckpoint(in_file);
+                layer->loadCheckpoint(input_file_stream);
             }
         }
 
-        if (total_epochs < context.getCurrentEpoch())
+        if (_total_epochs < training_context.getCurrentEpoch())
         {
-            Logger::logMessage("Neural_Network::loadTrainingCheckpoint: The total epoch is currently smaller than epochs that the network trained", LOG_WARNING, true);
+            Logger::logMessage("Neural_Network::loadTrainingCheckpoint: The total epoch is currently smaller than epochs that the network trained",
+                               Log_Level::LOG_WARNING,
+                               true,
+                               0,
+                               Log_Feature::MODEL_SERIALIZATION);
         }
-        context.getLearningRate().setMaxEpoch(static_cast<int>(total_epochs));
+        training_context.getLearningRate().setMaxEpoch(static_cast<int>(_total_epochs));
 
-        setTarget(exec_target);
+        setExecutionTarget(_execution_target);
     }
 
-    const Matrix &getLastPrediction() const { return last_prediction; }
-
-    const ILayer &getLayer(std::size_t index) const { return *layers[index]; }
-
-    Training_Context &getContext() { return context; }
-    const Training_Context &getContext() const { return context; }
-
-    std::size_t getCurrentEpoch() const { return context.getCurrentEpoch(); }
-
-    IOptimizer &getOptimizer() { return context.getOptimizer(); }
-
-    ICost_Function &getCostFunction() { return context.getCostFunction(); }
-
-    ILearning_Rate &getLearningRate() { return context.getLearningRate(); }
-
-    void setCostFunction(std::unique_ptr<ICost_Function> cost_fn)
+     const Matrix &getLastPrediction() const noexcept
     {
-        if (!cost_fn)
+        return last_prediction;
+    }
+
+     const ILayer &getLayer(std::size_t _index) const
+    {
+        return *layers.at(_index);
+    }
+
+     ILayer &getLayer(std::size_t _index)
+    {
+        return *layers.at(_index);
+    }
+
+     std::size_t getLayerCount() const noexcept
+    {
+        return layers.size();
+    }
+
+     Training_Context &getContext() noexcept
+    {
+        return training_context;
+    }
+
+     const Training_Context &getContext() const noexcept
+    {
+        return training_context;
+    }
+
+     Training_Context &getTrainingContext() noexcept
+    {
+        return training_context;
+    }
+
+     const Training_Context &getTrainingContext() const noexcept
+    {
+        return training_context;
+    }
+
+     std::size_t getCurrentEpoch() const noexcept
+    {
+        return training_context.getCurrentEpoch();
+    }
+
+     IOptimizer &getOptimizer()
+    {
+        return training_context.getOptimizer();
+    }
+
+     const IOptimizer &getOptimizer() const
+    {
+        return training_context.getOptimizer();
+    }
+
+     ICost_Function &getCostFunction()
+    {
+        return training_context.getCostFunction();
+    }
+
+     const ICost_Function &getCostFunction() const
+    {
+        return training_context.getCostFunction();
+    }
+
+     ILearning_Rate &getLearningRate()
+    {
+        return training_context.getLearningRate();
+    }
+
+     const ILearning_Rate &getLearningRate() const
+    {
+        return training_context.getLearningRate();
+    }
+
+     Execution_Target getExecutionTarget() const noexcept
+    {
+        return execution_target;
+    }
+
+    void setCostFunction(std::unique_ptr<ICost_Function> _cost_function)
+    {
+        if (!_cost_function)
         {
-            Logger::logMessage("Neural_Network::setCostFunction: Attempted to set null cost function", LOG_ERROR, true);
+            Logger::logMessage("Neural_Network::setCostFunction: Attempted to set null cost function",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::TRAINING);
             throw std::invalid_argument("Cannot set null cost function");
         }
-        context.setCostFunction(std::move(cost_fn));
+        training_context.setCostFunction(std::move(_cost_function));
     }
 
-    void setLearningRate(std::unique_ptr<ILearning_Rate> learning_rate)
+    template <std::derived_from<ICost_Function> Cost_Type_T, typename... Args>
+    Cost_Type_T &setCostFunction(Args &&...args)
     {
-        if (!learning_rate)
+        auto cost = std::make_unique<Cost_Type_T>(std::forward<Args>(args)...);
+        Cost_Type_T &cost_reference = *cost;
+        setCostFunction(std::move(cost));
+        return cost_reference;
+    }
+
+    void setLearningRate(std::unique_ptr<ILearning_Rate> _learning_rate_scheduler)
+    {
+        if (!_learning_rate_scheduler)
         {
-            Logger::logMessage("Neural_Network::setLearningRate: Attempted to set null learning rate scheduler", LOG_ERROR, true);
+            Logger::logMessage("Neural_Network::setLearningRate: Attempted to set null learning rate scheduler",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::TRAINING);
             throw std::invalid_argument("Cannot set null learning rate scheduler");
         }
-        context.setLearningRate(std::move(learning_rate));
+        training_context.setLearningRate(std::move(_learning_rate_scheduler));
     }
 
-    void setOptimizer(std::unique_ptr<IOptimizer> optimizer)
+    template <std::derived_from<ILearning_Rate> Scheduler_Type_T, typename... Args>
+    Scheduler_Type_T &setLearningRate(Args &&...args)
     {
-        if (!optimizer)
+        auto scheduler = std::make_unique<Scheduler_Type_T>(std::forward<Args>(args)...);
+        Scheduler_Type_T &scheduler_reference = *scheduler;
+        setLearningRate(std::move(scheduler));
+        return scheduler_reference;
+    }
+
+    void setOptimizer(std::unique_ptr<IOptimizer> _optimizer)
+    {
+        if (!_optimizer)
         {
-            Logger::logMessage("Neural_Network::setOptimizer: Attempted to set null optimizer", LOG_ERROR, true);
+            Logger::logMessage("Neural_Network::setOptimizer: Attempted to set null optimizer",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::TRAINING);
             throw std::invalid_argument("Cannot set null optimizer");
         }
-        context.setOptimizer(std::move(optimizer));
+        training_context.setOptimizer(std::move(_optimizer));
+    }
+
+    template <std::derived_from<IOptimizer> Optimizer_Type_T, typename... Args>
+    Optimizer_Type_T &setOptimizer(Args &&...args)
+    {
+        auto opt = std::make_unique<Optimizer_Type_T>(std::forward<Args>(args)...);
+        Optimizer_Type_T &opt_reference = *opt;
+        setOptimizer(std::move(opt));
+        return opt_reference;
     }
 };

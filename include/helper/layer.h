@@ -10,3 +10,5 @@
 #include "layer/globalavgpool2d_layer.h"
 #include "layer/batch_norm2d_layer.h"
 #include "layer/ilayer.h"
+#include "layer/res_net_20_layer.h"
+#include "layer/res_net_block_2d_layer.h"

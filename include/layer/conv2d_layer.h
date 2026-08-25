@@ -3,184 +3,245 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <format>
 #include <fstream>
 #include <random>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "helper/logger.h"
+#include "helper/magic_enum.hpp"
 #include "ilayer.h"
 #include "math/matrix.h"
 
 class Conv2d_Layer : public ILayer
 {
 private:
-    std::uint32_t in_h;
-    std::uint32_t in_w;
-    std::uint32_t in_c;
-    std::uint32_t out_c;
-    std::uint32_t kernel_size;
-    std::uint32_t stride;
-    std::uint32_t padding;
-    std::uint32_t out_h;
-    std::uint32_t out_w;
+    std::uint32_t input_height = 0;
+    std::uint32_t input_width = 0;
+    std::uint32_t input_channels = 0;
+    std::uint32_t output_channels = 0;
+    std::uint32_t kernel_size = 0;
+    std::uint32_t stride = 1;
+    std::uint32_t padding = 0;
+    std::uint32_t output_height = 0;
+    std::uint32_t output_width = 0;
 
     Matrix weights;
     Matrix biases;
     Matrix weights_gradient;
     Matrix biases_gradient;
-    Matrix inputs;
-    Matrix outputs;
+    Matrix input_matrix;
+    Matrix output_matrix;
+    Matrix input_gradient;
 
-    bool has_forward;
-    Execution_Target target;
+    bool is_forward_completed = false;
+    Execution_Target execution_target = Execution_Target::CPU;
 
     void initializeWeights()
     {
-        std::size_t num_weights = kernel_size * kernel_size * in_c * out_c;
-        std::vector<float> host_weights(num_weights);
-        std::vector<float> host_biases(out_c, 0.0f);
+        std::size_t weight_count = kernel_size * kernel_size * input_channels * output_channels;
+        std::vector<float> host_weights(weight_count);
+        std::vector<float> host_biases(output_channels, 0.0f);
 
-        float fan_in = static_cast<float>(kernel_size * kernel_size * in_c);
-        float std_dev = std::sqrt(2.0f / fan_in);
+        float fan_in = static_cast<float>(kernel_size * kernel_size * input_channels);
+        float standard_deviation = std::sqrt(2.0f / fan_in);
 
-        std::mt19937 gen(std::random_device{}());
-        std::normal_distribution<float> dist(0.0f, std_dev);
+        std::mt19937 generator(std::random_device{}());
+        std::normal_distribution<float> normal_distribution(0.0f, standard_deviation);
 
-        for (std::size_t i = 0; i < num_weights; ++i)
+        for (std::size_t i = 0; i < weight_count; ++i)
         {
-            host_weights[i] = dist(gen);
+            host_weights[i] = normal_distribution(generator);
         }
 
-        weights = Matrix(1, num_weights, host_weights, target);
-        biases = Matrix(1, out_c, host_biases, target);
-        weights_gradient = Matrix(1, num_weights, target);
-        biases_gradient = Matrix(1, out_c, target);
+        weights = Matrix(1, weight_count, host_weights, execution_target);
+        biases = Matrix(1, output_channels, host_biases, execution_target);
+        weights_gradient = Matrix(1, weight_count, execution_target);
+        biases_gradient = Matrix(1, output_channels, execution_target);
     }
 
 public:
-    Conv2d_Layer(std::uint32_t h, std::uint32_t w, std::uint32_t c_in, std::uint32_t c_out, std::uint32_t k, std::uint32_t s, std::uint32_t p, Execution_Target exec_target = Execution_Target::CPU)
-        : in_h(h), in_w(w), in_c(c_in), out_c(c_out), kernel_size(k), stride(s), padding(p), target(exec_target), has_forward(false)
+    Conv2d_Layer(std::uint32_t _height,
+                 std::uint32_t _width,
+                 std::uint32_t _input_channels,
+                 std::uint32_t _output_channels,
+                 std::uint32_t _kernel_size,
+                 std::uint32_t _stride,
+                 std::uint32_t _padding,
+                 Execution_Target _execution_target = Execution_Target::CPU)
+        : input_height(_height),
+          input_width(_width),
+          input_channels(_input_channels),
+          output_channels(_output_channels),
+          kernel_size(_kernel_size),
+          stride(_stride),
+          padding(_padding),
+          execution_target(_execution_target),
+          weights(0, 0, _execution_target),
+          biases(0, 0, _execution_target),
+          weights_gradient(0, 0, _execution_target),
+          biases_gradient(0, 0, _execution_target),
+          input_matrix(0, 0, _execution_target),
+          output_matrix(0, 0, _execution_target),
+          input_gradient(0, 0, _execution_target),
+          is_forward_completed(false)
     {
-        out_h = (in_h + 2 * padding - kernel_size) / stride + 1;
-        out_w = (in_w + 2 * padding - kernel_size) / stride + 1;
+        output_height = (input_height + 2 * padding - kernel_size) / stride + 1;
+        output_width = (input_width + 2 * padding - kernel_size) / stride + 1;
         initializeWeights();
     }
 
-    ~Conv2d_Layer() override = default;
+    ~Conv2d_Layer() noexcept override = default;
 
-    Matrix forward(const Matrix &input_matrix) override
+    Matrix forward(const Matrix &_input_matrix) override
     {
-        LAYER_LOG_DEBUG("Conv2d_Layer::forward: in_h=" + std::to_string(in_h) + ", in_w=" + std::to_string(in_w) + ", in_c=" + std::to_string(in_c) + ", out_c=" + std::to_string(out_c));
+        Logger::logMessage(std::format("Conv2d_Layer::forward: input_height={}, input_width={}, input_channels={}, output_channels={}",
+                                       input_height, input_width, input_channels, output_channels),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::CONV2D_COMPUTE | Log_Feature::FORWARD_EVALUATION);
 
-        inputs = input_matrix;
-        outputs = inputs.conv2d(weights, biases, in_h, in_w, in_c, out_c, kernel_size, stride, padding);
-        has_forward = true;
-        return outputs;
+        input_matrix = _input_matrix;
+        input_matrix.conv2d(weights, biases, output_matrix, input_height, input_width, input_channels, output_channels, kernel_size, stride, padding);
+        is_forward_completed = true;
+        return output_matrix;
     }
 
-    Matrix backward(const Matrix &gradient_output) override
+    Matrix backward(const Matrix &_output_gradient) override
     {
-        if (!has_forward)
+        if (!is_forward_completed)
         {
-            Logger::logMessage("Conv2d_Layer::backward: Backward called before forward", LOG_ERROR, true);
+            Logger::logMessage("Conv2d_Layer::backward: Backward called before forward",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::CONV2D_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
             throw std::logic_error("Backward called before forward");
         }
 
-        LAYER_LOG_DEBUG("Conv2d_Layer::backward: grad_output rows=" + std::to_string(gradient_output.getRows()) + ", cols=" + std::to_string(gradient_output.getCols()));
+        Logger::logMessage(std::format("Conv2d_Layer::backward: output_gradient rows={}, columns={}",
+                                       _output_gradient.getRows(),
+                                       _output_gradient.getColumns()),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::CONV2D_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
-        inputs.conv2dBackwardWeight(gradient_output, weights_gradient, biases_gradient, in_h, in_w, in_c, out_h, out_w, out_c, kernel_size, stride, padding);
-
-        return gradient_output.conv2dBackwardInput(weights, in_h, in_w, in_c, out_h, out_w, out_c, kernel_size, stride, padding);
+        input_matrix.conv2dBackwardWeight(_output_gradient, weights_gradient, biases_gradient, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding);
+        logBufferAddress(&input_matrix, "input_matrix (Backward)");
+        _output_gradient.conv2dBackwardInput(weights, input_gradient, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding);
+        return input_gradient;
     }
 
     void resetGradient() override
     {
-        std::size_t num_weights = kernel_size * kernel_size * in_c * out_c;
-        weights_gradient = Matrix(1, num_weights, target);
-        biases_gradient = Matrix(1, out_c, target);
-        inputs = Matrix(0, 0, target);
-        outputs = Matrix(0, 0, target);
-        has_forward = false;
+        is_forward_completed = false;
     }
 
-    Matrix getWeights() const override
+     Matrix getWeights() const override
     {
         return weights;
     }
 
-    Matrix getBiases() const override
+     Matrix getBiases() const override
     {
         return biases;
     }
 
-    bool hasParameters() const override
+     Matrix getWeightsGradient() override
+    {
+        return weights_gradient;
+    }
+
+     Matrix getInput() override
+    {
+        return input_matrix;
+    }
+
+     Matrix getOutput() override
+    {
+        return output_matrix;
+    }
+
+     bool hasParameters() const noexcept override
     {
         return true;
     }
 
-    Layer_Type getLayerType() const override
+     Layer_Type getLayerType() const noexcept override
     {
         return Layer_Type::CONV2D;
     }
 
-    void saveConfig(std::ofstream &out_file) const override
+    void saveConfiguration(std::ofstream &_output_file_stream) const override
     {
-        out_file.write(reinterpret_cast<const char *>(&in_h), sizeof(in_h));
-        out_file.write(reinterpret_cast<const char *>(&in_w), sizeof(in_w));
-        out_file.write(reinterpret_cast<const char *>(&in_c), sizeof(in_c));
-        out_file.write(reinterpret_cast<const char *>(&out_c), sizeof(out_c));
-        out_file.write(reinterpret_cast<const char *>(&kernel_size), sizeof(kernel_size));
-        out_file.write(reinterpret_cast<const char *>(&stride), sizeof(stride));
-        out_file.write(reinterpret_cast<const char *>(&padding), sizeof(padding));
+        _output_file_stream.write(reinterpret_cast<const char *>(&input_height), sizeof(input_height));
+        _output_file_stream.write(reinterpret_cast<const char *>(&input_width), sizeof(input_width));
+        _output_file_stream.write(reinterpret_cast<const char *>(&input_channels), sizeof(input_channels));
+        _output_file_stream.write(reinterpret_cast<const char *>(&output_channels), sizeof(output_channels));
+        _output_file_stream.write(reinterpret_cast<const char *>(&kernel_size), sizeof(kernel_size));
+        _output_file_stream.write(reinterpret_cast<const char *>(&stride), sizeof(stride));
+        _output_file_stream.write(reinterpret_cast<const char *>(&padding), sizeof(padding));
     }
 
-    void saveInference(std::ofstream &out_file) const override
+    void saveInference(std::ofstream &_output_file_stream) const override
     {
-        weights.saveMatrix(out_file);
-        biases.saveMatrix(out_file);
+        weights.saveMatrix(_output_file_stream);
+        biases.saveMatrix(_output_file_stream);
     }
 
-    void loadInference(std::ifstream &in_file) override
+    void loadInference(std::ifstream &_input_file_stream) override
     {
-        weights = Matrix::loadMatrix(in_file, target);
-        biases = Matrix::loadMatrix(in_file, target);
+        weights = Matrix::loadMatrix(_input_file_stream, execution_target);
+        biases = Matrix::loadMatrix(_input_file_stream, execution_target);
     }
 
-    void saveCheckpoint(std::ofstream &out_file) const override
+    void saveCheckpoint(std::ofstream &_output_file_stream) const override
     {
-        weights.saveMatrix(out_file);
-        biases.saveMatrix(out_file);
-        weights_gradient.saveMatrix(out_file);
-        biases_gradient.saveMatrix(out_file);
+        weights.saveMatrix(_output_file_stream);
+        biases.saveMatrix(_output_file_stream);
+        weights_gradient.saveMatrix(_output_file_stream);
+        biases_gradient.saveMatrix(_output_file_stream);
     }
 
-    void loadCheckpoint(std::ifstream &in_file) override
+    void loadCheckpoint(std::ifstream &_input_file_stream) override
     {
-        weights = Matrix::loadMatrix(in_file, target);
-        biases = Matrix::loadMatrix(in_file, target);
-        weights_gradient = Matrix::loadMatrix(in_file, target);
-        biases_gradient = Matrix::loadMatrix(in_file, target);
+        weights = Matrix::loadMatrix(_input_file_stream, execution_target);
+        biases = Matrix::loadMatrix(_input_file_stream, execution_target);
+        weights_gradient = Matrix::loadMatrix(_input_file_stream, execution_target);
+        biases_gradient = Matrix::loadMatrix(_input_file_stream, execution_target);
     }
 
-    std::vector<std::pair<Matrix *, Matrix *>> getParamsAndGrads() override
+    std::vector<std::pair<Matrix *, Matrix *>> getParametersAndGradients() override
     {
         return {{&weights, &weights_gradient}, {&biases, &biases_gradient}};
     }
 
-    void setTarget(Execution_Target new_target) override
+    void setExecutionTarget(Execution_Target _new_execution_target) override
     {
-        if (target == new_target)
+        if (execution_target == _new_execution_target)
+        {
             return;
+        }
 
-        Logger::logMessage("Conv2d_Layer::setTarget: Changing execution target from " + static_cast<std::string>(magic_enum::enum_name<Execution_Target>(target)) + " to " + static_cast<std::string>(magic_enum::enum_name<Execution_Target>(new_target)), LOG_WARNING);
-        target = new_target;
-        weights.setExecutionTarget(new_target);
-        biases.setExecutionTarget(new_target);
-        weights_gradient.setExecutionTarget(new_target);
-        biases_gradient.setExecutionTarget(new_target);
-        inputs.setExecutionTarget(new_target);
-        outputs.setExecutionTarget(new_target);
+        Logger::logMessage(std::format("Conv2d_Layer::setExecutionTarget: Changing execution target from {} to {}",
+                                       magic_enum::enum_name(execution_target),
+                                       magic_enum::enum_name(_new_execution_target)),
+                           Log_Level::LOG_WARNING,
+                           true,
+                           0,
+                           Log_Feature::DEVICE_MANAGEMENT);
+        execution_target = _new_execution_target;
+        weights.setExecutionTarget(_new_execution_target);
+        biases.setExecutionTarget(_new_execution_target);
+        weights_gradient.setExecutionTarget(_new_execution_target);
+        biases_gradient.setExecutionTarget(_new_execution_target);
+        input_matrix.setExecutionTarget(_new_execution_target);
+        output_matrix.setExecutionTarget(_new_execution_target);
+        input_gradient.setExecutionTarget(_new_execution_target);
     }
 };

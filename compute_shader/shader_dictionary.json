@@ -1,0 +1,279 @@
+{
+  "ADD": {
+    "op_class": "ELEMENTWISE",
+    "input_count": 2,
+    "output_count": 1,
+    "code": "if (global_id >= {pc_0}) return; if ({pc_2} == 1) { {out_0}[global_id] = {in_0}[global_id] + {in_1}[global_id % {pc_1}]; } else { {out_0}[global_id] = {in_0}[global_id] + {in_1}[global_id]; }"
+  },
+  "SUB": {
+    "op_class": "ELEMENTWISE",
+    "input_count": 2,
+    "output_count": 1,
+    "code": "if (global_id >= {pc_0}) return; if ({pc_2} == 1) { {out_0}[global_id] = {in_0}[global_id] - {in_1}[global_id % {pc_1}]; } else { {out_0}[global_id] = {in_0}[global_id] - {in_1}[global_id]; }"
+  },
+  "MATMUL": {
+    "op_class": "MATRIX_2D",
+    "input_count": 2,
+    "output_count": 1,
+    "index_expr": "r * {pc_2} + c",
+    "code": "uint r = gl_GlobalInvocationID.y; uint c = gl_GlobalInvocationID.x; uint lr = gl_LocalInvocationID.y; uint lc = gl_LocalInvocationID.x; uint M = {pc_0}; uint K = {pc_1}; uint N = {pc_2}; float sum = 0.0; uint num_tiles = (K + 15) / 16; for (uint t = 0; t < num_tiles; ++t) { uint k_a = t * 16 + lc; uint k_b = t * 16 + lr; tile_a[lr][lc] = (r < M && k_a < K) ? {in_0}[r * K + k_a] : 0.0; tile_b[lr][lc] = (k_b < K && c < N) ? {in_1}[k_b * N + c] : 0.0; barrier(); for (uint k = 0; k < 16; ++k) { sum += tile_a[lr][k] * tile_b[k][lc]; } barrier(); } if (r < M && c < N) { {out_0}[r * N + c] = sum; }"
+  },
+  "MATMUL_ADD": {
+    "op_class": "MATRIX_2D",
+    "input_count": 3,
+    "output_count": 1,
+    "index_expr": "r * {pc_2} + c",
+    "code": "uint r = gl_GlobalInvocationID.y; uint c = gl_GlobalInvocationID.x; uint lr = gl_LocalInvocationID.y; uint lc = gl_LocalInvocationID.x; uint M = {pc_0}; uint K = {pc_1}; uint N = {pc_2}; float sum = (c < N) ? {in_2}[c] : 0.0; uint num_tiles = (K + 15) / 16; for (uint t = 0; t < num_tiles; ++t) { uint k_a = t * 16 + lc; uint k_b = t * 16 + lr; tile_a[lr][lc] = (r < M && k_a < K) ? {in_0}[r * K + k_a] : 0.0; tile_b[lr][lc] = (k_b < K && c < N) ? {in_1}[k_b * N + c] : 0.0; barrier(); for (uint k = 0; k < 16; ++k) { sum += tile_a[lr][k] * tile_b[k][lc]; } barrier(); } if (r < M && c < N) { {out_0}[r * N + c] = sum; }"
+  },
+  "MUL_SCALAR": {
+    "op_class": "ELEMENTWISE",
+    "input_count": 1,
+    "output_count": 1,
+    "code": "if (global_id >= {pc_0}) return; {out_0}[global_id] = {in_0}[global_id] * uintBitsToFloat({pc_1});"
+  },
+  "HADAMARD_MUL": {
+    "op_class": "ELEMENTWISE",
+    "input_count": 2,
+    "output_count": 1,
+    "code": "if (global_id >= {pc_0}) return; {out_0}[global_id] = {in_0}[global_id] * {in_1}[global_id];"
+  },
+  "HADAMARD_DIV": {
+    "op_class": "ELEMENTWISE",
+    "input_count": 2,
+    "output_count": 1,
+    "code": "if (global_id >= {pc_0}) return; {out_0}[global_id] = {in_0}[global_id] / {in_1}[global_id];"
+  },
+  "TRANSPOSE": {
+    "op_class": "MATRIX_2D",
+    "input_count": 1,
+    "output_count": 1,
+    "index_expr": "c * {pc_0} + r",
+    "code": "uint r = gl_GlobalInvocationID.y; uint c = gl_GlobalInvocationID.x; if (r < {pc_0} && c < {pc_1}) { {out_0}[c * {pc_0} + r] = {in_0}[r * {pc_1} + c]; }"
+  },
+  "RELU": {
+    "op_class": "ELEMENTWISE",
+    "input_count": 1,
+    "output_count": 1,
+    "code": "if (global_id >= {pc_0}) return; {out_0}[global_id] = max(0.0, {in_0}[global_id]);"
+  },
+  "RELU_BACKWARD": {
+    "op_class": "ELEMENTWISE",
+    "input_count": 2,
+    "output_count": 1,
+    "code": "if (global_id >= {pc_0}) return; {out_0}[global_id] = ({in_0}[global_id] > 0.0) ? {in_1}[global_id] : 0.0;"
+  },
+  "GELU": {
+    "op_class": "ELEMENTWISE",
+    "input_count": 1,
+    "output_count": 1,
+    "code": "if (global_id >= {pc_0}) return; float x = {in_0}[global_id]; float x2 = x * x; float x3 = x2 * x; float t = tanh(0.7978845608 * (x + 0.044715 * x3)); {out_0}[global_id] = 0.5 * x * (1.0 + t);"
+  },
+  "GELU_BACKWARD": {
+    "op_class": "ELEMENTWISE",
+    "input_count": 2,
+    "output_count": 1,
+    "code": "if (global_id >= {pc_0}) return; float x = {in_0}[global_id]; float x2 = x * x; float x3 = x2 * x; float u = 0.7978845608 * (x + 0.044715 * x3); float t = tanh(u); float sech2 = 1.0 - t * t; float deriv = 0.5 * (1.0 + t) + 0.5 * x * sech2 * 0.7978845608 * (1.0 + 0.134145 * x2); {out_0}[global_id] = {in_1}[global_id] * deriv;"
+  },
+  "SGD_UPDATE": {
+    "op_class": "STANDALONE",
+    "input_count": 2,
+    "output_count": 0,
+    "index_expr": "global_id",
+    "code": "if (global_id >= {pc_0}) return; float g = {in_1}[global_id]; float max_g = uintBitsToFloat({pc_2}); if (max_g > 0.0) g = clamp(g, -max_g, max_g); {in_0}[global_id] -= uintBitsToFloat({pc_1}) * g;"
+  },
+  "ADAM_UPDATE": {
+    "op_class": "STANDALONE",
+    "input_count": 4,
+    "output_count": 0,
+    "index_expr": "global_id",
+    "code": "if (global_id >= {pc_0}) return; float g = {in_1}[global_id]; float max_g = uintBitsToFloat({pc_5}); if (max_g > 0.0) g = clamp(g, -max_g, max_g); float b1 = uintBitsToFloat({pc_2}); float b2 = uintBitsToFloat({pc_3}); float m = b1 * {in_2}[global_id] + (1.0 - b1) * g; float v = b2 * {in_3}[global_id] + (1.0 - b2) * (g * g); {in_2}[global_id] = m; {in_3}[global_id] = v; float m_hat = m * uintBitsToFloat({pc_6}); float v_hat = v * (uintBitsToFloat({pc_7}) * uintBitsToFloat({pc_7})); {in_0}[global_id] -= uintBitsToFloat({pc_1}) * (m_hat / (sqrt(v_hat) + uintBitsToFloat({pc_4})));"
+  },
+  "SOFTMAX": {
+    "op_class": "STANDALONE",
+    "input_count": 1,
+    "output_count": 1,
+    "shared_mem_size": 32,
+    "writes_multiple_elements": true,
+    "index_expr": "r * {pc_1} + c",
+    "code": "uint r = gl_WorkGroupID.x; uint tid = gl_LocalInvocationID.x; uint cols = {pc_1}; float thread_max = -3.402823466e+38; for (uint c = tid; c < cols; c += gl_WorkGroupSize.x) { float val = {in_0}[r * cols + c]; thread_max = max(thread_max, val); } float sg_max = subgroupMax(thread_max); if (gl_SubgroupInvocationID == 0) { shared_mem_0[gl_SubgroupID] = sg_max; } barrier(); if (tid == 0) { float row_max = -3.402823466e+38; for (uint i = 0; i < gl_NumSubgroups; ++i) { row_max = max(row_max, shared_mem_0[i]); } shared_mem_0[0] = row_max; } barrier(); float final_max = shared_mem_0[0]; float thread_sum = 0.0; for (uint c = tid; c < cols; c += gl_WorkGroupSize.x) { thread_sum += exp({in_0}[r * cols + c] - final_max); } float sg_sum = subgroupAdd(thread_sum); if (gl_SubgroupInvocationID == 0) { shared_mem_0[gl_SubgroupID] = sg_sum; } barrier(); if (tid == 0) { float row_sum = 0.0; for (uint i = 0; i < gl_NumSubgroups; ++i) { row_sum += shared_mem_0[i]; } shared_mem_0[0] = row_sum; } barrier(); float final_sum = shared_mem_0[0]; for (uint c = tid; c < cols; c += gl_WorkGroupSize.x) { {out_0}[r * cols + c] = exp({in_0}[r * cols + c] - final_max) / final_sum; }"
+  },
+  "SOFTMAX_BACKWARD": {
+    "op_class": "MATRIX_2D",
+    "input_count": 2,
+    "output_count": 1,
+    "index_expr": "r * {pc_1} + c",
+    "code": "uint r = gl_GlobalInvocationID.y; uint c = gl_GlobalInvocationID.x; if (r < {pc_0} && c < {pc_1}) { float sum_s_dy = 0.0; uint j = 0; uint j_vec = {pc_1} & ~3u; for (; j < j_vec; j += 4) { sum_s_dy += {in_0}[r * {pc_1} + j] * {in_1}[r * {pc_1} + j] + {in_0}[r * {pc_1} + j + 1] * {in_1}[r * {pc_1} + j + 1] + {in_0}[r * {pc_1} + j + 2] * {in_1}[r * {pc_1} + j + 2] + {in_0}[r * {pc_1} + j + 3] * {in_1}[r * {pc_1} + j + 3]; } for (; j < {pc_1}; ++j) { sum_s_dy += {in_0}[r * {pc_1} + j] * {in_1}[r * {pc_1} + j]; } float s_c = {in_0}[r * {pc_1} + c]; {out_0}[r * {pc_1} + c] = s_c * ({in_1}[r * {pc_1} + c] - sum_s_dy); }"
+  },
+  "LINEAR_FORWARD": {
+    "op_class": "MATRIX_2D",
+    "input_count": 3,
+    "output_count": 1,
+    "index_expr": "r * {pc_2} + c",
+    "code": "uint r = gl_GlobalInvocationID.y; uint c = gl_GlobalInvocationID.x; uint lr = gl_LocalInvocationID.y; uint lc = gl_LocalInvocationID.x; uint M = {pc_0}; uint K = {pc_1}; uint N = {pc_2}; float sum = (c < N) ? {in_2}[c] : 0.0; uint num_tiles = (K + 15) / 16; for (uint t = 0; t < num_tiles; ++t) { uint k_a = t * 16 + lc; uint k_b = t * 16 + lr; tile_a[lr][lc] = (r < M && k_a < K) ? {in_0}[r * K + k_a] : 0.0; tile_b[lr][lc] = (k_b < K && c < N) ? {in_1}[k_b * N + c] : 0.0; barrier(); for (uint k = 0; k < 16; ++k) { sum += tile_a[lr][k] * tile_b[k][lc]; } barrier(); } if (r < M && c < N) { {out_0}[r * N + c] = sum; }"
+  },
+  "LINEAR_BACKWARD_INPUT": {
+    "op_class": "MATRIX_2D",
+    "input_count": 2,
+    "output_count": 1,
+    "index_expr": "r * {pc_1} + c",
+    "code": "uint r = gl_GlobalInvocationID.y; uint c = gl_GlobalInvocationID.x; uint lr = gl_LocalInvocationID.y; uint lc = gl_LocalInvocationID.x; uint M = {pc_0}; uint K = {pc_2}; uint N = {pc_1}; float sum = 0.0; uint num_tiles = (K + 15) / 16; for (uint t = 0; t < num_tiles; ++t) { uint k_a = t * 16 + lc; uint k_b = t * 16 + lr; tile_a[lr][lc] = (r < M && k_a < K) ? {in_0}[r * K + k_a] : 0.0; tile_b[lr][lc] = (k_b < K && c < N) ? {in_1}[c * K + k_b] : 0.0; barrier(); for (uint k = 0; k < 16; ++k) { sum += tile_a[lr][k] * tile_b[k][lc]; } barrier(); } if (r < M && c < N) { {out_0}[r * N + c] = sum; }"
+  },
+  "LINEAR_BACKWARD_WEIGHT_BIAS": {
+    "op_class": "MATRIX_2D",
+    "input_count": 2,
+    "output_count": 2,
+    "persistent_outputs": [0, 1],
+    "code": "uint oc = gl_GlobalInvocationID.x; uint ic = gl_GlobalInvocationID.y; uint lr = gl_LocalInvocationID.y; uint lc = gl_LocalInvocationID.x; uint M = {pc_1}; uint K = {pc_0}; uint N = {pc_2}; float w_sum = 0.0; float b_sum = 0.0; uint num_tiles = (K + 15) / 16; for (uint t = 0; t < num_tiles; ++t) { uint k_a = t * 16 + lc; uint k_b = t * 16 + lr; tile_a[lr][lc] = (ic < M && k_a < K) ? {in_0}[k_a * M + ic] : 0.0; tile_b[lr][lc] = (k_b < K && oc < N) ? {in_1}[k_b * N + oc] : 0.0; barrier(); for (uint k = 0; k < 16; ++k) { w_sum += tile_a[lr][k] * tile_b[k][lc]; if (ic == 0 && lr == 0 && (t * 16 + k) < K) { b_sum += tile_b[k][lc]; } } barrier(); } if (ic < M && oc < N) { {out_0}[ic * N + oc] = w_sum; if (ic == 0) { {out_1}[oc] = b_sum; } }"
+  },
+  "CONV2D_FORWARD_PASS": {
+    "op_class": "TENSOR_3D",
+    "input_count": 3,
+    "output_count": 1,
+    "index_expr": "out_idx",
+    "code": "uint oc = gl_GlobalInvocationID.x; uint ow = gl_GlobalInvocationID.y; uint n_oh = gl_GlobalInvocationID.z; uint n = n_oh / {pc_4}; uint oh = n_oh % {pc_4}; if (oc >= {pc_6} || ow >= {pc_5} || oh >= {pc_4} || n >= {pc_0}) return; uint out_idx = (n_oh * {pc_5} + ow) * {pc_6} + oc; float sum = {in_2}[oc]; uint in_c_vec = {pc_3} & ~3u; for (uint ky = 0; ky < {pc_7}; ++ky) { int ih = int(oh * {pc_8} + ky) - int({pc_9}); if (ih >= 0 && ih < int({pc_1})) { for (uint kx = 0; kx < {pc_7}; ++kx) { int iw = int(ow * {pc_8} + kx) - int({pc_9}); if (iw >= 0 && iw < int({pc_2})) { uint in_base = (n * {pc_1} * {pc_2} + uint(ih) * {pc_2} + uint(iw)) * {pc_3}; uint w_base = (ky * {pc_7} * {pc_3} + kx * {pc_3}) * {pc_6} + oc; uint ic = 0; for (; ic < in_c_vec; ic += 4) { sum += {in_0}[in_base + ic] * {in_1}[w_base + ic * {pc_6}] + {in_0}[in_base + ic + 1] * {in_1}[w_base + (ic + 1) * {pc_6}] + {in_0}[in_base + ic + 2] * {in_1}[w_base + (ic + 2) * {pc_6}] + {in_0}[in_base + ic + 3] * {in_1}[w_base + (ic + 3) * {pc_6}]; } for (; ic < {pc_3}; ++ic) { sum += {in_0}[in_base + ic] * {in_1}[w_base + ic * {pc_6}]; } } } } } {out_0}[out_idx] = sum;"
+  },
+  "CONV2D_BACKWARD_PASS_INPUT_GRADIENT": {
+    "op_class": "TENSOR_3D",
+    "input_count": 2,
+    "output_count": 1,
+    "index_expr": "in_idx",
+    "code": "uint ic = gl_GlobalInvocationID.x; uint iw = gl_GlobalInvocationID.y; uint n_ih = gl_GlobalInvocationID.z; uint n = n_ih / {pc_1}; uint ih = n_ih % {pc_1}; if (ic >= {pc_3} || iw >= {pc_2} || ih >= {pc_1} || n >= {pc_0}) return; uint in_idx = n * {pc_1} * {pc_2} * {pc_3} + ih * {pc_2} * {pc_3} + iw * {pc_3} + ic; float sum = 0.0; uint out_c_vec = {pc_6} & ~3u; for (uint ky = 0; ky < {pc_7}; ++ky) { for (uint kx = 0; kx < {pc_7}; ++kx) { int oh_calc = int(ih + {pc_9} - ky); int ow_calc = int(iw + {pc_9} - kx); if (oh_calc >= 0 && oh_calc % int({pc_8}) == 0 && ow_calc >= 0 && ow_calc % int({pc_8}) == 0) { uint oh = uint(oh_calc) / {pc_8}; uint ow = uint(ow_calc) / {pc_8}; if (oh < {pc_4} && ow < {pc_5}) { uint go_base = n * {pc_4} * {pc_5} * {pc_6} + oh * {pc_5} * {pc_6} + ow * {pc_6}; uint w_base = ky * {pc_7} * {pc_3} * {pc_6} + kx * {pc_3} * {pc_6} + ic * {pc_6}; uint oc = 0; for (; oc < out_c_vec; oc += 4) { sum += {in_0}[go_base + oc] * {in_1}[w_base + oc] + {in_0}[go_base + oc + 1] * {in_1}[w_base + oc + 1] + {in_0}[go_base + oc + 2] * {in_1}[w_base + oc + 2] + {in_0}[go_base + oc + 3] * {in_1}[w_base + oc + 3]; } for (; oc < {pc_6}; ++oc) { sum += {in_0}[go_base + oc] * {in_1}[w_base + oc]; } } } } } {out_0}[in_idx] = sum;"
+  },
+  "CONV2D_BACKWARD_PASS_WEIGHT_BIAS_GRADIENT": {
+    "op_class": "TENSOR_3D",
+    "input_count": 2,
+    "output_count": 2,
+    "persistent_outputs": [0, 1],
+    "code": "uint oc = gl_GlobalInvocationID.x; uint ic = gl_GlobalInvocationID.y; uint k_idx = gl_GlobalInvocationID.z; uint ky = k_idx / {pc_7}; uint kx = k_idx % {pc_7}; if (oc >= {pc_6} || ic >= {pc_3} || ky >= {pc_7} || kx >= {pc_7}) return; float w_sum = 0.0; float b_sum = 0.0; for (uint n = 0; n < {pc_0}; ++n) { for (uint oh = 0; oh < {pc_4}; ++oh) { int ih = int(oh * {pc_8} + ky) - int({pc_9}); for (uint ow = 0; ow < {pc_5}; ++ow) { uint go_idx = (n * {pc_4} * {pc_5} + oh * {pc_5} + ow) * {pc_6} + oc; float go_val = {in_1}[go_idx]; if (ic == 0 && ky == 0 && kx == 0) { b_sum += go_val; } int iw = int(ow * {pc_8} + kx) - int({pc_9}); if (ih >= 0 && ih < int({pc_1}) && iw >= 0 && iw < int({pc_2})) { uint in_idx = (n * {pc_1} * {pc_2} + uint(ih) * {pc_2} + uint(iw)) * {pc_3} + ic; w_sum += {in_0}[in_idx] * go_val; } } } } uint w_idx = (ky * {pc_7} * {pc_3} + kx * {pc_3} + ic) * {pc_6} + oc; {out_0}[w_idx] = w_sum; if (ic == 0 && ky == 0 && kx == 0) { {out_1}[oc] = b_sum; }"
+  },
+  "MAXPOOL2D_FORWARD": {
+    "op_class": "TENSOR_3D",
+    "input_count": 1,
+    "output_count": 2,
+    "persistent_outputs": [1],
+    "index_expr": "out_idx",
+    "code": "uint c = gl_GlobalInvocationID.x; uint ow = gl_GlobalInvocationID.y; uint n_oh = gl_GlobalInvocationID.z; uint n = n_oh / {pc_4}; uint oh = n_oh % {pc_4}; if (c >= {pc_3} || ow >= {pc_5} || oh >= {pc_4} || n >= {pc_0}) return; uint out_idx = n * {pc_4} * {pc_5} * {pc_3} + oh * {pc_5} * {pc_3} + ow * {pc_3} + c; float max_val = -3.402823466e+38; uint best_idx = 0; for (uint ky = 0; ky < {pc_6}; ++ky) { for (uint kx = 0; kx < {pc_6}; ++kx) { int ih = int(oh * {pc_7} + ky) - int({pc_8}); int iw = int(ow * {pc_7} + kx) - int({pc_8}); if (ih >= 0 && ih < int({pc_1}) && iw >= 0 && iw < int({pc_2})) { uint in_idx = n * {pc_1} * {pc_2} * {pc_3} + uint(ih) * {pc_2} * {pc_3} + uint(iw) * {pc_3} + c; float val = {in_0}[in_idx]; if (val > max_val) { max_val = val; best_idx = in_idx; } } } } {out_0}[out_idx] = max_val; {out_1}[out_idx] = float(best_idx);"
+  },
+  "MAXPOOL2D_BACKWARD": {
+    "op_class": "TENSOR_3D",
+    "input_count": 2,
+    "output_count": 1,
+    "index_expr": "in_idx",
+    "code": "uint c = gl_GlobalInvocationID.x; uint iw = gl_GlobalInvocationID.y; uint n_ih = gl_GlobalInvocationID.z; uint n = n_ih / {pc_1}; uint ih = n_ih % {pc_1}; if (c >= {pc_3} || iw >= {pc_2} || ih >= {pc_1} || n >= {pc_0}) return; uint in_idx = n * {pc_1} * {pc_2} * {pc_3} + ih * {pc_2} * {pc_3} + iw * {pc_3} + c; float grad = 0.0; for (uint ky = 0; ky < {pc_6}; ++ky) { for (uint kx = 0; kx < {pc_6}; ++kx) { int oh_calc = int(ih + {pc_8} - ky); int ow_calc = int(iw + {pc_8} - kx); if (oh_calc >= 0 && oh_calc % int({pc_7}) == 0 && ow_calc >= 0 && ow_calc % int({pc_7}) == 0) { uint oh = uint(oh_calc) / {pc_7}; uint ow = uint(ow_calc) / {pc_7}; if (oh < {pc_4} && ow < {pc_5}) { uint out_idx = n * {pc_4} * {pc_5} * {pc_3} + oh * {pc_5} * {pc_3} + ow * {pc_3} + c; if (uint(round({in_0}[out_idx])) == in_idx) { grad += {in_1}[out_idx]; } } } } } {out_0}[in_idx] = grad;"
+  },
+  "GLOBAL_AVGPOOL_FORWARD": {
+    "op_class": "TENSOR_3D",
+    "input_count": 1,
+    "output_count": 1,
+    "index_expr": "n * {pc_3} + c",
+    "code": "uint c = gl_GlobalInvocationID.x; uint n = gl_GlobalInvocationID.y; if (c >= {pc_3} || n >= {pc_0}) return; float sum = 0.0; for (uint h = 0; h < {pc_1}; ++h) { for (uint w = 0; w < {pc_2}; ++w) { uint in_idx = n * {pc_1} * {pc_2} * {pc_3} + h * {pc_2} * {pc_3} + w * {pc_3} + c; sum += {in_0}[in_idx]; } } {out_0}[n * {pc_3} + c] = sum / float({pc_1} * {pc_2});"
+  },
+  "GLOBAL_AVGPOOL_BACKWARD": {
+    "op_class": "TENSOR_3D",
+    "input_count": 1,
+    "output_count": 1,
+    "index_expr": "in_idx",
+    "code": "uint c = gl_GlobalInvocationID.x; uint iw = gl_GlobalInvocationID.y; uint n_ih = gl_GlobalInvocationID.z; uint n = n_ih / {pc_1}; uint ih = n_ih % {pc_1}; if (c >= {pc_3} || iw >= {pc_2} || ih >= {pc_1} || n >= {pc_0}) return; uint in_idx = n * {pc_1} * {pc_2} * {pc_3} + ih * {pc_2} * {pc_3} + iw * {pc_3} + c; {out_0}[in_idx] = {in_0}[n * {pc_3} + c] / float({pc_1} * {pc_2});"
+  },
+  "BATCH_NORM_STATS_FORWARD": {
+    "op_class": "STANDALONE",
+    "input_count": 1,
+    "output_count": 4,
+    "shared_mem_size": 32,
+    "writes_multiple_elements": true,
+    "accumulator_output_indices": [2, 3],
+    "persistent_outputs": [0, 1, 2, 3],
+    "code": "uint d = gl_WorkGroupID.x; uint tid = gl_LocalInvocationID.x; uint N = {pc_0}; if (d < {pc_1}) { float thread_sum = 0.0; for (uint i = tid; i < N; i += gl_WorkGroupSize.x) { thread_sum += {in_0}[i * {pc_1} + d]; } float sg_sum = subgroupAdd(thread_sum); if (gl_SubgroupInvocationID == 0) { shared_mem_0[gl_SubgroupID] = sg_sum; } barrier(); if (tid == 0) { float tot_sum = 0.0; for (uint s = 0; s < gl_NumSubgroups; ++s) { tot_sum += shared_mem_0[s]; } shared_mem_0[0] = tot_sum / float(N); } barrier(); float mean = shared_mem_0[0]; float thread_sq = 0.0; for (uint i = tid; i < N; i += gl_WorkGroupSize.x) { float diff = {in_0}[i * {pc_1} + d] - mean; thread_sq += diff * diff; } float sg_sq = subgroupAdd(thread_sq); if (gl_SubgroupInvocationID == 0) { shared_mem_0[gl_SubgroupID] = sg_sq; } barrier(); if (tid == 0) { float tot_sq = 0.0; for (uint s = 0; s < gl_NumSubgroups; ++s) { tot_sq += shared_mem_0[s]; } float var = tot_sq / float(N); {out_0}[d] = mean; {out_1}[d] = var; float mom = uintBitsToFloat({pc_2}); {out_2}[d] = (1.0 - mom) * {out_2}[d] + mom * mean; {out_3}[d] = (1.0 - mom) * {out_3}[d] + mom * var; } }"
+  },
+  "BATCH_NORM_TRANSFORM_FORWARD": {
+    "op_class": "ELEMENTWISE",
+    "input_count": 5,
+    "output_count": 2,
+    "persistent_outputs": [1],
+    "code": "if (global_id >= {pc_0}) return; uint d = global_id % {pc_1}; float eps = uintBitsToFloat({pc_2}); float x_hat_val = ({in_0}[global_id] - {in_1}[d]) / sqrt({in_2}[d] + eps); {out_1}[global_id] = x_hat_val; {out_0}[global_id] = {in_3}[d] * x_hat_val + {in_4}[d];"
+  },
+  "BATCH_NORM_STATS_BACKWARD": {
+    "op_class": "STANDALONE",
+    "input_count": 2,
+    "output_count": 2,
+    "shared_mem_size": 64,
+    "writes_multiple_elements": true,
+    "persistent_outputs": [0, 1],
+    "code": "uint d = gl_WorkGroupID.x; uint tid = gl_LocalInvocationID.x; uint N = {pc_0}; if (d < {pc_1}) { float thread_dg = 0.0; float thread_db = 0.0; for (uint i = tid; i < N; i += gl_WorkGroupSize.x) { uint idx = i * {pc_1} + d; float dout = {in_0}[idx]; thread_dg += dout * {in_1}[idx]; thread_db += dout; } float sg_dg = subgroupAdd(thread_dg); float sg_db = subgroupAdd(thread_db); if (gl_SubgroupInvocationID == 0) { shared_mem_0[gl_SubgroupID] = sg_dg; shared_mem_0[32 + gl_SubgroupID] = sg_db; } barrier(); if (tid == 0) { float tot_dg = 0.0; float tot_db = 0.0; for (uint s = 0; s < gl_NumSubgroups; ++s) { tot_dg += shared_mem_0[s]; tot_db += shared_mem_0[32 + s]; } {out_0}[d] = tot_dg; {out_1}[d] = tot_db; } }"
+  },
+  "BATCH_NORM_TRANSFORM_BACKWARD": {
+    "op_class": "ELEMENTWISE",
+    "input_count": 6,
+    "output_count": 1,
+    "code": "if (global_id >= {pc_0}) return; uint d = global_id % {pc_1}; float eps = uintBitsToFloat({pc_3}); float std_inv = 1.0 / sqrt({in_5}[d] + eps); float coeff = {in_2}[d] * std_inv / float({pc_2}); {out_0}[global_id] = coeff * (float({pc_2}) * {in_0}[global_id] - {in_4}[d] - {in_1}[global_id] * {in_3}[d]);"
+  },
+  "BATCH_NORM2D_STATS_FORWARD": {
+    "op_class": "STANDALONE",
+    "input_count": 1,
+    "output_count": 4,
+    "shared_mem_size": 32,
+    "writes_multiple_elements": true,
+    "accumulator_output_indices": [2, 3],
+    "persistent_outputs": [0, 1, 2, 3],
+    "code": "uint c = gl_WorkGroupID.x; uint tid = gl_LocalInvocationID.x; uint M = {pc_2}; if (c < {pc_1}) { float thread_sum = 0.0; for (uint i = tid; i < M; i += gl_WorkGroupSize.x) { thread_sum += {in_0}[i * {pc_1} + c]; } float sg_sum = subgroupAdd(thread_sum); if (gl_SubgroupInvocationID == 0) { shared_mem_0[gl_SubgroupID] = sg_sum; } barrier(); if (tid == 0) { float tot_sum = 0.0; for (uint s = 0; s < gl_NumSubgroups; ++s) { tot_sum += shared_mem_0[s]; } shared_mem_0[0] = tot_sum / float(M); } barrier(); float mean = shared_mem_0[0]; float thread_sq = 0.0; for (uint i = tid; i < M; i += gl_WorkGroupSize.x) { float diff = {in_0}[i * {pc_1} + c] - mean; thread_sq += diff * diff; } float sg_sq = subgroupAdd(thread_sq); if (gl_SubgroupInvocationID == 0) { shared_mem_0[gl_SubgroupID] = sg_sq; } barrier(); if (tid == 0) { float tot_sq = 0.0; for (uint s = 0; s < gl_NumSubgroups; ++s) { tot_sq += shared_mem_0[s]; } float var = tot_sq / float(M); {out_0}[c] = mean; {out_1}[c] = var; float mom = uintBitsToFloat({pc_3}); {out_2}[c] = (1.0 - mom) * {out_2}[c] + mom * mean; {out_3}[c] = (1.0 - mom) * {out_3}[c] + mom * var; } }"
+  },
+  "BATCH_NORM2D_TRANSFORM_FORWARD": {
+    "op_class": "ELEMENTWISE",
+    "input_count": 5,
+    "output_count": 2,
+    "persistent_outputs": [1],
+    "code": "if (global_id >= {pc_0}) return; uint c = global_id % {pc_1}; float eps = uintBitsToFloat({pc_2}); float x_hat_val = ({in_0}[global_id] - {in_1}[c]) / sqrt({in_2}[c] + eps); {out_1}[global_id] = x_hat_val; {out_0}[global_id] = {in_3}[c] * x_hat_val + {in_4}[c];"
+  },
+  "BATCH_NORM2D_STATS_BACKWARD": {
+    "op_class": "STANDALONE",
+    "input_count": 2,
+    "output_count": 2,
+    "shared_mem_size": 64,
+    "writes_multiple_elements": true,
+    "persistent_outputs": [0, 1],
+    "code": "uint c = gl_WorkGroupID.x; uint tid = gl_LocalInvocationID.x; uint M = {pc_2}; if (c < {pc_1}) { float thread_dg = 0.0; float thread_db = 0.0; for (uint i = tid; i < M; i += gl_WorkGroupSize.x) { uint idx = i * {pc_1} + c; float dout = {in_0}[idx]; thread_dg += dout * {in_1}[idx]; thread_db += dout; } float sg_dg = subgroupAdd(thread_dg); float sg_db = subgroupAdd(thread_db); if (gl_SubgroupInvocationID == 0) { shared_mem_0[gl_SubgroupID] = sg_dg; shared_mem_0[32 + gl_SubgroupID] = sg_db; } barrier(); if (tid == 0) { float tot_dg = 0.0; float tot_db = 0.0; for (uint s = 0; s < gl_NumSubgroups; ++s) { tot_dg += shared_mem_0[s]; tot_db += shared_mem_0[32 + s]; } {out_0}[c] = tot_dg; {out_1}[c] = tot_db; } }"
+  },
+  "BATCH_NORM2D_TRANSFORM_BACKWARD": {
+    "op_class": "ELEMENTWISE",
+    "input_count": 6,
+    "output_count": 1,
+    "code": "if (global_id >= {pc_0}) return; uint c = global_id % {pc_2}; float eps = uintBitsToFloat({pc_3}); float std_inv = 1.0 / sqrt({in_5}[c] + eps); float coeff = {in_2}[c] * std_inv / float({pc_1}); {out_0}[global_id] = coeff * (float({pc_1}) * {in_0}[global_id] - {in_4}[c] - {in_1}[global_id] * {in_3}[c]);"
+  },
+  "CCE_LOSS": {
+    "op_class": "ELEMENTWISE",
+    "input_count": 2,
+    "output_count": 1,
+    "code": "if (global_id >= {pc_0}) return; float p = clamp({in_0}[global_id], 1e-7, 1.0 - 1e-7); {out_0}[global_id] = -{in_1}[global_id] * log(p);"
+  },
+  "MSE_LOSS": {
+    "op_class": "ELEMENTWISE",
+    "input_count": 2,
+    "output_count": 1,
+    "code": "if (global_id >= {pc_0}) return; float diff = {in_0}[global_id] - {in_1}[global_id]; {out_0}[global_id] = diff * diff;"
+  },
+  "MAE_LOSS": {
+    "op_class": "ELEMENTWISE",
+    "input_count": 2,
+    "output_count": 1,
+    "code": "if (global_id >= {pc_0}) return; {out_0}[global_id] = abs({in_0}[global_id] - {in_1}[global_id]);"
+  },
+  "BCE_LOSS": {
+    "op_class": "ELEMENTWISE",
+    "input_count": 2,
+    "output_count": 1,
+    "code": "if (global_id >= {pc_0}) return; float p = clamp({in_0}[global_id], 1e-7, 1.0 - 1e-7); float y = {in_1}[global_id]; {out_0}[global_id] = -(y * log(p) + (1.0 - y) * log(1.0 - p));"
+  },
+  "MATRIX_INVERSE": {
+    "op_class": "STANDALONE",
+    "input_count": 1,
+    "output_count": 1,
+    "writes_multiple_elements": true,
+    "code": "uint b = gl_WorkGroupID.x; uint n = {pc_1}; if (b >= {pc_0}) return; for (uint i = 0; i < n; ++i) { for (uint j = 0; j < n; ++j) { {out_0}[b * n * n + i * n + j] = (i == j) ? 1.0 : 0.0; } } for (uint i = 0; i < n; ++i) { float diag = {in_0}[b * n * n + i * n + i]; for (uint j = 0; j < n; ++j) { {in_0}[b * n * n + i * n + j] /= diag; {out_0}[b * n * n + i * n + j] /= diag; } for (uint k = 0; k < n; ++k) { if (k != i) { float factor = {in_0}[b * n * n + k * n + i]; for (uint j = 0; j < n; ++j) { {in_0}[b * n * n + k * n + j] -= factor * {in_0}[b * n * n + i * n + j]; {out_0}[b * n * n + k * n + j] -= factor * {out_0}[b * n * n + i * n + j]; } } } }"
+  },
+  "NORMALIZE": {
+    "op_class": "ELEMENTWISE",
+    "input_count": 1,
+    "output_count": 1,
+    "code": "if (global_id >= {pc_0}) return; float mean = uintBitsToFloat({pc_1}); float std = uintBitsToFloat({pc_2}); float eps = uintBitsToFloat({pc_3}); {out_0}[global_id] = ({in_0}[global_id] - mean) / (std + eps);"
+  }
+}

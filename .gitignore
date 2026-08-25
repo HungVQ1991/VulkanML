@@ -10,8 +10,8 @@ CMakeLists.txt
 *.exe
 *.py
 cifar_train.cpp
-main.cpp
-include/math/magic_enum.hpp
 reload_model.cpp
 compile.bat
 convert.cpp
+.VSCodeCounter/
+temp/

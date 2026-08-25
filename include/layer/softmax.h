@@ -1,78 +1,139 @@
 #pragma once
 
 #include <cstdint>
+#include <format>
 #include <fstream>
 #include <string>
+#include <utility>
+#include <vector>
 
+#include "helper/logger.h"
+#include "helper/magic_enum.hpp"
 #include "layer/ilayer.h"
 #include "math/matrix.h"
 
-class Softmax : public ILayer
+class Softmax_Layer : public ILayer
 {
 private:
-    Matrix cached_output;
-    bool is_fused_with_loss;
-    Execution_Target target;
+    Matrix input_matrix;
+    Matrix cached_output_matrix;
+    Matrix input_gradient;
+    bool is_fused_with_loss = false;
+    Execution_Target execution_target = Execution_Target::CPU;
 
 public:
-    explicit Softmax(bool fused = false, Execution_Target exec_target = Execution_Target::CPU)
-        : cached_output(0, 0, exec_target), is_fused_with_loss(fused), target(exec_target) {}
-
-    ~Softmax() override = default;
-
-    Matrix forward(const Matrix &input_matrix) override
+    explicit Softmax_Layer(bool _is_fused_with_loss = false, Execution_Target _execution_target = Execution_Target::CPU)
+        : input_matrix(0, 0, _execution_target),
+          cached_output_matrix(0, 0, _execution_target),
+          input_gradient(0, 0, _execution_target),
+          is_fused_with_loss(_is_fused_with_loss),
+          execution_target(_execution_target)
     {
-        LAYER_LOG_DEBUG("Softmax::forward: rows=" + std::to_string(input_matrix.getRows()) + ", cols=" + std::to_string(input_matrix.getCols()));
-
-        cached_output = input_matrix.softmax();
-        return cached_output;
     }
 
-    Matrix backward(const Matrix &gradient_output) override
-    {
-        LAYER_LOG_DEBUG("Softmax::backward: grad_output rows=" + std::to_string(gradient_output.getRows()) + ", cols=" + std::to_string(gradient_output.getCols()) + ", fused=" + (is_fused_with_loss ? "true" : "false"));
+    ~Softmax_Layer() noexcept override = default;
 
+    Matrix forward(const Matrix &_input_matrix) override
+    {
+        Logger::logMessage(std::format("Softmax_Layer::forward: rows={}, columns={}",
+                                       _input_matrix.getRows(),
+                                       _input_matrix.getColumns()),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::ACTIVATION_COMPUTE | Log_Feature::FORWARD_EVALUATION);
+
+        input_matrix = _input_matrix;
+        input_matrix.softmax(cached_output_matrix);
+        return cached_output_matrix;
+    }
+
+    Matrix backward(const Matrix &_output_gradient) override
+    {
+        Logger::logMessage(std::format("Softmax_Layer::backward: output_gradient rows={}, columns={}, is_fused_with_loss={}",
+                                       _output_gradient.getRows(),
+                                       _output_gradient.getColumns(),
+                                       is_fused_with_loss),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::ACTIVATION_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
+
+        logBufferAddress(&input_matrix, "input_matrix (Backward)");
         if (is_fused_with_loss)
-            return gradient_output;
-        return cached_output.softmaxBackward(gradient_output);
+        {
+            return _output_gradient;
+        }
+
+        cached_output_matrix.softmaxBackward(_output_gradient, input_gradient);
+        return input_gradient;
     }
 
     void resetGradient() override
     {
-        cached_output = Matrix(0, 0, target);
     }
 
-    bool hasParameters() const override
+     bool hasParameters() const noexcept override
     {
         return false;
     }
 
-    Layer_Type getLayerType() const override
+     Layer_Type getLayerType() const noexcept override
     {
         return Layer_Type::SOFTMAX;
     }
 
-    void saveConfig(std::ofstream &out_file) const override
+     Matrix getInput() override
     {
-        std::uint8_t fused_val = is_fused_with_loss ? 1 : 0;
-        out_file.write(reinterpret_cast<const char *>(&fused_val), sizeof(fused_val));
+        return input_matrix;
     }
 
-    void saveInference(std::ofstream &out_file) const override {}
-    void loadInference(std::ifstream &in_file) override {}
-
-    void saveCheckpoint(std::ofstream &out_file) const override {}
-    void loadCheckpoint(std::ifstream &in_file) override {}
-
-    void setTarget(Execution_Target new_target) override
+     Matrix getOutput() override
     {
-        if (target == new_target)
+        return cached_output_matrix;
+    }
+
+     bool isFusedWithLoss() const noexcept
+    {
+        return is_fused_with_loss;
+    }
+
+    void setFusedWithLoss(bool _is_fused_with_loss) noexcept
+    {
+        is_fused_with_loss = _is_fused_with_loss;
+    }
+
+    void saveConfiguration(std::ofstream &_output_file_stream) const override
+    {
+        std::uint8_t fused_value = is_fused_with_loss ? 1 : 0;
+        _output_file_stream.write(reinterpret_cast<const char *>(&fused_value), sizeof(fused_value));
+    }
+
+    void saveInference(std::ofstream &_output_file_stream) const override {}
+    void loadInference(std::ifstream &_input_file_stream) override {}
+    void saveCheckpoint(std::ofstream &_output_file_stream) const override {}
+    void loadCheckpoint(std::ifstream &_input_file_stream) override {}
+
+    void setExecutionTarget(Execution_Target _new_execution_target) override
+    {
+        if (execution_target == _new_execution_target)
+        {
             return;
+        }
 
+        Logger::logMessage(std::format("Softmax_Layer::setExecutionTarget: Changing execution target from {} to {}",
+                                       magic_enum::enum_name(execution_target),
+                                       magic_enum::enum_name(_new_execution_target)),
+                           Log_Level::LOG_WARNING,
+                           true,
+                           0,
+                           Log_Feature::DEVICE_MANAGEMENT);
 
-        Logger::logMessage("Softmax::setTarget: Changing execution target from " + static_cast<std::string>(magic_enum::enum_name<Execution_Target>(target)) + " to " + static_cast<std::string>(magic_enum::enum_name<Execution_Target>(new_target)), LOG_WARNING);
-
-        target = new_target;
-        cached_output.setExecutionTarget(new_target);
+        execution_target = _new_execution_target;
+        input_matrix.setExecutionTarget(_new_execution_target);
+        cached_output_matrix.setExecutionTarget(_new_execution_target);
+        input_gradient.setExecutionTarget(_new_execution_target);
     }
 };
+
+using Softmax = Softmax_Layer;

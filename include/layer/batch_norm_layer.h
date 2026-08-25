@@ -1,7 +1,9 @@
 #pragma once
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <format>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -9,227 +11,282 @@
 #include <vector>
 
 #include "helper/logger.h"
+#include "helper/magic_enum.hpp"
 #include "ilayer.h"
 #include "math/matrix.h"
 
 class Batch_Norm_Layer : public ILayer
 {
 private:
-    std::size_t input_dim;
-    float epsilon;
-    float momentum;
-    bool is_training;
+    std::size_t input_dimension = 0;
+    float epsilon = 1e-5f;
+    float momentum = 0.1f;
+    bool is_training = true;
 
     Matrix gamma;
     Matrix beta;
-    Matrix grad_gamma;
-    Matrix grad_beta;
+    Matrix gamma_gradient;
+    Matrix beta_gradient;
 
     Matrix running_mean;
-    Matrix running_var;
+    Matrix running_variance;
     Matrix batch_mean;
-    Matrix batch_var;
-    Matrix x_hat;
+    Matrix batch_variance;
+    Matrix normalized_input;
 
-    Matrix inputs;
-    bool has_forward;
-    Execution_Target target;
+    Matrix input_matrix;
+    Matrix output_matrix;
+    Matrix input_gradient;
+
+    bool is_forward_completed = false;
+    Execution_Target execution_target = Execution_Target::CPU;
 
     void initializeParameters()
     {
-        std::vector<float> gamma_data(input_dim, 1.0f);
-        std::vector<float> beta_data(input_dim, 0.0f);
-        std::vector<float> mean_data(input_dim, 0.0f);
-        std::vector<float> var_data(input_dim, 1.0f);
+        std::vector<float> gamma_data(input_dimension, 1.0f);
+        std::vector<float> beta_data(input_dimension, 0.0f);
+        std::vector<float> mean_data(input_dimension, 0.0f);
+        std::vector<float> variance_data(input_dimension, 1.0f);
 
-        gamma = Matrix(1, input_dim, std::move(gamma_data), target);
-        beta = Matrix(1, input_dim, std::move(beta_data), target);
-        grad_gamma = Matrix(1, input_dim, target);
-        grad_beta = Matrix(1, input_dim, target);
+        gamma = Matrix(1, input_dimension, std::move(gamma_data), execution_target);
+        beta = Matrix(1, input_dimension, std::move(beta_data), execution_target);
+        gamma_gradient = Matrix(1, input_dimension, execution_target);
+        beta_gradient = Matrix(1, input_dimension, execution_target);
 
-        running_mean = Matrix(1, input_dim, std::move(mean_data), target);
-        running_var = Matrix(1, input_dim, std::move(var_data), target);
+        running_mean = Matrix(1, input_dimension, std::move(mean_data), execution_target);
+        running_variance = Matrix(1, input_dimension, std::move(variance_data), execution_target);
 
-        batch_mean = Matrix(0, 0, target);
-        batch_var = Matrix(0, 0, target);
-        x_hat = Matrix(0, 0, target);
+        batch_mean = Matrix(1, input_dimension, execution_target);
+        batch_variance = Matrix(1, input_dimension, execution_target);
     }
 
 public:
-    Batch_Norm_Layer(std::size_t dimension, float eps = 1e-5f, float mom = 0.1f, Execution_Target exec_target = Execution_Target::CPU)
-        : input_dim(dimension),
-          epsilon(eps),
-          momentum(mom),
+    explicit Batch_Norm_Layer(std::size_t _dimension,
+                              float _epsilon = 1e-5f,
+                              float _momentum = 0.1f,
+                              Execution_Target _execution_target = Execution_Target::CPU)
+        : input_dimension(_dimension),
+          epsilon(_epsilon),
+          momentum(_momentum),
           is_training(true),
-          gamma(0, 0, exec_target),
-          beta(0, 0, exec_target),
-          grad_gamma(0, 0, exec_target),
-          grad_beta(0, 0, exec_target),
-          running_mean(0, 0, exec_target),
-          running_var(0, 0, exec_target),
-          batch_mean(0, 0, exec_target),
-          batch_var(0, 0, exec_target),
-          x_hat(0, 0, exec_target),
-          inputs(0, 0, exec_target),
-          has_forward(false),
-          target(exec_target)
+          gamma(0, 0, _execution_target),
+          beta(0, 0, _execution_target),
+          gamma_gradient(0, 0, _execution_target),
+          beta_gradient(0, 0, _execution_target),
+          running_mean(0, 0, _execution_target),
+          running_variance(0, 0, _execution_target),
+          batch_mean(0, 0, _execution_target),
+          batch_variance(0, 0, _execution_target),
+          normalized_input(0, 0, _execution_target),
+          input_matrix(0, 0, _execution_target),
+          output_matrix(0, 0, _execution_target),
+          input_gradient(0, 0, _execution_target),
+          is_forward_completed(false),
+          execution_target(_execution_target)
     {
         initializeParameters();
     }
 
-    ~Batch_Norm_Layer() override = default;
+    ~Batch_Norm_Layer() noexcept override = default;
 
-    void setTrainingMode(bool training) override
+    void setTrainingMode(bool _is_training) override
     {
-        is_training = training;
+        is_training = _is_training;
     }
 
-    Matrix forward(const Matrix &input_matrix) override
+    Matrix forward(const Matrix &_input_matrix) override
     {
-        if (input_matrix.getCols() != input_dim)
+        if (_input_matrix.getColumns() != input_dimension)
         {
-            Logger::logMessage("Batch_Norm_Layer::forward: Input dimension mismatch", LOG_ERROR, true);
+            Logger::logMessage("Batch_Norm_Layer::forward: Input dimension mismatch",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::NORMALIZATION_COMPUTE | Log_Feature::FORWARD_EVALUATION);
             throw std::invalid_argument("Input dimension mismatch");
         }
 
-        LAYER_LOG_DEBUG("Batch_Norm_Layer::forward: dim=" + std::to_string(input_dim) + ", mode=" + (is_training ? "Train" : "Eval"));
+        Logger::logMessage(std::format("Batch_Norm_Layer::forward: dimension={}, mode={}",
+                                       input_dimension,
+                                       is_training ? "Train" : "Eval"),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::NORMALIZATION_COMPUTE | Log_Feature::FORWARD_EVALUATION);
 
-        inputs = input_matrix;
-        Matrix outputs = inputs.batchNormForward(
-            gamma, beta,
-            running_mean, running_var,
-            batch_mean, batch_var, x_hat,
-            epsilon, momentum, is_training);
+        input_matrix = _input_matrix;
+        if (input_matrix.getExecutionTarget() != execution_target)
+        {
+            input_matrix.setExecutionTarget(execution_target);
+        }
 
-        has_forward = true;
-        return outputs;
+        input_matrix.batchNormForward(
+            gamma,
+            beta,
+            running_mean,
+            running_variance,
+            batch_mean,
+            batch_variance,
+            normalized_input,
+            output_matrix,
+            epsilon,
+            momentum,
+            is_training);
+
+        is_forward_completed = true;
+        return output_matrix;
     }
 
-    Matrix backward(const Matrix &gradient_output) override
+    Matrix backward(const Matrix &_output_gradient) override
     {
-        if (!has_forward)
+        if (!is_forward_completed)
         {
-            Logger::logMessage("Batch_Norm_Layer::backward: Backward called before forward", LOG_ERROR, true);
+            Logger::logMessage("Batch_Norm_Layer::backward: Backward called before forward",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::NORMALIZATION_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
             throw std::logic_error("Backward called before forward");
         }
 
-        LAYER_LOG_DEBUG("Batch_Norm_Layer::backward: grad_output rows=" + std::to_string(gradient_output.getRows()) + ", cols=" + std::to_string(gradient_output.getCols()));
+        Logger::logMessage(std::format("Batch_Norm_Layer::backward: output_gradient rows={}, columns={}",
+                                       _output_gradient.getRows(),
+                                       _output_gradient.getColumns()),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::NORMALIZATION_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
-        Matrix grad_input = inputs.batchNormBackward(
-            gradient_output, gamma, batch_var, x_hat,
-            grad_gamma, grad_beta,
+        input_matrix.batchNormBackward(
+            _output_gradient,
+            gamma,
+            batch_variance,
+            normalized_input,
+            gamma_gradient,
+            beta_gradient,
+            input_gradient,
             epsilon);
 
-        return grad_input;
+        logBufferAddress(&input_matrix, "input_matrix (Backward)");
+        return input_gradient;
     }
 
     void resetGradient() override
     {
-        grad_gamma = Matrix(1, input_dim, target);
-        grad_beta = Matrix(1, input_dim, target);
-        inputs = Matrix(0, 0, target);
-        batch_mean = Matrix(0, 0, target);
-        batch_var = Matrix(0, 0, target);
-        x_hat = Matrix(0, 0, target);
-        has_forward = false;
+        is_forward_completed = false;
     }
 
-    Matrix getWeights() const override
+     Matrix getWeights() const override
     {
         return gamma;
     }
 
-    Matrix getBiases() const override
+     Matrix getBiases() const override
     {
         return beta;
     }
 
-    Matrix getWeightsGradient() override
+     Matrix getWeightsGradient() override
     {
-        return grad_gamma;
+        return gamma_gradient;
     }
 
-    Matrix getInput() override
+     Matrix getInput() override
     {
-        return inputs;
+        return input_matrix;
     }
 
-    bool hasParameters() const override
+     Matrix getOutput() override
+    {
+        return output_matrix;
+    }
+
+     bool hasParameters() const noexcept override
     {
         return true;
     }
 
-    Layer_Type getLayerType() const override
+     Layer_Type getLayerType() const noexcept override
     {
         return Layer_Type::BATCH_NORM;
     }
 
-    void saveConfig(std::ofstream &out_file) const override
+    void saveConfiguration(std::ofstream &_output_file_stream) const override
     {
-        std::uint32_t num_features = static_cast<std::uint32_t>(input_dim);
-        out_file.write(reinterpret_cast<const char *>(&num_features), sizeof(num_features));
-        out_file.write(reinterpret_cast<const char *>(&epsilon), sizeof(epsilon));
-        out_file.write(reinterpret_cast<const char *>(&momentum), sizeof(momentum));
+        std::uint32_t feature_count = static_cast<std::uint32_t>(input_dimension);
+        _output_file_stream.write(reinterpret_cast<const char *>(&feature_count), sizeof(feature_count));
+        _output_file_stream.write(reinterpret_cast<const char *>(&epsilon), sizeof(epsilon));
+        _output_file_stream.write(reinterpret_cast<const char *>(&momentum), sizeof(momentum));
     }
 
-    void saveInference(std::ofstream &out_file) const override
+    void saveInference(std::ofstream &_output_file_stream) const override
     {
-        gamma.saveMatrix(out_file);
-        beta.saveMatrix(out_file);
-        running_mean.saveMatrix(out_file);
-        running_var.saveMatrix(out_file);
+        gamma.saveMatrix(_output_file_stream);
+        beta.saveMatrix(_output_file_stream);
+        running_mean.saveMatrix(_output_file_stream);
+        running_variance.saveMatrix(_output_file_stream);
     }
 
-    void loadInference(std::ifstream &in_file) override
+    void loadInference(std::ifstream &_input_file_stream) override
     {
-        gamma = Matrix::loadMatrix(in_file, target);
-        beta = Matrix::loadMatrix(in_file, target);
-        running_mean = Matrix::loadMatrix(in_file, target);
-        running_var = Matrix::loadMatrix(in_file, target);
+        gamma = Matrix::loadMatrix(_input_file_stream, execution_target);
+        beta = Matrix::loadMatrix(_input_file_stream, execution_target);
+        running_mean = Matrix::loadMatrix(_input_file_stream, execution_target);
+        running_variance = Matrix::loadMatrix(_input_file_stream, execution_target);
     }
 
-    void saveCheckpoint(std::ofstream &out_file) const override
+    void saveCheckpoint(std::ofstream &_output_file_stream) const override
     {
-        gamma.saveMatrix(out_file);
-        beta.saveMatrix(out_file);
-        running_mean.saveMatrix(out_file);
-        running_var.saveMatrix(out_file);
-        grad_gamma.saveMatrix(out_file);
-        grad_beta.saveMatrix(out_file);
+        gamma.saveMatrix(_output_file_stream);
+        beta.saveMatrix(_output_file_stream);
+        running_mean.saveMatrix(_output_file_stream);
+        running_variance.saveMatrix(_output_file_stream);
+        gamma_gradient.saveMatrix(_output_file_stream);
+        beta_gradient.saveMatrix(_output_file_stream);
     }
 
-    void loadCheckpoint(std::ifstream &in_file) override
+    void loadCheckpoint(std::ifstream &_input_file_stream) override
     {
-        gamma = Matrix::loadMatrix(in_file, target);
-        beta = Matrix::loadMatrix(in_file, target);
-        running_mean = Matrix::loadMatrix(in_file, target);
-        running_var = Matrix::loadMatrix(in_file, target);
-        grad_gamma = Matrix::loadMatrix(in_file, target);
-        grad_beta = Matrix::loadMatrix(in_file, target);
+        gamma = Matrix::loadMatrix(_input_file_stream, execution_target);
+        beta = Matrix::loadMatrix(_input_file_stream, execution_target);
+        running_mean = Matrix::loadMatrix(_input_file_stream, execution_target);
+        running_variance = Matrix::loadMatrix(_input_file_stream, execution_target);
+        gamma_gradient = Matrix::loadMatrix(_input_file_stream, execution_target);
+        beta_gradient = Matrix::loadMatrix(_input_file_stream, execution_target);
     }
 
-    std::vector<std::pair<Matrix *, Matrix *>> getParamsAndGrads() override
+    std::vector<std::pair<Matrix *, Matrix *>> getParametersAndGradients() override
     {
-        return {{&gamma, &grad_gamma}, {&beta, &grad_beta}};
+        return {{&gamma, &gamma_gradient}, {&beta, &beta_gradient}};
     }
 
-    void setTarget(Execution_Target new_target) override
+    void setExecutionTarget(Execution_Target _new_execution_target) override
     {
-        if (target == new_target)
+        if (execution_target == _new_execution_target)
+        {
             return;
+        }
 
-        Logger::logMessage("Batch_Norm_Layer::setTarget: Changing execution target from " + static_cast<std::string>(magic_enum::enum_name<Execution_Target>(target)) + " to " + static_cast<std::string>(magic_enum::enum_name<Execution_Target>(new_target)), LOG_WARNING);
+        Logger::logMessage(std::format("Batch_Norm_Layer::setExecutionTarget: Changing execution target from {} to {}",
+                                       magic_enum::enum_name(execution_target),
+                                       magic_enum::enum_name(_new_execution_target)),
+                           Log_Level::LOG_WARNING,
+                           true,
+                           0,
+                           Log_Feature::DEVICE_MANAGEMENT);
 
-        target = new_target;
-        gamma.setExecutionTarget(new_target);
-        beta.setExecutionTarget(new_target);
-        grad_gamma.setExecutionTarget(new_target);
-        grad_beta.setExecutionTarget(new_target);
-        running_mean.setExecutionTarget(new_target);
-        running_var.setExecutionTarget(new_target);
-        batch_mean.setExecutionTarget(new_target);
-        batch_var.setExecutionTarget(new_target);
-        x_hat.setExecutionTarget(new_target);
-        inputs.setExecutionTarget(new_target);
+        execution_target = _new_execution_target;
+        gamma.setExecutionTarget(_new_execution_target);
+        beta.setExecutionTarget(_new_execution_target);
+        gamma_gradient.setExecutionTarget(_new_execution_target);
+        beta_gradient.setExecutionTarget(_new_execution_target);
+        running_mean.setExecutionTarget(_new_execution_target);
+        running_variance.setExecutionTarget(_new_execution_target);
+        batch_mean.setExecutionTarget(_new_execution_target);
+        batch_variance.setExecutionTarget(_new_execution_target);
+        normalized_input.setExecutionTarget(_new_execution_target);
+        input_matrix.setExecutionTarget(_new_execution_target);
+        output_matrix.setExecutionTarget(_new_execution_target);
+        input_gradient.setExecutionTarget(_new_execution_target);
     }
 };

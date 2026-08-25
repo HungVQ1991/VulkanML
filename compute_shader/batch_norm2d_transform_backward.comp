@@ -5,9 +5,9 @@ layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 layout(std430, binding = 0) readonly buffer GradOutput { float dY[]; };
 layout(std430, binding = 1) readonly buffer XHat { float x_hat[]; };
 layout(std430, binding = 2) readonly buffer Gamma { float gamma[]; };
-layout(std430, binding = 3) readonly buffer BatchVar { float batch_var[]; };
-layout(std430, binding = 4) readonly buffer GradGamma { float dgamma[]; };
-layout(std430, binding = 5) readonly buffer GradBeta { float dbeta[]; };
+layout(std430, binding = 3) readonly buffer GradGamma { float dgamma[]; };
+layout(std430, binding = 4) readonly buffer GradBeta { float dbeta[]; };
+layout(std430, binding = 5) readonly buffer BatchVar { float batch_var[]; };
 layout(std430, binding = 6) writeonly buffer GradInput { float dX[]; };
 
 layout(push_constant) uniform PushConstants {

@@ -3,10 +3,14 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <format>
+#include <functional>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "helper/logger.h"
@@ -15,1302 +19,1600 @@
 class Cpu_Matrix_Impl : public Impl
 {
 private:
-    std::size_t rows;
-    std::size_t cols;
-    std::vector<float> data;
+    std::size_t rows = 0;
+    std::size_t columns = 0;
+    std::vector<float> storage;
+
+    static std::string formatDataSample(const std::vector<float> &_data, std::size_t _sample_limit = 5)
+    {
+        if (_data.empty())
+        {
+            return "[]";
+        }
+        std::string formatted_sample = "[";
+        std::size_t count = std::min(_data.size(), _sample_limit);
+        for (std::size_t i = 0; i < count; ++i)
+        {
+            formatted_sample += std::format("{:.4e}{}", _data[i], (i + 1 < count) ? ", " : "");
+        }
+        if (_data.size() > _sample_limit)
+        {
+            formatted_sample += std::format(", ... (total {})", _data.size());
+        }
+        formatted_sample += "]";
+        return formatted_sample;
+    }
 
 public:
-    Cpu_Matrix_Impl(std::size_t r, std::size_t c)
-        : rows(r), cols(c), data(r * c, 0.0f) {}
-
-    Cpu_Matrix_Impl(std::size_t r, std::size_t c, const std::vector<float> &host_data)
-        : rows(r), cols(c), data(host_data)
+    Cpu_Matrix_Impl(std::size_t _rows, std::size_t _columns)
+        : rows(_rows), columns(_columns), storage(_rows * _columns, 0.0f)
     {
-        if (data.size() != rows * cols)
+    }
+
+    Cpu_Matrix_Impl(std::size_t _rows, std::size_t _columns, const std::vector<float> &_host_data)
+        : rows(_rows), columns(_columns), storage(_host_data)
+    {
+        if (storage.size() != rows * columns)
         {
-            Logger::logMessage("Cpu_Matrix_Impl::Cpu_Matrix_Impl: Host data size mismatch", LOG_ERROR, true);
+            Logger::logMessage("Cpu_Matrix_Impl::Cpu_Matrix_Impl: Host data size mismatch",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::TENSOR_INSPECTION);
             throw std::invalid_argument("Host data size mismatch");
         }
     }
 
-    Cpu_Matrix_Impl(std::size_t r, std::size_t c, std::vector<float> &&host_data)
-        : rows(r), cols(c), data(std::move(host_data))
+    Cpu_Matrix_Impl(std::size_t _rows, std::size_t _columns, std::vector<float> &&_host_data)
+        : rows(_rows), columns(_columns), storage(std::move(_host_data))
     {
-        if (data.size() != rows * cols)
+        if (storage.size() != rows * columns)
         {
-            Logger::logMessage("Cpu_Matrix_Impl::Cpu_Matrix_Impl (move): Host data size mismatch", LOG_ERROR, true);
+            Logger::logMessage("Cpu_Matrix_Impl::Cpu_Matrix_Impl: Host data size mismatch",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::TENSOR_INSPECTION);
             throw std::invalid_argument("Host data size mismatch");
         }
     }
 
-    ~Cpu_Matrix_Impl() override = default;
+    ~Cpu_Matrix_Impl() noexcept override = default;
 
-    std::size_t getRows() const override
+     std::size_t getRows() const noexcept override
     {
         return rows;
     }
 
-    std::size_t getCols() const override
+     std::size_t getColumns() const noexcept override
     {
-        return cols;
+        return columns;
     }
 
-    const std::vector<float> &getData() const override { return data; }
-
-    std::shared_ptr<Impl> matmul(const std::shared_ptr<Impl> &other_impl) const override
+     std::size_t getCols() const noexcept override
     {
-        validateMatmulDimensions(*other_impl);
+        return columns;
+    }
 
-        std::size_t other_cols = other_impl->getCols();
-        std::vector<float> result_data(rows * other_cols, 0.0f);
-        std::vector<float> other_data = other_impl->getData();
+     const std::vector<float> &getData() const noexcept override
+    {
+        return storage;
+    }
+
+     std::vector<float> &getData() noexcept
+    {
+        return storage;
+    }
+
+     Storage_Handle getStorage() const override
+    {
+        return std::cref(storage);
+    }
+
+     Mutable_Storage_Handle getStorage() override
+    {
+        return std::ref(storage);
+    }
+
+     bool isEmpty() const noexcept override
+    {
+        return storage.empty();
+    }
+
+    void reshape(std::size_t _rows, std::size_t _columns) override
+    {
+        rows = _rows;
+        columns = _columns;
+        if (storage.size() != _rows * _columns)
+        {
+            storage.resize(_rows * _columns, 0.0f);
+        }
+    }
+
+    void matmul(const Impl &_other_implementation, Impl &_output_result) const override
+    {
+        validateMatmulDimensions(_other_implementation);
+        const auto &other_cpu = static_cast<const Cpu_Matrix_Impl &>(_other_implementation);
+        auto &output_cpu = static_cast<Cpu_Matrix_Impl &>(_output_result);
+
+        std::size_t other_columns = other_cpu.getColumns();
+        output_cpu.reshape(rows, other_columns);
+        std::fill(output_cpu.storage.begin(), output_cpu.storage.end(), 0.0f);
 
         for (std::size_t i = 0; i < rows; ++i)
         {
-            for (std::size_t k = 0; k < cols; ++k)
+            for (std::size_t k = 0; k < columns; ++k)
             {
-                float a_val = data[i * cols + k];
-                for (std::size_t j = 0; j < other_cols; ++j)
+                float a_value = storage[i * columns + k];
+                for (std::size_t j = 0; j < other_columns; ++j)
                 {
-                    result_data[i * other_cols + j] += a_val * other_data[k * other_cols + j];
+                    output_cpu.storage[i * other_columns + j] += a_value * other_cpu.storage[k * other_columns + j];
                 }
             }
         }
 
-        return std::make_shared<Cpu_Matrix_Impl>(rows, other_cols, std::move(result_data));
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::matmul: output shape=({}x{}), result={}",
+                                       rows, other_columns, formatDataSample(output_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::DENSE_COMPUTE);
     }
 
-    std::shared_ptr<Impl> matdiv(const std::shared_ptr<Impl> &other_impl) const override
+    void matdiv(const Impl &_other_implementation, Impl &_output_result) const override
     {
-        return matmul(other_impl->inverse());
+        Cpu_Matrix_Impl temporary_inverse(0, 0);
+        _other_implementation.inverse(temporary_inverse);
+        matmul(temporary_inverse, _output_result);
     }
 
-    std::shared_ptr<Impl> add(const std::shared_ptr<Impl> &other_impl) const override
+    void add(const Impl &_other_implementation, Impl &_output_result) const override
     {
-        std::size_t other_rows = other_impl->getRows();
-        std::size_t other_cols = other_impl->getCols();
-        std::vector<float> other_data = other_impl->getData();
-        std::vector<float> result_data(rows * cols);
+        const auto &other_cpu = static_cast<const Cpu_Matrix_Impl &>(_other_implementation);
+        auto &output_cpu = static_cast<Cpu_Matrix_Impl &>(_output_result);
+        output_cpu.reshape(rows, columns);
 
-        if (rows == other_rows && cols == other_cols)
+        std::size_t other_rows = other_cpu.getRows();
+        std::size_t other_columns = other_cpu.getColumns();
+        bool is_broadcast_mode = (other_rows == 1);
+
+        if (rows == other_rows && columns == other_columns)
         {
-            for (std::size_t i = 0; i < data.size(); ++i)
+            for (std::size_t i = 0; i < storage.size(); ++i)
             {
-                result_data[i] = data[i] + other_data[i];
+                output_cpu.storage[i] = storage[i] + other_cpu.storage[i];
             }
         }
-        else if (other_rows == 1 && cols == other_cols)
+        else if (is_broadcast_mode && columns == other_columns)
         {
             for (std::size_t i = 0; i < rows; ++i)
             {
-                for (std::size_t j = 0; j < cols; ++j)
+                for (std::size_t j = 0; j < columns; ++j)
                 {
-                    result_data[i * cols + j] = data[i * cols + j] + other_data[j];
+                    output_cpu.storage[i * columns + j] = storage[i * columns + j] + other_cpu.storage[j];
                 }
             }
         }
         else
         {
-            validateSameDimensions(*other_impl);
+            validateSameDimensions(_other_implementation);
         }
 
-        return std::make_shared<Cpu_Matrix_Impl>(rows, cols, std::move(result_data));
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::add: output shape=({}x{}), broadcast={}, result={}",
+                                       rows, columns, is_broadcast_mode, formatDataSample(output_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::DENSE_COMPUTE);
     }
 
-    std::shared_ptr<Impl> sub(const std::shared_ptr<Impl> &other_impl) const override
+    void sub(const Impl &_other_implementation, Impl &_output_result) const override
     {
-        std::size_t other_rows = other_impl->getRows();
-        std::size_t other_cols = other_impl->getCols();
-        std::vector<float> other_data = other_impl->getData();
-        std::vector<float> result_data(rows * cols);
+        const auto &other_cpu = static_cast<const Cpu_Matrix_Impl &>(_other_implementation);
+        auto &output_cpu = static_cast<Cpu_Matrix_Impl &>(_output_result);
+        output_cpu.reshape(rows, columns);
 
-        if (rows == other_rows && cols == other_cols)
+        std::size_t other_rows = other_cpu.getRows();
+        std::size_t other_columns = other_cpu.getColumns();
+        bool is_broadcast_mode = (other_rows == 1);
+
+        if (rows == other_rows && columns == other_columns)
         {
-            for (std::size_t i = 0; i < data.size(); ++i)
+            for (std::size_t i = 0; i < storage.size(); ++i)
             {
-                result_data[i] = data[i] - other_data[i];
+                output_cpu.storage[i] = storage[i] - other_cpu.storage[i];
             }
         }
-        else if (other_rows == 1 && cols == other_cols)
+        else if (is_broadcast_mode && columns == other_columns)
         {
             for (std::size_t i = 0; i < rows; ++i)
             {
-                for (std::size_t j = 0; j < cols; ++j)
+                for (std::size_t j = 0; j < columns; ++j)
                 {
-                    result_data[i * cols + j] = data[i * cols + j] - other_data[j];
+                    output_cpu.storage[i * columns + j] = storage[i * columns + j] - other_cpu.storage[j];
                 }
             }
         }
         else
         {
-            validateSameDimensions(*other_impl);
+            validateSameDimensions(_other_implementation);
         }
 
-        return std::make_shared<Cpu_Matrix_Impl>(rows, cols, std::move(result_data));
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::sub: output shape=({}x{}), broadcast={}, result={}",
+                                       rows, columns, is_broadcast_mode, formatDataSample(output_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::DENSE_COMPUTE);
     }
 
-    std::shared_ptr<Impl> mulScalar(float scalar) const override
+    void mulScalar(float _scalar, Impl &_output_result) const override
     {
-        std::vector<float> result_data(data.size());
-        for (std::size_t i = 0; i < data.size(); ++i)
+        auto &output_cpu = static_cast<Cpu_Matrix_Impl &>(_output_result);
+        output_cpu.reshape(rows, columns);
+
+        for (std::size_t i = 0; i < storage.size(); ++i)
         {
-            result_data[i] = data[i] * scalar;
+            output_cpu.storage[i] = storage[i] * _scalar;
         }
 
-        return std::make_shared<Cpu_Matrix_Impl>(rows, cols, std::move(result_data));
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::mulScalar: scalar={}, elements={}, result={}",
+                                       _scalar, storage.size(), formatDataSample(output_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::DENSE_COMPUTE);
     }
 
-    std::shared_ptr<Impl> divScalar(float scalar) const override
+    void divScalar(float _scalar, Impl &_output_result) const override
     {
-        if (std::abs(scalar) < 1e-8f)
+        if (std::abs(_scalar) < 1e-8f)
         {
-            Logger::logMessage("Cpu_Matrix_Impl::divScalar: Division by zero", LOG_ERROR, true);
+            Logger::logMessage("Cpu_Matrix_Impl::divScalar: Division by zero",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::DENSE_COMPUTE);
             throw std::runtime_error("Division by zero in divScalar");
         }
+        auto &output_cpu = static_cast<Cpu_Matrix_Impl &>(_output_result);
+        output_cpu.reshape(rows, columns);
+        float inverse_scalar = 1.0f / _scalar;
 
-        std::vector<float> result_data(data.size());
-        float inv_scalar = 1.0f / scalar;
-        for (std::size_t i = 0; i < data.size(); ++i)
+        for (std::size_t i = 0; i < storage.size(); ++i)
         {
-            result_data[i] = data[i] * inv_scalar;
+            output_cpu.storage[i] = storage[i] * inverse_scalar;
         }
 
-        return std::make_shared<Cpu_Matrix_Impl>(rows, cols, std::move(result_data));
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::divScalar: scalar={}, elements={}, result={}",
+                                       _scalar, storage.size(), formatDataSample(output_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::DENSE_COMPUTE);
     }
 
-    std::shared_ptr<Impl> hadamardMul(const std::shared_ptr<Impl> &other_impl) const override
+    void hadamardMul(const Impl &_other_implementation, Impl &_output_result) const override
     {
-        validateSameDimensions(*other_impl);
+        validateSameDimensions(_other_implementation);
+        const auto &other_cpu = static_cast<const Cpu_Matrix_Impl &>(_other_implementation);
+        auto &output_cpu = static_cast<Cpu_Matrix_Impl &>(_output_result);
+        output_cpu.reshape(rows, columns);
 
-        std::vector<float> other_data = other_impl->getData();
-        std::vector<float> result_data(data.size());
-
-        for (std::size_t i = 0; i < data.size(); ++i)
+        for (std::size_t i = 0; i < storage.size(); ++i)
         {
-            result_data[i] = data[i] * other_data[i];
+            output_cpu.storage[i] = storage[i] * other_cpu.storage[i];
         }
 
-        return std::make_shared<Cpu_Matrix_Impl>(rows, cols, std::move(result_data));
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::hadamardMul: elements={}, result={}",
+                                       storage.size(), formatDataSample(output_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::DENSE_COMPUTE);
     }
 
-    std::shared_ptr<Impl> hadamardDiv(const std::shared_ptr<Impl> &other_impl) const override
+    void hadamardDiv(const Impl &_other_implementation, Impl &_output_result) const override
     {
-        validateSameDimensions(*other_impl);
+        validateSameDimensions(_other_implementation);
+        const auto &other_cpu = static_cast<const Cpu_Matrix_Impl &>(_other_implementation);
+        auto &output_cpu = static_cast<Cpu_Matrix_Impl &>(_output_result);
+        output_cpu.reshape(rows, columns);
 
-        std::vector<float> other_data = other_impl->getData();
-        std::vector<float> result_data(data.size());
-
-        for (std::size_t i = 0; i < data.size(); ++i)
+        for (std::size_t i = 0; i < storage.size(); ++i)
         {
-            if (std::abs(other_data[i]) < 1e-8f)
+            if (std::abs(other_cpu.storage[i]) < 1e-8f)
             {
-                Logger::logMessage("Cpu_Matrix_Impl::hadamardDiv: Division by zero", LOG_ERROR, true);
+                Logger::logMessage("Cpu_Matrix_Impl::hadamardDiv: Division by zero",
+                                   Log_Level::LOG_ERROR,
+                                   true,
+                                   0,
+                                   Log_Feature::DENSE_COMPUTE);
                 throw std::runtime_error("Division by zero in hadamardDiv");
             }
-            result_data[i] = data[i] / other_data[i];
+            output_cpu.storage[i] = storage[i] / other_cpu.storage[i];
         }
 
-        return std::make_shared<Cpu_Matrix_Impl>(rows, cols, std::move(result_data));
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::hadamardDiv: elements={}, result={}",
+                                       storage.size(), formatDataSample(output_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::DENSE_COMPUTE);
     }
 
-    std::shared_ptr<Impl> transpose() const override
+    void transpose(Impl &_output_result) const override
     {
-        std::vector<float> result_data(rows * cols);
+        auto &output_cpu = static_cast<Cpu_Matrix_Impl &>(_output_result);
+        output_cpu.reshape(columns, rows);
+
         for (std::size_t i = 0; i < rows; ++i)
         {
-            for (std::size_t j = 0; j < cols; ++j)
+            for (std::size_t j = 0; j < columns; ++j)
             {
-                result_data[j * rows + i] = data[i * cols + j];
+                output_cpu.storage[j * rows + i] = storage[i * columns + j];
             }
         }
 
-        return std::make_shared<Cpu_Matrix_Impl>(cols, rows, std::move(result_data));
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::transpose: ({}x{}) -> ({}x{}), result={}",
+                                       rows, columns, columns, rows, formatDataSample(output_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::DENSE_COMPUTE);
     }
 
-    std::shared_ptr<Impl> inverse() const override
+    void inverse(Impl &_output_result) const override
     {
         validateSquare();
+        std::size_t dimension_size = rows;
+        auto &output_cpu = static_cast<Cpu_Matrix_Impl &>(_output_result);
+        output_cpu.reshape(dimension_size, dimension_size);
 
-        std::size_t n = rows;
-        std::vector<float> aug(n * 2 * n, 0.0f);
-
-        for (std::size_t i = 0; i < n; ++i)
+        std::vector<float> augmented_matrix(dimension_size * 2 * dimension_size, 0.0f);
+        for (std::size_t i = 0; i < dimension_size; ++i)
         {
-            for (std::size_t j = 0; j < n; ++j)
+            for (std::size_t j = 0; j < dimension_size; ++j)
             {
-                aug[i * (2 * n) + j] = data[i * n + j];
+                augmented_matrix[i * (2 * dimension_size) + j] = storage[i * dimension_size + j];
             }
-            aug[i * (2 * n) + (n + i)] = 1.0f;
+            augmented_matrix[i * (2 * dimension_size) + (dimension_size + i)] = 1.0f;
         }
 
-        for (std::size_t i = 0; i < n; ++i)
+        for (std::size_t i = 0; i < dimension_size; ++i)
         {
             std::size_t pivot_row = i;
-            float max_val = std::abs(aug[i * (2 * n) + i]);
+            float max_pivot_value = std::abs(augmented_matrix[i * (2 * dimension_size) + i]);
 
-            for (std::size_t k = i + 1; k < n; ++k)
+            for (std::size_t k = i + 1; k < dimension_size; ++k)
             {
-                float val = std::abs(aug[k * (2 * n) + i]);
-                if (val > max_val)
+                float current_value = std::abs(augmented_matrix[k * (2 * dimension_size) + i]);
+                if (current_value > max_pivot_value)
                 {
-                    max_val = val;
+                    max_pivot_value = current_value;
                     pivot_row = k;
                 }
             }
 
-            if (max_val < 1e-7f)
+            if (max_pivot_value < 1e-7f)
             {
-                Logger::logMessage("Cpu_Matrix_Impl::inverse: Matrix is singular and cannot be inverted", LOG_ERROR, true);
+                Logger::logMessage("Cpu_Matrix_Impl::inverse: Matrix is singular and cannot be inverted",
+                                   Log_Level::LOG_ERROR,
+                                   true,
+                                   0,
+                                   Log_Feature::DENSE_COMPUTE);
                 throw std::runtime_error("Matrix is singular");
             }
 
             if (pivot_row != i)
             {
-                for (std::size_t j = 0; j < 2 * n; ++j)
+                for (std::size_t j = 0; j < 2 * dimension_size; ++j)
                 {
-                    std::swap(aug[i * (2 * n) + j], aug[pivot_row * (2 * n) + j]);
+                    std::swap(augmented_matrix[i * (2 * dimension_size) + j], augmented_matrix[pivot_row * (2 * dimension_size) + j]);
                 }
             }
 
-            float pivot = aug[i * (2 * n) + i];
-            for (std::size_t j = 0; j < 2 * n; ++j)
+            float pivot = augmented_matrix[i * (2 * dimension_size) + i];
+            for (std::size_t j = 0; j < 2 * dimension_size; ++j)
             {
-                aug[i * (2 * n) + j] /= pivot;
+                augmented_matrix[i * (2 * dimension_size) + j] /= pivot;
             }
 
-            for (std::size_t k = 0; k < n; ++k)
+            for (std::size_t k = 0; k < dimension_size; ++k)
             {
                 if (k != i)
                 {
-                    float factor = aug[k * (2 * n) + i];
-                    for (std::size_t j = 0; j < 2 * n; ++j)
+                    float factor = augmented_matrix[k * (2 * dimension_size) + i];
+                    for (std::size_t j = 0; j < 2 * dimension_size; ++j)
                     {
-                        aug[k * (2 * n) + j] -= factor * aug[i * (2 * n) + j];
+                        augmented_matrix[k * (2 * dimension_size) + j] -= factor * augmented_matrix[i * (2 * dimension_size) + j];
                     }
                 }
             }
         }
 
-        std::vector<float> inv_data(n * n);
-        for (std::size_t i = 0; i < n; ++i)
+        for (std::size_t i = 0; i < dimension_size; ++i)
         {
-            for (std::size_t j = 0; j < n; ++j)
+            for (std::size_t j = 0; j < dimension_size; ++j)
             {
-                inv_data[i * n + j] = aug[i * (2 * n) + (n + j)];
+                output_cpu.storage[i * dimension_size + j] = augmented_matrix[i * (2 * dimension_size) + (dimension_size + j)];
             }
         }
 
-        return std::make_shared<Cpu_Matrix_Impl>(n, n, std::move(inv_data));
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::inverse: dimension={}, result={}",
+                                       dimension_size, formatDataSample(output_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::DENSE_COMPUTE);
     }
 
-    std::shared_ptr<Impl> normalize() const override
+    void normalize(Impl &_output_result) const override
     {
-        float sum_sq = 0.0f;
-        for (float val : data)
+        auto &output_cpu = static_cast<Cpu_Matrix_Impl &>(_output_result);
+        output_cpu.reshape(rows, columns);
+
+        float sum_of_squares = 0.0f;
+        for (float value : storage)
         {
-            sum_sq += val * val;
+            sum_of_squares += value * value;
+        }
+        float norm_value = std::sqrt(sum_of_squares);
+
+        if (norm_value < 1e-8f)
+        {
+            Logger::logMessage(std::format("Cpu_Matrix_Impl::normalize: Matrix norm near zero ({:.4e}), skipping normalization", norm_value),
+                               Log_Level::LOG_WARNING,
+                               true,
+                               0,
+                               Log_Feature::NORMALIZATION_COMPUTE);
+            output_cpu.storage = storage;
+            return;
         }
 
-        float norm = std::sqrt(sum_sq);
-        if (norm < 1e-8f)
+        for (std::size_t i = 0; i < storage.size(); ++i)
         {
-            Logger::logMessage("Cpu_Matrix_Impl::normalize: Matrix norm near zero during normalization", LOG_WARNING);
-            return std::make_shared<Cpu_Matrix_Impl>(rows, cols, data);
+            output_cpu.storage[i] = storage[i] / norm_value;
         }
 
-        std::vector<float> result_data(data.size());
-        for (std::size_t i = 0; i < data.size(); ++i)
-        {
-            result_data[i] = data[i] / norm;
-        }
-
-        return std::make_shared<Cpu_Matrix_Impl>(rows, cols, std::move(result_data));
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::normalize: norm={:.4e}, result={}",
+                                       norm_value, formatDataSample(output_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::NORMALIZATION_COMPUTE);
     }
 
-    std::shared_ptr<Impl> relu() const override
+    void relu(Impl &_output_result) const override
     {
-        std::vector<float> result_data(data.size());
-        for (std::size_t i = 0; i < data.size(); ++i)
+        auto &output_cpu = static_cast<Cpu_Matrix_Impl &>(_output_result);
+        output_cpu.reshape(rows, columns);
+
+        for (std::size_t i = 0; i < storage.size(); ++i)
         {
-            result_data[i] = std::max(0.0f, data[i]);
+            output_cpu.storage[i] = std::max(0.0f, storage[i]);
         }
 
-        return std::make_shared<Cpu_Matrix_Impl>(rows, cols, std::move(result_data));
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::relu: elements={}, result={}",
+                                       storage.size(), formatDataSample(output_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::ACTIVATION_COMPUTE);
     }
 
-    std::shared_ptr<Impl> reluBackward(const std::shared_ptr<Impl> &grad_impl) const override
+    void reluBackward(const Impl &_output_gradient, Impl &_input_gradient) const override
     {
-        validateSameDimensions(*grad_impl);
-        auto grad = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(grad_impl);
-        std::vector<float> result_data(data.size());
-        for (std::size_t i = 0; i < data.size(); ++i)
+        validateSameDimensions(_output_gradient);
+        const auto &grad_cpu = static_cast<const Cpu_Matrix_Impl &>(_output_gradient);
+        auto &input_gradient_cpu = static_cast<Cpu_Matrix_Impl &>(_input_gradient);
+        input_gradient_cpu.reshape(rows, columns);
+
+        for (std::size_t i = 0; i < storage.size(); ++i)
         {
-            result_data[i] = (data[i] > 0.0f) ? grad->data[i] : 0.0f;
-        }
-        return std::make_shared<Cpu_Matrix_Impl>(rows, cols, std::move(result_data));
-    }
-
-    std::shared_ptr<Impl> gelu() const override
-    {
-        constexpr float kAlpha = 0.7978845608028654f;
-        constexpr float kBeta = 0.044715f;
-
-        std::vector<float> result_data(data.size());
-
-        for (std::size_t i = 0; i < data.size(); ++i)
-        {
-            float x = data[i];
-            float x3 = x * x * x;
-            float t = std::tanh(kAlpha * (x + kBeta * x3));
-
-            result_data[i] = 0.5f * x * (1.0f + t);
+            input_gradient_cpu.storage[i] = (storage[i] > 0.0f) ? grad_cpu.storage[i] : 0.0f;
         }
 
-        return std::make_shared<Cpu_Matrix_Impl>(rows, cols, std::move(result_data));
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::reluBackward: elements={}, gradient_result={}",
+                                       storage.size(), formatDataSample(input_gradient_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::ACTIVATION_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
     }
 
-    std::shared_ptr<Impl> geluBackward(const std::shared_ptr<Impl> &grad_impl) const override
+    void gelu(Impl &_output_result) const override
     {
-        validateSameDimensions(*grad_impl);
+        auto &output_cpu = static_cast<Cpu_Matrix_Impl &>(_output_result);
+        output_cpu.reshape(rows, columns);
+        constexpr float APPROXIMATION_ALPHA = 0.7978845608028654f;
+        constexpr float APPROXIMATION_BETA = 0.044715f;
 
-        auto grad = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(grad_impl);
-
-        constexpr float kAlpha = 0.7978845608028654f;
-        constexpr float kBeta = 0.044715f;
-
-        std::vector<float> result_data(data.size());
-
-        for (std::size_t i = 0; i < data.size(); ++i)
+        for (std::size_t i = 0; i < storage.size(); ++i)
         {
-            float x = data[i];
-
-            float x2 = x * x;
-            float x3 = x2 * x;
-
-            float u = kAlpha * (x + kBeta * x3);
-            float t = std::tanh(u);
-            float sech2 = 1.0f - t * t;
-
-            float derivative =
-                0.5f * (1.0f + t) +
-                0.5f * x * sech2 * kAlpha * (1.0f + 3.0f * kBeta * x2);
-
-            result_data[i] = grad->getData()[i] * derivative;
+            float x_value = storage[i];
+            float x_cubed = x_value * x_value * x_value;
+            float tanh_inner = std::tanh(APPROXIMATION_ALPHA * (x_value + APPROXIMATION_BETA * x_cubed));
+            output_cpu.storage[i] = 0.5f * x_value * (1.0f + tanh_inner);
         }
 
-        return std::make_shared<Cpu_Matrix_Impl>(rows, cols, std::move(result_data));
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::gelu: elements={}, result={}",
+                                       storage.size(), formatDataSample(output_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::ACTIVATION_COMPUTE);
     }
 
-    std::shared_ptr<Impl> softmax() const override
+    void geluBackward(const Impl &_output_gradient, Impl &_input_gradient) const override
     {
-        std::vector<float> out(rows * cols);
+        validateSameDimensions(_output_gradient);
+        const auto &grad_cpu = static_cast<const Cpu_Matrix_Impl &>(_output_gradient);
+        auto &input_gradient_cpu = static_cast<Cpu_Matrix_Impl &>(_input_gradient);
+        input_gradient_cpu.reshape(rows, columns);
+
+        constexpr float APPROXIMATION_ALPHA = 0.7978845608028654f;
+        constexpr float APPROXIMATION_BETA = 0.044715f;
+
+        for (std::size_t i = 0; i < storage.size(); ++i)
+        {
+            float x_value = storage[i];
+            float x_squared = x_value * x_value;
+            float x_cubed = x_squared * x_value;
+            float tanh_inner = std::tanh(APPROXIMATION_ALPHA * (x_value + APPROXIMATION_BETA * x_cubed));
+            float sech_squared = 1.0f - tanh_inner * tanh_inner;
+            float derivative = 0.5f * (1.0f + tanh_inner) + 0.5f * x_value * sech_squared * APPROXIMATION_ALPHA * (1.0f + 3.0f * APPROXIMATION_BETA * x_squared);
+            input_gradient_cpu.storage[i] = grad_cpu.storage[i] * derivative;
+        }
+
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::geluBackward: elements={}, gradient_result={}",
+                                       storage.size(), formatDataSample(input_gradient_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::ACTIVATION_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
+    }
+
+    void softmax(Impl &_output_result) const override
+    {
+        auto &output_cpu = static_cast<Cpu_Matrix_Impl &>(_output_result);
+        output_cpu.reshape(rows, columns);
+
         for (std::size_t r = 0; r < rows; ++r)
         {
-            float max_val = data[r * cols];
-
-            for (std::size_t c = 1; c < cols; ++c)
-                max_val = std::max(max_val, data[r * cols + c]);
-            float sum = 0.0f;
-            for (std::size_t c = 0; c < cols; ++c)
+            float max_value = storage[r * columns];
+            for (std::size_t c = 1; c < columns; ++c)
             {
-                float e = std::exp(data[r * cols + c] - max_val);
-                out[r * cols + c] = e;
-                sum += e;
+                max_value = std::max(max_value, storage[r * columns + c]);
             }
-            for (std::size_t c = 0; c < cols; ++c)
-                out[r * cols + c] /= sum;
+            float exponential_sum = 0.0f;
+            for (std::size_t c = 0; c < columns; ++c)
+            {
+                float exp_val = std::exp(storage[r * columns + c] - max_value);
+                output_cpu.storage[r * columns + c] = exp_val;
+                exponential_sum += exp_val;
+            }
+            for (std::size_t c = 0; c < columns; ++c)
+            {
+                output_cpu.storage[r * columns + c] /= exponential_sum;
+            }
         }
-        return std::make_shared<Cpu_Matrix_Impl>(rows, cols, out);
+
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::softmax: shape=({}x{}), result={}",
+                                       rows, columns, formatDataSample(output_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::ACTIVATION_COMPUTE);
     }
 
-    std::shared_ptr<Impl> softmaxBackward(const std::shared_ptr<Impl> &grad_impl) const override
+    void softmaxBackward(const Impl &_output_gradient, Impl &_input_gradient) const override
     {
-        auto grad = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(grad_impl);
-        std::vector<float> result(rows * cols);
+        const auto &grad_cpu = static_cast<const Cpu_Matrix_Impl &>(_output_gradient);
+        auto &input_gradient_cpu = static_cast<Cpu_Matrix_Impl &>(_input_gradient);
+        input_gradient_cpu.reshape(rows, columns);
+
         for (std::size_t r = 0; r < rows; ++r)
         {
-            for (std::size_t i = 0; i < cols; ++i)
+            for (std::size_t i = 0; i < columns; ++i)
             {
-                float value = 0.0f;
-                for (std::size_t j = 0; j < cols; ++j)
+                float accumulated_value = 0.0f;
+                for (std::size_t j = 0; j < columns; ++j)
                 {
                     float delta = (i == j) ? 1.0f : 0.0f;
-                    float jac = data[r * cols + i] * (delta - data[r * cols + j]);
-                    value += jac * grad->data[r * cols + j];
+                    float jacobian_element = storage[r * columns + i] * (delta - storage[r * columns + j]);
+                    accumulated_value += jacobian_element * grad_cpu.storage[r * columns + j];
                 }
-                result[r * cols + i] = value;
+                input_gradient_cpu.storage[r * columns + i] = accumulated_value;
             }
         }
-        return std::make_shared<Cpu_Matrix_Impl>(rows, cols, result);
+
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::softmaxBackward: shape=({}x{}), gradient_result={}",
+                                       rows, columns, formatDataSample(input_gradient_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::ACTIVATION_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
     }
 
-    void sgdUpdate(const std::shared_ptr<Impl> &grad_impl, float learning_rate, float max_gradient = 0.0f) override
+    void sgdUpdate(const Impl &_gradient_implementation, float _learning_rate, float _max_gradient = 0.0f) override
     {
-        validateSameDimensions(*grad_impl);
-        const std::vector<float> &grad_data = grad_impl->getData();
-        std::size_t total_elements = data.size();
+        validateSameDimensions(_gradient_implementation);
+        const auto &grad_cpu = static_cast<const Cpu_Matrix_Impl &>(_gradient_implementation);
+        std::size_t total_elements = storage.size();
 
-        if (max_gradient > 0.0f)
+        if (_max_gradient > 0.0f)
         {
             for (std::size_t i = 0; i < total_elements; ++i)
             {
-                float g = std::clamp(grad_data[i], -max_gradient, max_gradient);
-                data[i] -= learning_rate * g;
+                float gradient_clipped = std::clamp(grad_cpu.storage[i], -_max_gradient, _max_gradient);
+                storage[i] -= _learning_rate * gradient_clipped;
             }
         }
         else
         {
             for (std::size_t i = 0; i < total_elements; ++i)
             {
-                data[i] -= learning_rate * grad_data[i];
+                storage[i] -= _learning_rate * grad_cpu.storage[i];
             }
         }
+
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::sgdUpdate: elements={}, lr={}, max_grad={}, updated_weights={}",
+                                       total_elements, _learning_rate, _max_gradient, formatDataSample(storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::OPTIMIZER_STEP);
     }
 
     void adamUpdate(
-        const std::shared_ptr<Impl> &grad_impl,
-        const std::shared_ptr<Impl> &m_impl,
-        const std::shared_ptr<Impl> &v_impl,
-        float learning_rate,
-        float beta1,
-        float beta2,
-        float epsilon,
-        std::size_t timestep,
-        float max_gradient = 1.0f) override
+        const Impl &_gradient_implementation,
+        const Impl &_first_moment_implementation,
+        const Impl &_second_moment_implementation,
+        float _learning_rate,
+        float _beta1,
+        float _beta2,
+        float _epsilon,
+        std::size_t _timestep,
+        float _max_gradient = 1.0f) override
     {
-        validateSameDimensions(*grad_impl);
-        validateSameDimensions(*m_impl);
-        validateSameDimensions(*v_impl);
+        validateSameDimensions(_gradient_implementation);
+        validateSameDimensions(_first_moment_implementation);
+        validateSameDimensions(_second_moment_implementation);
 
-        auto grad_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(grad_impl);
-        auto m_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(m_impl);
-        auto v_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(v_impl);
+        const auto &grad_cpu = static_cast<const Cpu_Matrix_Impl &>(_gradient_implementation);
+        auto &first_moment_cpu = static_cast<Cpu_Matrix_Impl &>(const_cast<Impl &>(_first_moment_implementation));
+        auto &second_moment_cpu = static_cast<Cpu_Matrix_Impl &>(const_cast<Impl &>(_second_moment_implementation));
 
-        const std::vector<float> &grad_data = grad_cpu->getData();
-        std::vector<float> &m_data = m_cpu->data;
-        std::vector<float> &v_data = v_cpu->data;
+        std::size_t total_elements = storage.size();
 
-        std::size_t total_elements = data.size();
-
-        float correction1 = 1.0f - std::pow(beta1, static_cast<float>(timestep));
-        float correction2 = 1.0f - std::pow(beta2, static_cast<float>(timestep));
+        float bias_correction_first = 1.0f - std::pow(_beta1, static_cast<float>(_timestep));
+        float bias_correction_second = 1.0f - std::pow(_beta2, static_cast<float>(_timestep));
 
         for (std::size_t i = 0; i < total_elements; ++i)
         {
-            float g = (max_gradient > 0.0f) ? std::clamp(grad_data[i], -max_gradient, max_gradient) : grad_data[i];
+            float gradient_value = (_max_gradient > 0.0f) ? std::clamp(grad_cpu.storage[i], -_max_gradient, _max_gradient) : grad_cpu.storage[i];
+            first_moment_cpu.storage[i] = _beta1 * first_moment_cpu.storage[i] + (1.0f - _beta1) * gradient_value;
+            second_moment_cpu.storage[i] = _beta2 * second_moment_cpu.storage[i] + (1.0f - _beta2) * (gradient_value * gradient_value);
 
-            m_data[i] = beta1 * m_data[i] + (1.0f - beta1) * g;
-            v_data[i] = beta2 * v_data[i] + (1.0f - beta2) * (g * g);
-
-            float m_hat = m_data[i] / correction1;
-            float v_hat = v_data[i] / correction2;
-
-            data[i] -= learning_rate * (m_hat / (std::sqrt(v_hat) + epsilon));
+            float corrected_first_moment = first_moment_cpu.storage[i] / bias_correction_first;
+            float corrected_second_moment = second_moment_cpu.storage[i] / bias_correction_second;
+            storage[i] -= _learning_rate * (corrected_first_moment / (std::sqrt(corrected_second_moment) + _epsilon));
         }
+
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::adamUpdate: step={}, lr={}, updated_weights={}, first_moment={}, second_moment={}",
+                                       _timestep, _learning_rate, formatDataSample(storage),
+                                       formatDataSample(first_moment_cpu.storage), formatDataSample(second_moment_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::OPTIMIZER_STEP);
     }
 
-    std::shared_ptr<Impl> matmulAdd(const std::shared_ptr<Impl> &other, const std::shared_ptr<Impl> &bias) const override
+    void matmulAdd(const Impl &_other_implementation, const Impl &_bias_implementation, Impl &_output_result) const override
     {
-        validateMatmulDimensions(*other);
+        validateMatmulDimensions(_other_implementation);
+        const auto &weights_cpu = static_cast<const Cpu_Matrix_Impl &>(_other_implementation);
+        const auto &bias_cpu = static_cast<const Cpu_Matrix_Impl &>(_bias_implementation);
+        auto &output_cpu = static_cast<Cpu_Matrix_Impl &>(_output_result);
 
-        const auto &w_cpu = static_cast<const Cpu_Matrix_Impl &>(*other);
-        const auto &b_cpu = static_cast<const Cpu_Matrix_Impl &>(*bias);
+        std::size_t output_rows = rows;
+        std::size_t output_columns = weights_cpu.columns;
+        output_cpu.reshape(output_rows, output_columns);
 
-        std::size_t out_rows = rows;
-        std::size_t out_cols = w_cpu.cols;
-
-        std::vector<float> result_data(out_rows * out_cols);
-
-        for (std::size_t i = 0; i < out_rows; ++i)
+        for (std::size_t i = 0; i < output_rows; ++i)
         {
-            for (std::size_t j = 0; j < out_cols; ++j)
+            for (std::size_t j = 0; j < output_columns; ++j)
             {
-                float bias_val = (b_cpu.rows == 1) ? b_cpu.data[j] : b_cpu.data[i * out_cols + j];
-                result_data[i * out_cols + j] = bias_val;
+                output_cpu.storage[i * output_columns + j] = (bias_cpu.rows == 1) ? bias_cpu.storage[j] : bias_cpu.storage[i * output_columns + j];
             }
-
-            for (std::size_t k = 0; k < cols; ++k)
+            for (std::size_t k = 0; k < columns; ++k)
             {
-                float x_val = data[i * cols + k];
-                for (std::size_t j = 0; j < out_cols; ++j)
+                float input_value = storage[i * columns + k];
+                for (std::size_t j = 0; j < output_columns; ++j)
                 {
-                    result_data[i * out_cols + j] += x_val * w_cpu.data[k * out_cols + j];
+                    output_cpu.storage[i * output_columns + j] += input_value * weights_cpu.storage[k * output_columns + j];
                 }
             }
         }
 
-        return std::make_shared<Cpu_Matrix_Impl>(out_rows, out_cols, std::move(result_data));
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::matmulAdd: output shape=({}x{}), result={}",
+                                       output_rows, output_columns, formatDataSample(output_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::DENSE_COMPUTE);
     }
 
-    std::shared_ptr<Impl> conv2d(
-        const std::shared_ptr<Impl> &weights,
-        const std::shared_ptr<Impl> &bias,
-        std::uint32_t in_h, std::uint32_t in_w, std::uint32_t in_c,
-        std::uint32_t out_c, std::uint32_t kernel_size,
-        std::uint32_t stride, std::uint32_t padding) const override
+    void conv2d(
+        const Impl &_weights, const Impl &_biases, Impl &_output_result,
+        std::uint32_t _input_height, std::uint32_t _input_width, std::uint32_t _input_channels,
+        std::uint32_t _output_channels, std::uint32_t _kernel_size,
+        std::uint32_t _stride, std::uint32_t _padding) const override
     {
         std::uint32_t batch_size = static_cast<std::uint32_t>(rows);
-        std::uint32_t out_h = (in_h + 2 * padding - kernel_size) / stride + 1;
-        std::uint32_t out_w = (in_w + 2 * padding - kernel_size) / stride + 1;
+        std::uint32_t output_height = (_input_height + 2 * _padding - _kernel_size) / _stride + 1;
+        std::uint32_t output_width = (_input_width + 2 * _padding - _kernel_size) / _stride + 1;
 
-        const auto &w_data = weights->getData();
-        const auto &b_data = bias->getData();
-
-        std::vector<float> result_data(batch_size * out_h * out_w * out_c, 0.0f);
+        const auto &weights_data = _weights.getData();
+        const auto &biases_data = _biases.getData();
+        auto &output_cpu = static_cast<Cpu_Matrix_Impl &>(_output_result);
+        output_cpu.reshape(batch_size, output_height * output_width * _output_channels);
 
         for (std::uint32_t n = 0; n < batch_size; ++n)
         {
-            for (std::uint32_t oh = 0; oh < out_h; ++oh)
+            for (std::uint32_t oh = 0; oh < output_height; ++oh)
             {
-                for (std::uint32_t ow = 0; ow < out_w; ++ow)
+                for (std::uint32_t ow = 0; ow < output_width; ++ow)
                 {
-                    for (std::uint32_t oc = 0; oc < out_c; ++oc)
+                    for (std::uint32_t oc = 0; oc < _output_channels; ++oc)
                     {
-                        float sum = b_data[oc];
-                        for (std::uint32_t ky = 0; ky < kernel_size; ++ky)
+                        float sum = biases_data[oc];
+                        for (std::uint32_t ky = 0; ky < _kernel_size; ++ky)
                         {
-                            for (std::uint32_t kx = 0; kx < kernel_size; ++kx)
+                            for (std::uint32_t kx = 0; kx < _kernel_size; ++kx)
                             {
-                                int ih = static_cast<int>(oh * stride + ky) - static_cast<int>(padding);
-                                int iw = static_cast<int>(ow * stride + kx) - static_cast<int>(padding);
-
-                                if (ih >= 0 && ih < static_cast<int>(in_h) && iw >= 0 && iw < static_cast<int>(in_w))
+                                int ih = static_cast<int>(oh * _stride + ky) - static_cast<int>(_padding);
+                                int iw = static_cast<int>(ow * _stride + kx) - static_cast<int>(_padding);
+                                if (ih >= 0 && ih < static_cast<int>(_input_height) && iw >= 0 && iw < static_cast<int>(_input_width))
                                 {
-                                    for (std::uint32_t ic = 0; ic < in_c; ++ic)
+                                    for (std::uint32_t ic = 0; ic < _input_channels; ++ic)
                                     {
-                                        std::size_t in_idx = n * in_h * in_w * in_c + ih * in_w * in_c + iw * in_c + ic;
-                                        std::size_t w_idx = ky * kernel_size * in_c * out_c + kx * in_c * out_c + ic * out_c + oc;
-                                        sum += data[in_idx] * w_data[w_idx];
+                                        std::size_t input_index = n * _input_height * _input_width * _input_channels + ih * _input_width * _input_channels + iw * _input_channels + ic;
+                                        std::size_t weight_index = ky * _kernel_size * _input_channels * _output_channels + kx * _input_channels * _output_channels + ic * _output_channels + oc;
+                                        sum += storage[input_index] * weights_data[weight_index];
                                     }
                                 }
                             }
                         }
-                        std::size_t out_idx = n * out_h * out_w * out_c + oh * out_w * out_c + ow * out_c + oc;
-                        result_data[out_idx] = sum;
+                        output_cpu.storage[n * output_height * output_width * _output_channels + oh * output_width * _output_channels + ow * _output_channels + oc] = sum;
                     }
                 }
             }
         }
 
-        return std::make_shared<Cpu_Matrix_Impl>(batch_size, out_h * out_w * out_c, std::move(result_data));
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::conv2d: output=({}x{}x{}x{}), result={}",
+                                       batch_size, output_height, output_width, _output_channels, formatDataSample(output_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::CONV2D_COMPUTE | Log_Feature::FORWARD_EVALUATION);
     }
 
-    std::shared_ptr<Impl> conv2dBackwardInput(
-        const std::shared_ptr<Impl> &weights,
-        std::uint32_t in_h, std::uint32_t in_w, std::uint32_t in_c,
-        std::uint32_t out_h, std::uint32_t out_w, std::uint32_t out_c,
-        std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const override
+    void conv2dBackwardInput(
+        const Impl &_weights, Impl &_input_gradient,
+        std::uint32_t _input_height, std::uint32_t _input_width, std::uint32_t _input_channels,
+        std::uint32_t _output_height, std::uint32_t _output_width, std::uint32_t _output_channels,
+        std::uint32_t _kernel_size, std::uint32_t _stride, std::uint32_t _padding) const override
     {
         std::uint32_t batch_size = static_cast<std::uint32_t>(rows);
-        const auto &w_data = weights->getData();
-
-        std::vector<float> result_data(batch_size * in_h * in_w * in_c, 0.0f);
+        const auto &weights_data = _weights.getData();
+        auto &input_gradient_cpu = static_cast<Cpu_Matrix_Impl &>(_input_gradient);
+        input_gradient_cpu.reshape(batch_size, _input_height * _input_width * _input_channels);
 
         for (std::uint32_t n = 0; n < batch_size; ++n)
         {
-            for (std::uint32_t ih = 0; ih < in_h; ++ih)
+            for (std::uint32_t ih = 0; ih < _input_height; ++ih)
             {
-                for (std::uint32_t iw = 0; iw < in_w; ++iw)
+                for (std::uint32_t iw = 0; iw < _input_width; ++iw)
                 {
-                    for (std::uint32_t ic = 0; ic < in_c; ++ic)
+                    for (std::uint32_t ic = 0; ic < _input_channels; ++ic)
                     {
                         float sum = 0.0f;
-                        for (std::uint32_t ky = 0; ky < kernel_size; ++ky)
+                        for (std::uint32_t ky = 0; ky < _kernel_size; ++ky)
                         {
-                            for (std::uint32_t kx = 0; kx < kernel_size; ++kx)
+                            for (std::uint32_t kx = 0; kx < _kernel_size; ++kx)
                             {
-                                int oh_calc = static_cast<int>(ih + padding - ky);
-                                int ow_calc = static_cast<int>(iw + padding - kx);
-
-                                if (oh_calc >= 0 && oh_calc % static_cast<int>(stride) == 0 &&
-                                    ow_calc >= 0 && ow_calc % static_cast<int>(stride) == 0)
+                                int oh_calc = static_cast<int>(ih + _padding - ky);
+                                int ow_calc = static_cast<int>(iw + _padding - kx);
+                                if (oh_calc >= 0 && oh_calc % static_cast<int>(_stride) == 0 && ow_calc >= 0 && ow_calc % static_cast<int>(_stride) == 0)
                                 {
-                                    std::uint32_t oh = static_cast<std::uint32_t>(oh_calc) / stride;
-                                    std::uint32_t ow = static_cast<std::uint32_t>(ow_calc) / stride;
-
-                                    if (oh < out_h && ow < out_w)
+                                    std::uint32_t oh = static_cast<std::uint32_t>(oh_calc) / _stride;
+                                    std::uint32_t ow = static_cast<std::uint32_t>(ow_calc) / _stride;
+                                    if (oh < _output_height && ow < _output_width)
                                     {
-                                        for (std::uint32_t oc = 0; oc < out_c; ++oc)
+                                        for (std::uint32_t oc = 0; oc < _output_channels; ++oc)
                                         {
-                                            std::size_t grad_out_idx = n * out_h * out_w * out_c + oh * out_w * out_c + ow * out_c + oc;
-                                            std::size_t w_idx = ky * kernel_size * in_c * out_c + kx * in_c * out_c + ic * out_c + oc;
-                                            sum += data[grad_out_idx] * w_data[w_idx];
+                                            std::size_t output_gradient_index = n * _output_height * _output_width * _output_channels + oh * _output_width * _output_channels + ow * _output_channels + oc;
+                                            std::size_t weight_index = ky * _kernel_size * _input_channels * _output_channels + kx * _input_channels * _output_channels + ic * _output_channels + oc;
+                                            sum += storage[output_gradient_index] * weights_data[weight_index];
                                         }
                                     }
                                 }
                             }
                         }
-                        std::size_t in_idx = n * in_h * in_w * in_c + ih * in_w * in_c + iw * in_c + ic;
-                        result_data[in_idx] = sum;
+                        input_gradient_cpu.storage[n * _input_height * _input_width * _input_channels + ih * _input_width * _input_channels + iw * _input_channels + ic] = sum;
                     }
                 }
             }
         }
 
-        return std::make_shared<Cpu_Matrix_Impl>(batch_size, in_h * in_w * in_c, std::move(result_data));
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::conv2dBackwardInput: input_gradient=({}x{}x{}x{}), result={}",
+                                       batch_size, _input_height, _input_width, _input_channels, formatDataSample(input_gradient_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::CONV2D_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
     }
 
     void conv2dBackwardWeight(
-        const std::shared_ptr<Impl> &grad_output,
-        const std::shared_ptr<Impl> &grad_weights,
-        const std::shared_ptr<Impl> &grad_biases,
-        std::uint32_t in_h, std::uint32_t in_w, std::uint32_t in_c,
-        std::uint32_t out_h, std::uint32_t out_w, std::uint32_t out_c,
-        std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const override
+        const Impl &_output_gradient, Impl &_weight_gradient, Impl &_bias_gradient,
+        std::uint32_t _input_height, std::uint32_t _input_width, std::uint32_t _input_channels,
+        std::uint32_t _output_height, std::uint32_t _output_width, std::uint32_t _output_channels,
+        std::uint32_t _kernel_size, std::uint32_t _stride, std::uint32_t _padding) const override
     {
         std::uint32_t batch_size = static_cast<std::uint32_t>(rows);
-        const auto &go_data = grad_output->getData();
+        const auto &output_gradient_data = _output_gradient.getData();
+        auto &weight_gradient_cpu = static_cast<Cpu_Matrix_Impl &>(_weight_gradient);
+        auto &bias_gradient_cpu = static_cast<Cpu_Matrix_Impl &>(_bias_gradient);
 
-        std::vector<float> gw_data(kernel_size * kernel_size * in_c * out_c, 0.0f);
-        std::vector<float> gb_data(out_c, 0.0f);
+        weight_gradient_cpu.reshape(1, _kernel_size * _kernel_size * _input_channels * _output_channels);
+        bias_gradient_cpu.reshape(1, _output_channels);
+        std::fill(weight_gradient_cpu.storage.begin(), weight_gradient_cpu.storage.end(), 0.0f);
+        std::fill(bias_gradient_cpu.storage.begin(), bias_gradient_cpu.storage.end(), 0.0f);
 
-        for (std::uint32_t oc = 0; oc < out_c; ++oc)
+        for (std::uint32_t oc = 0; oc < _output_channels; ++oc)
         {
-            for (std::uint32_t ic = 0; ic < in_c; ++ic)
+            for (std::uint32_t ic = 0; ic < _input_channels; ++ic)
             {
-                for (std::uint32_t ky = 0; ky < kernel_size; ++ky)
+                for (std::uint32_t ky = 0; ky < _kernel_size; ++ky)
                 {
-                    for (std::uint32_t kx = 0; kx < kernel_size; ++kx)
+                    for (std::uint32_t kx = 0; kx < _kernel_size; ++kx)
                     {
                         float weight_sum = 0.0f;
                         for (std::uint32_t n = 0; n < batch_size; ++n)
                         {
-                            for (std::uint32_t oh = 0; oh < out_h; ++oh)
+                            for (std::uint32_t oh = 0; oh < _output_height; ++oh)
                             {
-                                for (std::uint32_t ow = 0; ow < out_w; ++ow)
+                                for (std::uint32_t ow = 0; ow < _output_width; ++ow)
                                 {
-                                    std::size_t grad_out_idx = n * out_h * out_w * out_c + oh * out_w * out_c + ow * out_c + oc;
-                                    float grad_out_val = go_data[grad_out_idx];
-
+                                    std::size_t output_gradient_index = n * _output_height * _output_width * _output_channels + oh * _output_width * _output_channels + ow * _output_channels + oc;
+                                    float grad_val = output_gradient_data[output_gradient_index];
                                     if (ic == 0 && ky == 0 && kx == 0)
                                     {
-                                        gb_data[oc] += grad_out_val;
+                                        bias_gradient_cpu.storage[oc] += grad_val;
                                     }
-
-                                    int ih = static_cast<int>(oh * stride + ky) - static_cast<int>(padding);
-                                    int iw = static_cast<int>(ow * stride + kx) - static_cast<int>(padding);
-
-                                    if (ih >= 0 && ih < static_cast<int>(in_h) && iw >= 0 && iw < static_cast<int>(in_w))
+                                    int ih = static_cast<int>(oh * _stride + ky) - static_cast<int>(_padding);
+                                    int iw = static_cast<int>(ow * _stride + kx) - static_cast<int>(_padding);
+                                    if (ih >= 0 && ih < static_cast<int>(_input_height) && iw >= 0 && iw < static_cast<int>(_input_width))
                                     {
-                                        std::size_t in_idx = n * in_h * in_w * in_c + ih * in_w * in_c + iw * in_c + ic;
-                                        weight_sum += data[in_idx] * grad_out_val;
+                                        std::size_t input_index = n * _input_height * _input_width * _input_channels + ih * _input_width * _input_channels + iw * _input_channels + ic;
+                                        weight_sum += storage[input_index] * grad_val;
                                     }
                                 }
                             }
                         }
-                        std::size_t w_idx = ky * kernel_size * in_c * out_c + kx * in_c * out_c + ic * out_c + oc;
-                        gw_data[w_idx] = weight_sum;
+                        std::size_t weight_index = ky * _kernel_size * _input_channels * _output_channels + kx * _input_channels * _output_channels + ic * _output_channels + oc;
+                        weight_gradient_cpu.storage[weight_index] = weight_sum;
                     }
                 }
             }
         }
 
-        grad_weights->uploadData(gw_data);
-        grad_biases->uploadData(gb_data);
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::conv2dBackwardWeight: weight_grad={}, bias_grad={}",
+                                       formatDataSample(weight_gradient_cpu.storage), formatDataSample(bias_gradient_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::CONV2D_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
     }
 
-    std::pair<std::shared_ptr<Impl>, std::shared_ptr<Impl>> maxpool2d(
-        std::uint32_t in_h, std::uint32_t in_w, std::uint32_t channels,
-        std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const override
+    void maxpool2d(
+        Impl &_output_result, Impl &_output_mask,
+        std::uint32_t _input_height, std::uint32_t _input_width, std::uint32_t _channels,
+        std::uint32_t _kernel_size, std::uint32_t _stride, std::uint32_t _padding) const override
     {
-        std::uint32_t batch_size = static_cast<std::uint32_t>(rows);
-        std::uint32_t out_h = (in_h + 2 * padding - kernel_size) / stride + 1;
-        std::uint32_t out_w = (in_w + 2 * padding - kernel_size) / stride + 1;
+        auto &result_cpu = static_cast<Cpu_Matrix_Impl &>(_output_result);
+        auto &mask_cpu = static_cast<Cpu_Matrix_Impl &>(_output_mask);
 
-        std::vector<float> result_data(batch_size * out_h * out_w * channels);
-        std::vector<float> mask_data(batch_size * out_h * out_w * channels);
+        std::uint32_t batch_size = static_cast<std::uint32_t>(rows);
+        std::uint32_t output_height = (_input_height + 2 * _padding - _kernel_size) / _stride + 1;
+        std::uint32_t output_width = (_input_width + 2 * _padding - _kernel_size) / _stride + 1;
+
+        result_cpu.reshape(batch_size, output_height * output_width * _channels);
+        mask_cpu.reshape(batch_size, output_height * output_width * _channels);
 
         for (std::uint32_t n = 0; n < batch_size; ++n)
         {
-            for (std::uint32_t oh = 0; oh < out_h; ++oh)
+            for (std::uint32_t oh = 0; oh < output_height; ++oh)
             {
-                for (std::uint32_t ow = 0; ow < out_w; ++ow)
+                for (std::uint32_t ow = 0; ow < output_width; ++ow)
                 {
-                    for (std::uint32_t c = 0; c < channels; ++c)
+                    for (std::uint32_t c = 0; c < _channels; ++c)
                     {
-                        float max_val = -3.402823466e+38f;
-                        float max_idx = 0.0f;
-
-                        for (std::uint32_t ky = 0; ky < kernel_size; ++ky)
+                        float max_value = -3.402823466e+38f;
+                        float max_index = 0.0f;
+                        for (std::uint32_t ky = 0; ky < _kernel_size; ++ky)
                         {
-                            for (std::uint32_t kx = 0; kx < kernel_size; ++kx)
+                            for (std::uint32_t kx = 0; kx < _kernel_size; ++kx)
                             {
-                                int ih = static_cast<int>(oh * stride + ky) - static_cast<int>(padding);
-                                int iw = static_cast<int>(ow * stride + kx) - static_cast<int>(padding);
-
-                                if (ih >= 0 && ih < static_cast<int>(in_h) && iw >= 0 && iw < static_cast<int>(in_w))
+                                int ih = static_cast<int>(oh * _stride + ky) - static_cast<int>(_padding);
+                                int iw = static_cast<int>(ow * _stride + kx) - static_cast<int>(_padding);
+                                if (ih >= 0 && ih < static_cast<int>(_input_height) && iw >= 0 && iw < static_cast<int>(_input_width))
                                 {
-                                    std::size_t in_idx = n * in_h * in_w * channels + ih * in_w * channels + iw * channels + c;
-                                    float val = data[in_idx];
-                                    if (val > max_val)
+                                    std::size_t input_index = n * _input_height * _input_width * _channels + ih * _input_width * _channels + iw * _channels + c;
+                                    float val = storage[input_index];
+                                    if (val > max_value)
                                     {
-                                        max_val = val;
-                                        max_idx = static_cast<float>(in_idx);
+                                        max_value = val;
+                                        max_index = static_cast<float>(input_index);
                                     }
                                 }
                             }
                         }
-
-                        std::size_t out_idx = n * out_h * out_w * channels + oh * out_w * channels + ow * channels + c;
-                        result_data[out_idx] = max_val;
-                        mask_data[out_idx] = max_idx;
+                        std::size_t output_index = n * output_height * output_width * _channels + oh * output_width * _channels + ow * _channels + c;
+                        result_cpu.storage[output_index] = max_value;
+                        mask_cpu.storage[output_index] = max_index;
                     }
                 }
             }
         }
 
-        auto result = std::make_shared<Cpu_Matrix_Impl>(batch_size, out_h * out_w * channels, std::move(result_data));
-        auto mask = std::make_shared<Cpu_Matrix_Impl>(batch_size, out_h * out_w * channels, std::move(mask_data));
-        return {result, mask};
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::maxpool2d: output=({}x{}x{}x{}), result={}, mask={}",
+                                       batch_size, output_height, output_width, _channels,
+                                       formatDataSample(result_cpu.storage), formatDataSample(mask_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::POOLING_COMPUTE | Log_Feature::FORWARD_EVALUATION);
     }
 
-    std::shared_ptr<Impl> maxpool2dBackward(
-        const std::shared_ptr<Impl> &mask,
-        std::uint32_t in_h, std::uint32_t in_w, std::uint32_t channels,
-        std::uint32_t out_h, std::uint32_t out_w,
-        std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const override
+    void maxpool2dBackward(
+        const Impl &_mask, Impl &_input_gradient,
+        std::uint32_t _input_height, std::uint32_t _input_width, std::uint32_t _channels,
+        std::uint32_t _output_height, std::uint32_t _output_width,
+        std::uint32_t _kernel_size, std::uint32_t _stride, std::uint32_t _padding) const override
     {
+        const auto &mask_cpu = static_cast<const Cpu_Matrix_Impl &>(_mask);
+        auto &input_gradient_cpu = static_cast<Cpu_Matrix_Impl &>(_input_gradient);
+
         std::uint32_t batch_size = static_cast<std::uint32_t>(rows);
-        const auto &mask_data = mask->getData();
-        std::vector<float> result_data(batch_size * in_h * in_w * channels, 0.0f);
+        input_gradient_cpu.reshape(batch_size, _input_height * _input_width * _channels);
+        std::fill(input_gradient_cpu.storage.begin(), input_gradient_cpu.storage.end(), 0.0f);
 
         for (std::uint32_t n = 0; n < batch_size; ++n)
         {
-            for (std::uint32_t ih = 0; ih < in_h; ++ih)
+            for (std::uint32_t ih = 0; ih < _input_height; ++ih)
             {
-                for (std::uint32_t iw = 0; iw < in_w; ++iw)
+                for (std::uint32_t iw = 0; iw < _input_width; ++iw)
                 {
-                    for (std::uint32_t c = 0; c < channels; ++c)
+                    for (std::uint32_t c = 0; c < _channels; ++c)
                     {
-                        std::size_t in_idx = n * in_h * in_w * channels + ih * in_w * channels + iw * channels + c;
-                        float grad = 0.0f;
-
-                        for (std::uint32_t ky = 0; ky < kernel_size; ++ky)
+                        std::size_t input_index = n * _input_height * _input_width * _channels + ih * _input_width * _channels + iw * _channels + c;
+                        float accumulated_gradient = 0.0f;
+                        for (std::uint32_t ky = 0; ky < _kernel_size; ++ky)
                         {
-                            for (std::uint32_t kx = 0; kx < kernel_size; ++kx)
+                            for (std::uint32_t kx = 0; kx < _kernel_size; ++kx)
                             {
-                                int oh_calc = static_cast<int>(ih + padding - ky);
-                                int ow_calc = static_cast<int>(iw + padding - kx);
-
-                                if (oh_calc >= 0 && oh_calc % static_cast<int>(stride) == 0 &&
-                                    ow_calc >= 0 && ow_calc % static_cast<int>(stride) == 0)
+                                int oh_calc = static_cast<int>(ih + _padding - ky);
+                                int ow_calc = static_cast<int>(iw + _padding - kx);
+                                if (oh_calc >= 0 && oh_calc % static_cast<int>(_stride) == 0 && ow_calc >= 0 && ow_calc % static_cast<int>(_stride) == 0)
                                 {
-                                    std::uint32_t oh = static_cast<std::uint32_t>(oh_calc) / stride;
-                                    std::uint32_t ow = static_cast<std::uint32_t>(ow_calc) / stride;
-
-                                    if (oh < out_h && ow < out_w)
+                                    std::uint32_t oh = static_cast<std::uint32_t>(oh_calc) / _stride;
+                                    std::uint32_t ow = static_cast<std::uint32_t>(ow_calc) / _stride;
+                                    if (oh < _output_height && ow < _output_width)
                                     {
-                                        std::size_t out_idx = n * out_h * out_w * channels + oh * out_w * channels + ow * channels + c;
-                                        if (static_cast<std::size_t>(mask_data[out_idx]) == in_idx)
+                                        std::size_t output_index = n * _output_height * _output_width * _channels + oh * _output_width * _channels + ow * _channels + c;
+                                        if (static_cast<std::size_t>(mask_cpu.storage[output_index]) == input_index)
                                         {
-                                            grad += data[out_idx];
+                                            accumulated_gradient += storage[output_index];
                                         }
                                     }
                                 }
                             }
                         }
-                        result_data[in_idx] = grad;
+                        input_gradient_cpu.storage[input_index] = accumulated_gradient;
                     }
                 }
             }
         }
 
-        return std::make_shared<Cpu_Matrix_Impl>(batch_size, in_h * in_w * channels, std::move(result_data));
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::maxpool2dBackward: gradient_result={}",
+                                       formatDataSample(input_gradient_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::POOLING_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
     }
 
-    std::shared_ptr<Impl> globalAvgPool2d(
-        std::uint32_t in_h, std::uint32_t in_w, std::uint32_t channels) const override
+    void globalAvgPool2d(Impl &_output_result, std::uint32_t _input_height, std::uint32_t _input_width, std::uint32_t _channels) const override
     {
         std::uint32_t batch_size = static_cast<std::uint32_t>(rows);
-        std::vector<float> result_data(batch_size * channels, 0.0f);
-        float pool_area = static_cast<float>(in_h * in_w);
+        auto &output_cpu = static_cast<Cpu_Matrix_Impl &>(_output_result);
+        output_cpu.reshape(batch_size, _channels);
+        float pooling_area = static_cast<float>(_input_height * _input_width);
 
         for (std::uint32_t n = 0; n < batch_size; ++n)
         {
-            for (std::uint32_t c = 0; c < channels; ++c)
+            for (std::uint32_t c = 0; c < _channels; ++c)
             {
                 float sum = 0.0f;
-                for (std::uint32_t h = 0; h < in_h; ++h)
+                for (std::uint32_t h = 0; h < _input_height; ++h)
                 {
-                    for (std::uint32_t w = 0; w < in_w; ++w)
+                    for (std::uint32_t w = 0; w < _input_width; ++w)
                     {
-                        std::size_t in_idx = n * in_h * in_w * channels + h * in_w * channels + w * channels + c;
-                        sum += data[in_idx];
+                        std::size_t input_index = n * _input_height * _input_width * _channels + h * _input_width * _channels + w * _channels + c;
+                        sum += storage[input_index];
                     }
                 }
-                result_data[n * channels + c] = sum / pool_area;
+                output_cpu.storage[n * _channels + c] = sum / pooling_area;
             }
         }
 
-        return std::make_shared<Cpu_Matrix_Impl>(batch_size, channels, std::move(result_data));
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::globalAvgPool2d: result={}",
+                                       formatDataSample(output_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::POOLING_COMPUTE | Log_Feature::FORWARD_EVALUATION);
     }
 
-    std::shared_ptr<Impl> globalAvgPool2dBackward(
-        std::uint32_t in_h, std::uint32_t in_w, std::uint32_t channels) const override
+    void globalAvgPool2dBackward(Impl &_input_gradient, std::uint32_t _input_height, std::uint32_t _input_width, std::uint32_t _channels) const override
     {
         std::uint32_t batch_size = static_cast<std::uint32_t>(rows);
-        std::vector<float> result_data(batch_size * in_h * in_w * channels);
-        float pool_area = static_cast<float>(in_h * in_w);
+        auto &input_gradient_cpu = static_cast<Cpu_Matrix_Impl &>(_input_gradient);
+        input_gradient_cpu.reshape(batch_size, _input_height * _input_width * _channels);
+        float pooling_area = static_cast<float>(_input_height * _input_width);
 
         for (std::uint32_t n = 0; n < batch_size; ++n)
         {
-            for (std::uint32_t c = 0; c < channels; ++c)
+            for (std::uint32_t c = 0; c < _channels; ++c)
             {
-                float grad = data[n * channels + c] / pool_area;
-                for (std::uint32_t h = 0; h < in_h; ++h)
+                float scaled_gradient = storage[n * _channels + c] / pooling_area;
+                for (std::uint32_t h = 0; h < _input_height; ++h)
                 {
-                    for (std::uint32_t w = 0; w < in_w; ++w)
+                    for (std::uint32_t w = 0; w < _input_width; ++w)
                     {
-                        std::size_t in_idx = n * in_h * in_w * channels + h * in_w * channels + w * channels + c;
-                        result_data[in_idx] = grad;
+                        std::size_t input_index = n * _input_height * _input_width * _channels + h * _input_width * _channels + w * _channels + c;
+                        input_gradient_cpu.storage[input_index] = scaled_gradient;
                     }
                 }
             }
         }
 
-        return std::make_shared<Cpu_Matrix_Impl>(batch_size, in_h * in_w * channels, std::move(result_data));
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::globalAvgPool2dBackward: gradient_result={}",
+                                       formatDataSample(input_gradient_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::POOLING_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
     }
 
-    std::shared_ptr<Impl> batchNormForward(
-        const std::shared_ptr<Impl> &gamma,
-        const std::shared_ptr<Impl> &beta,
-        std::shared_ptr<Impl> &running_mean,
-        std::shared_ptr<Impl> &running_var,
-        std::shared_ptr<Impl> &batch_mean,
-        std::shared_ptr<Impl> &batch_var,
-        std::shared_ptr<Impl> &x_hat,
-        float epsilon,
-        float momentum,
-        bool is_training) const override
+    void batchNormForward(
+        const Impl &_gamma, const Impl &_beta,
+        Impl &_running_mean, Impl &_running_variance,
+        Impl &_batch_mean, Impl &_batch_variance,
+        Impl &_normalized_input, Impl &_output_result,
+        float _epsilon, float _momentum, bool _is_training) const override
     {
-        std::size_t n = rows;
-        std::size_t d = cols;
+        std::size_t batch_count = rows;
+        std::size_t feature_dimension = columns;
 
-        auto gamma_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(gamma);
-        auto beta_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(beta);
-        auto r_mean_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(running_mean);
-        auto r_var_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(running_var);
+        const auto &gamma_cpu = static_cast<const Cpu_Matrix_Impl &>(_gamma);
+        const auto &beta_cpu = static_cast<const Cpu_Matrix_Impl &>(_beta);
+        auto &running_mean_cpu = static_cast<Cpu_Matrix_Impl &>(_running_mean);
+        auto &running_variance_cpu = static_cast<Cpu_Matrix_Impl &>(_running_variance);
+        auto &normalized_input_cpu = static_cast<Cpu_Matrix_Impl &>(_normalized_input);
+        auto &output_cpu = static_cast<Cpu_Matrix_Impl &>(_output_result);
 
-        std::vector<float> out_data(n * d);
-        std::vector<float> x_hat_data(n * d);
+        output_cpu.reshape(batch_count, feature_dimension);
+        normalized_input_cpu.reshape(batch_count, feature_dimension);
 
-        if (is_training)
+        if (_is_training)
         {
-            std::vector<float> b_mean(d, 0.0f);
-            std::vector<float> b_var(d, 0.0f);
+            auto &batch_mean_cpu = static_cast<Cpu_Matrix_Impl &>(_batch_mean);
+            auto &batch_variance_cpu = static_cast<Cpu_Matrix_Impl &>(_batch_variance);
+            batch_mean_cpu.reshape(1, feature_dimension);
+            batch_variance_cpu.reshape(1, feature_dimension);
+            std::fill(batch_mean_cpu.storage.begin(), batch_mean_cpu.storage.end(), 0.0f);
+            std::fill(batch_variance_cpu.storage.begin(), batch_variance_cpu.storage.end(), 0.0f);
 
-            for (std::size_t i = 0; i < n; ++i)
+            for (std::size_t i = 0; i < batch_count; ++i)
             {
-                for (std::size_t j = 0; j < d; ++j)
+                for (std::size_t j = 0; j < feature_dimension; ++j)
                 {
-                    b_mean[j] += data[i * d + j];
+                    batch_mean_cpu.storage[j] += storage[i * feature_dimension + j];
                 }
             }
-
-            float inv_n = 1.0f / static_cast<float>(n);
-            for (std::size_t j = 0; j < d; ++j)
+            float inverse_batch_count = 1.0f / static_cast<float>(batch_count);
+            for (std::size_t j = 0; j < feature_dimension; ++j)
             {
-                b_mean[j] *= inv_n;
+                batch_mean_cpu.storage[j] *= inverse_batch_count;
             }
 
-            for (std::size_t i = 0; i < n; ++i)
+            for (std::size_t i = 0; i < batch_count; ++i)
             {
-                for (std::size_t j = 0; j < d; ++j)
+                for (std::size_t j = 0; j < feature_dimension; ++j)
                 {
-                    float diff = data[i * d + j] - b_mean[j];
-                    b_var[j] += diff * diff;
+                    float difference = storage[i * feature_dimension + j] - batch_mean_cpu.storage[j];
+                    batch_variance_cpu.storage[j] += difference * difference;
                 }
             }
-
-            for (std::size_t j = 0; j < d; ++j)
+            for (std::size_t j = 0; j < feature_dimension; ++j)
             {
-                b_var[j] *= inv_n;
+                batch_variance_cpu.storage[j] *= inverse_batch_count;
+                running_mean_cpu.storage[j] = (1.0f - _momentum) * running_mean_cpu.storage[j] + _momentum * batch_mean_cpu.storage[j];
+                running_variance_cpu.storage[j] = (1.0f - _momentum) * running_variance_cpu.storage[j] + _momentum * batch_variance_cpu.storage[j];
             }
 
-            std::vector<float> r_mean_data = r_mean_cpu->getData();
-            std::vector<float> r_var_data = r_var_cpu->getData();
-
-            for (std::size_t j = 0; j < d; ++j)
+            for (std::size_t i = 0; i < batch_count; ++i)
             {
-                r_mean_data[j] = (1.0f - momentum) * r_mean_data[j] + momentum * b_mean[j];
-                r_var_data[j] = (1.0f - momentum) * r_var_data[j] + momentum * b_var[j];
-            }
-
-            r_mean_cpu->uploadData(r_mean_data);
-            r_var_cpu->uploadData(r_var_data);
-
-            batch_mean = std::make_shared<Cpu_Matrix_Impl>(1, d, b_mean);
-            batch_var = std::make_shared<Cpu_Matrix_Impl>(1, d, b_var);
-
-            const std::vector<float> &gamma_data = gamma_cpu->getData();
-            const std::vector<float> &beta_data = beta_cpu->getData();
-
-            for (std::size_t i = 0; i < n; ++i)
-            {
-                for (std::size_t j = 0; j < d; ++j)
+                for (std::size_t j = 0; j < feature_dimension; ++j)
                 {
-                    float val_x_hat = (data[i * d + j] - b_mean[j]) / std::sqrt(b_var[j] + epsilon);
-                    x_hat_data[i * d + j] = val_x_hat;
-                    out_data[i * d + j] = gamma_data[j] * val_x_hat + beta_data[j];
+                    float normalized_value = (storage[i * feature_dimension + j] - batch_mean_cpu.storage[j]) / std::sqrt(batch_variance_cpu.storage[j] + _epsilon);
+                    normalized_input_cpu.storage[i * feature_dimension + j] = normalized_value;
+                    output_cpu.storage[i * feature_dimension + j] = gamma_cpu.storage[j] * normalized_value + beta_cpu.storage[j];
                 }
             }
         }
         else
         {
-            const std::vector<float> &r_mean_data = r_mean_cpu->getData();
-            const std::vector<float> &r_var_data = r_var_cpu->getData();
-            const std::vector<float> &gamma_data = gamma_cpu->getData();
-            const std::vector<float> &beta_data = beta_cpu->getData();
-
-            for (std::size_t i = 0; i < n; ++i)
+            for (std::size_t i = 0; i < batch_count; ++i)
             {
-                for (std::size_t j = 0; j < d; ++j)
+                for (std::size_t j = 0; j < feature_dimension; ++j)
                 {
-                    float val_x_hat = (data[i * d + j] - r_mean_data[j]) / std::sqrt(r_var_data[j] + epsilon);
-                    x_hat_data[i * d + j] = val_x_hat;
-                    out_data[i * d + j] = gamma_data[j] * val_x_hat + beta_data[j];
+                    float normalized_value = (storage[i * feature_dimension + j] - running_mean_cpu.storage[j]) / std::sqrt(running_variance_cpu.storage[j] + _epsilon);
+                    normalized_input_cpu.storage[i * feature_dimension + j] = normalized_value;
+                    output_cpu.storage[i * feature_dimension + j] = gamma_cpu.storage[j] * normalized_value + beta_cpu.storage[j];
                 }
             }
         }
 
-        x_hat = std::make_shared<Cpu_Matrix_Impl>(n, d, std::move(x_hat_data));
-        return std::make_shared<Cpu_Matrix_Impl>(n, d, std::move(out_data));
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::batchNormForward: is_training={}, output={}, running_mean={}, running_var={}",
+                                       _is_training, formatDataSample(output_cpu.storage),
+                                       formatDataSample(running_mean_cpu.storage), formatDataSample(running_variance_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::NORMALIZATION_COMPUTE | Log_Feature::FORWARD_EVALUATION);
     }
 
-    std::shared_ptr<Impl> batchNormBackward(
-        const std::shared_ptr<Impl> &grad_output,
-        const std::shared_ptr<Impl> &gamma,
-        const std::shared_ptr<Impl> &batch_var,
-        const std::shared_ptr<Impl> &x_hat,
-        std::shared_ptr<Impl> &grad_gamma,
-        std::shared_ptr<Impl> &grad_beta,
-        float epsilon) const override
+    void batchNormBackward(
+        const Impl &_output_gradient, const Impl &_gamma, const Impl &_batch_variance, const Impl &_normalized_input,
+        Impl &_gamma_gradient, Impl &_beta_gradient, Impl &_input_gradient, float _epsilon) const override
     {
-        std::size_t n = rows;
-        std::size_t d = cols;
+        std::size_t batch_count = rows;
+        std::size_t feature_dimension = columns;
 
-        auto dout_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(grad_output);
-        auto gamma_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(gamma);
-        auto b_var_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(batch_var);
-        auto x_hat_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(x_hat);
+        const auto &output_gradient_cpu = static_cast<const Cpu_Matrix_Impl &>(_output_gradient);
+        const auto &gamma_cpu = static_cast<const Cpu_Matrix_Impl &>(_gamma);
+        const auto &batch_variance_cpu = static_cast<const Cpu_Matrix_Impl &>(_batch_variance);
+        const auto &normalized_input_cpu = static_cast<const Cpu_Matrix_Impl &>(_normalized_input);
 
-        auto g_gamma_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(grad_gamma);
-        auto g_beta_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(grad_beta);
+        auto &gamma_gradient_cpu = static_cast<Cpu_Matrix_Impl &>(_gamma_gradient);
+        auto &beta_gradient_cpu = static_cast<Cpu_Matrix_Impl &>(_beta_gradient);
+        auto &input_gradient_cpu = static_cast<Cpu_Matrix_Impl &>(_input_gradient);
 
-        const std::vector<float> &dout_data = dout_cpu->getData();
-        const std::vector<float> &gamma_data = gamma_cpu->getData();
-        const std::vector<float> &var_data = b_var_cpu->getData();
-        const std::vector<float> &x_hat_data = x_hat_cpu->getData();
+        gamma_gradient_cpu.reshape(1, feature_dimension);
+        beta_gradient_cpu.reshape(1, feature_dimension);
+        input_gradient_cpu.reshape(batch_count, feature_dimension);
 
-        std::vector<float> dgamma_data(d, 0.0f);
-        std::vector<float> dbeta_data(d, 0.0f);
-        std::vector<float> dx_data(n * d);
+        std::fill(gamma_gradient_cpu.storage.begin(), gamma_gradient_cpu.storage.end(), 0.0f);
+        std::fill(beta_gradient_cpu.storage.begin(), beta_gradient_cpu.storage.end(), 0.0f);
 
-        for (std::size_t i = 0; i < n; ++i)
+        for (std::size_t i = 0; i < batch_count; ++i)
         {
-            for (std::size_t j = 0; j < d; ++j)
+            for (std::size_t j = 0; j < feature_dimension; ++j)
             {
-                std::size_t idx = i * d + j;
-                float dout = dout_data[idx];
-
-                dgamma_data[j] += dout * x_hat_data[idx];
-                dbeta_data[j] += dout;
+                std::size_t index = i * feature_dimension + j;
+                float gradient_out = output_gradient_cpu.storage[index];
+                gamma_gradient_cpu.storage[j] += gradient_out * normalized_input_cpu.storage[index];
+                beta_gradient_cpu.storage[j] += gradient_out;
             }
         }
 
-        g_gamma_cpu->uploadData(dgamma_data);
-        g_beta_cpu->uploadData(dbeta_data);
-
-        float inv_n = 1.0f / static_cast<float>(n);
-
-        for (std::size_t j = 0; j < d; ++j)
+        float inverse_batch_count = 1.0f / static_cast<float>(batch_count);
+        for (std::size_t j = 0; j < feature_dimension; ++j)
         {
-            float std_inv = 1.0f / std::sqrt(var_data[j] + epsilon);
-            float g_val = gamma_data[j];
-            float dg_val = dgamma_data[j];
-            float db_val = dbeta_data[j];
+            float inverse_standard_deviation = 1.0f / std::sqrt(batch_variance_cpu.storage[j] + _epsilon);
+            float gamma_value = gamma_cpu.storage[j];
+            float delta_gamma = gamma_gradient_cpu.storage[j];
+            float delta_beta = beta_gradient_cpu.storage[j];
+            float scaling_coefficient = gamma_value * inverse_standard_deviation * inverse_batch_count;
 
-            float coeff = g_val * std_inv * inv_n;
-
-            for (std::size_t i = 0; i < n; ++i)
+            for (std::size_t i = 0; i < batch_count; ++i)
             {
-                std::size_t idx = i * d + j;
-                dx_data[idx] = coeff * (static_cast<float>(n) * dout_data[idx] - db_val - x_hat_data[idx] * dg_val);
+                std::size_t index = i * feature_dimension + j;
+                input_gradient_cpu.storage[index] = scaling_coefficient * (static_cast<float>(batch_count) * output_gradient_cpu.storage[index] - delta_beta - normalized_input_cpu.storage[index] * delta_gamma);
             }
         }
 
-        return std::make_shared<Cpu_Matrix_Impl>(n, d, std::move(dx_data));
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::batchNormBackward: input_grad={}, gamma_grad={}, beta_grad={}",
+                                       formatDataSample(input_gradient_cpu.storage),
+                                       formatDataSample(gamma_gradient_cpu.storage),
+                                       formatDataSample(beta_gradient_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::NORMALIZATION_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
     }
 
     void linearForward(
-        const Impl &weights_w,
-        const Impl &biases_b,
-        Impl &output_y) const override
+        const Impl &_weights, const Impl &_biases, Impl &_output_result) const override
     {
-        const auto &w_cpu = static_cast<const Cpu_Matrix_Impl &>(weights_w);
-        const auto &b_cpu = static_cast<const Cpu_Matrix_Impl &>(biases_b);
-        auto &y_cpu = static_cast<Cpu_Matrix_Impl &>(output_y);
+        const auto &weights_cpu = static_cast<const Cpu_Matrix_Impl &>(_weights);
+        const auto &biases_cpu = static_cast<const Cpu_Matrix_Impl &>(_biases);
+        auto &output_cpu = static_cast<Cpu_Matrix_Impl &>(_output_result);
 
         std::size_t batch_size = rows;
-        std::size_t in_dim = cols;
-        std::size_t out_dim = w_cpu.cols;
+        std::size_t input_dimension = columns;
+        std::size_t output_dimension = weights_cpu.columns;
+        output_cpu.reshape(batch_size, output_dimension);
 
         for (std::size_t i = 0; i < batch_size; ++i)
         {
-            for (std::size_t j = 0; j < out_dim; ++j)
+            for (std::size_t j = 0; j < output_dimension; ++j)
             {
-                float bias_val = (b_cpu.rows == 1) ? b_cpu.data[j] : b_cpu.data[i * out_dim + j];
-                y_cpu.data[i * out_dim + j] = bias_val;
+                output_cpu.storage[i * output_dimension + j] = (biases_cpu.rows == 1) ? biases_cpu.storage[j] : biases_cpu.storage[i * output_dimension + j];
             }
-
-            for (std::size_t k = 0; k < in_dim; ++k)
+            for (std::size_t k = 0; k < input_dimension; ++k)
             {
-                float x_val = data[i * in_dim + k];
-                for (std::size_t j = 0; j < out_dim; ++j)
+                float input_value = storage[i * input_dimension + k];
+                for (std::size_t j = 0; j < output_dimension; ++j)
                 {
-                    y_cpu.data[i * out_dim + j] += x_val * w_cpu.data[k * out_dim + j];
+                    output_cpu.storage[i * output_dimension + j] += input_value * weights_cpu.storage[k * output_dimension + j];
                 }
             }
         }
+
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::linearForward: output shape=({}x{}), result={}",
+                                       batch_size, output_dimension, formatDataSample(output_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::DENSE_COMPUTE | Log_Feature::FORWARD_EVALUATION);
     }
 
-    void linearBackwardInput(
-        const Impl &weights_w,
-        Impl &grad_x) const override
+    void linearBackwardInput(const Impl &_weights, Impl &_input_gradient) const override
     {
-        const auto &w_cpu = static_cast<const Cpu_Matrix_Impl &>(weights_w);
-        auto &dx_cpu = static_cast<Cpu_Matrix_Impl &>(grad_x);
+        const auto &weights_cpu = static_cast<const Cpu_Matrix_Impl &>(_weights);
+        auto &input_gradient_cpu = static_cast<Cpu_Matrix_Impl &>(_input_gradient);
 
         std::size_t batch_size = rows;
-        std::size_t out_dim = cols;
-        std::size_t in_dim = w_cpu.rows;
+        std::size_t output_dimension = columns;
+        std::size_t input_dimension = weights_cpu.rows;
+        input_gradient_cpu.reshape(batch_size, input_dimension);
 
         for (std::size_t i = 0; i < batch_size; ++i)
         {
-            for (std::size_t j = 0; j < in_dim; ++j)
+            for (std::size_t j = 0; j < input_dimension; ++j)
             {
                 float sum = 0.0f;
-                for (std::size_t k = 0; k < out_dim; ++k)
+                for (std::size_t k = 0; k < output_dimension; ++k)
                 {
-                    sum += data[i * out_dim + k] * w_cpu.data[j * out_dim + k];
+                    sum += storage[i * output_dimension + k] * weights_cpu.storage[j * output_dimension + k];
                 }
-                dx_cpu.data[i * in_dim + j] = sum;
+                input_gradient_cpu.storage[i * input_dimension + j] = sum;
             }
         }
+
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::linearBackwardInput: gradient_result={}",
+                                       formatDataSample(input_gradient_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::DENSE_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
     }
 
     void linearBackwardWeightBias(
-        const Impl &grad_y,
-        Impl &grad_w,
-        Impl &grad_b) const override
+        const Impl &_output_gradient, Impl &_weight_gradient, Impl &_bias_gradient) const override
     {
-        const auto &dy_cpu = static_cast<const Cpu_Matrix_Impl &>(grad_y);
-        auto &dw_cpu = static_cast<Cpu_Matrix_Impl &>(grad_w);
-        auto &db_cpu = static_cast<Cpu_Matrix_Impl &>(grad_b);
+        const auto &output_gradient_cpu = static_cast<const Cpu_Matrix_Impl &>(_output_gradient);
+        auto &weight_gradient_cpu = static_cast<Cpu_Matrix_Impl &>(_weight_gradient);
+        auto &bias_gradient_cpu = static_cast<Cpu_Matrix_Impl &>(_bias_gradient);
 
         std::size_t batch_size = rows;
-        std::size_t in_dim = cols;
-        std::size_t out_dim = dy_cpu.cols;
+        std::size_t input_dimension = columns;
+        std::size_t output_dimension = output_gradient_cpu.columns;
 
-        std::fill(dw_cpu.data.begin(), dw_cpu.data.end(), 0.0f);
-        std::fill(db_cpu.data.begin(), db_cpu.data.end(), 0.0f);
+        weight_gradient_cpu.reshape(input_dimension, output_dimension);
+        bias_gradient_cpu.reshape(1, output_dimension);
+        std::fill(weight_gradient_cpu.storage.begin(), weight_gradient_cpu.storage.end(), 0.0f);
+        std::fill(bias_gradient_cpu.storage.begin(), bias_gradient_cpu.storage.end(), 0.0f);
 
         for (std::size_t i = 0; i < batch_size; ++i)
         {
-            for (std::size_t j = 0; j < out_dim; ++j)
+            for (std::size_t j = 0; j < output_dimension; ++j)
             {
-                float dy_val = dy_cpu.data[i * out_dim + j];
-                db_cpu.data[j] += dy_val;
-                for (std::size_t k = 0; k < in_dim; ++k)
+                float gradient_output_value = output_gradient_cpu.storage[i * output_dimension + j];
+                bias_gradient_cpu.storage[j] += gradient_output_value;
+                for (std::size_t k = 0; k < input_dimension; ++k)
                 {
-                    dw_cpu.data[k * out_dim + j] += data[i * in_dim + k] * dy_val;
+                    weight_gradient_cpu.storage[k * output_dimension + j] += storage[i * input_dimension + k] * gradient_output_value;
                 }
             }
         }
+
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::linearBackwardWeightBias: weight_grad={}, bias_grad={}",
+                                       formatDataSample(weight_gradient_cpu.storage),
+                                       formatDataSample(bias_gradient_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::DENSE_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
     }
 
-    std::shared_ptr<Impl> batchNorm2dForward(
-        const std::shared_ptr<Impl> &gamma,
-        const std::shared_ptr<Impl> &beta,
-        std::shared_ptr<Impl> &running_mean,
-        std::shared_ptr<Impl> &running_var,
-        std::shared_ptr<Impl> &batch_mean,
-        std::shared_ptr<Impl> &batch_var,
-        std::shared_ptr<Impl> &x_hat,
-        std::uint32_t in_h, std::uint32_t in_w, std::uint32_t in_c,
-        float epsilon, float momentum, bool is_training) const override
+    void batchNorm2dForward(
+        const Impl &_gamma, const Impl &_beta,
+        Impl &_running_mean, Impl &_running_variance,
+        Impl &_batch_mean, Impl &_batch_variance,
+        Impl &_normalized_input, Impl &_output_result,
+        std::uint32_t _input_height, std::uint32_t _input_width, std::uint32_t _input_channels,
+        float _epsilon, float _momentum, bool _is_training) const override
     {
-        std::size_t n = rows;
-        std::size_t d = in_h * in_w * in_c;
-        std::uint32_t spatial_count = static_cast<std::uint32_t>(n * in_h * in_w);
+        const auto &gamma_cpu = static_cast<const Cpu_Matrix_Impl &>(_gamma);
+        const auto &beta_cpu = static_cast<const Cpu_Matrix_Impl &>(_beta);
+        auto &running_mean_cpu = static_cast<Cpu_Matrix_Impl &>(_running_mean);
+        auto &running_variance_cpu = static_cast<Cpu_Matrix_Impl &>(_running_variance);
+        auto &batch_mean_cpu = static_cast<Cpu_Matrix_Impl &>(_batch_mean);
+        auto &batch_variance_cpu = static_cast<Cpu_Matrix_Impl &>(_batch_variance);
+        auto &normalized_input_cpu = static_cast<Cpu_Matrix_Impl &>(_normalized_input);
+        auto &output_cpu = static_cast<Cpu_Matrix_Impl &>(_output_result);
 
-        auto gamma_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(gamma);
-        auto beta_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(beta);
-        auto r_mean_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(running_mean);
-        auto r_var_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(running_var);
+        std::size_t batch_size = rows;
+        std::size_t total_features = _input_height * _input_width * _input_channels;
+        std::uint32_t spatial_count = static_cast<std::uint32_t>(batch_size * _input_height * _input_width);
 
-        std::vector<float> out_data(n * d);
-        std::vector<float> x_hat_data(n * d);
+        output_cpu.reshape(batch_size, total_features);
+        normalized_input_cpu.reshape(batch_size, total_features);
 
-        if (is_training)
+        if (_is_training)
         {
-            std::vector<float> b_mean(in_c, 0.0f);
-            std::vector<float> b_var(in_c, 0.0f);
+            batch_mean_cpu.reshape(1, _input_channels);
+            batch_variance_cpu.reshape(1, _input_channels);
+            std::fill(batch_mean_cpu.storage.begin(), batch_mean_cpu.storage.end(), 0.0f);
+            std::fill(batch_variance_cpu.storage.begin(), batch_variance_cpu.storage.end(), 0.0f);
 
             for (std::size_t i = 0; i < spatial_count; ++i)
             {
-                for (std::uint32_t c = 0; c < in_c; ++c)
+                for (std::uint32_t c = 0; c < _input_channels; ++c)
                 {
-                    b_mean[c] += data[i * in_c + c];
+                    batch_mean_cpu.storage[c] += storage[i * _input_channels + c];
                 }
             }
-
-            float inv_spatial = 1.0f / static_cast<float>(spatial_count);
-            for (std::uint32_t c = 0; c < in_c; ++c)
+            float inverse_spatial = 1.0f / static_cast<float>(spatial_count);
+            for (std::uint32_t c = 0; c < _input_channels; ++c)
             {
-                b_mean[c] *= inv_spatial;
+                batch_mean_cpu.storage[c] *= inverse_spatial;
             }
 
             for (std::size_t i = 0; i < spatial_count; ++i)
             {
-                for (std::uint32_t c = 0; c < in_c; ++c)
+                for (std::uint32_t c = 0; c < _input_channels; ++c)
                 {
-                    float diff = data[i * in_c + c] - b_mean[c];
-                    b_var[c] += diff * diff;
+                    float diff = storage[i * _input_channels + c] - batch_mean_cpu.storage[c];
+                    batch_variance_cpu.storage[c] += diff * diff;
                 }
             }
-
-            for (std::uint32_t c = 0; c < in_c; ++c)
+            for (std::uint32_t c = 0; c < _input_channels; ++c)
             {
-                b_var[c] *= inv_spatial;
+                batch_variance_cpu.storage[c] *= inverse_spatial;
+                running_mean_cpu.storage[c] = (1.0f - _momentum) * running_mean_cpu.storage[c] + _momentum * batch_mean_cpu.storage[c];
+                running_variance_cpu.storage[c] = (1.0f - _momentum) * running_variance_cpu.storage[c] + _momentum * batch_variance_cpu.storage[c];
             }
-
-            std::vector<float> r_mean_data = r_mean_cpu->getData();
-            std::vector<float> r_var_data = r_var_cpu->getData();
-
-            for (std::uint32_t c = 0; c < in_c; ++c)
-            {
-                r_mean_data[c] = (1.0f - momentum) * r_mean_data[c] + momentum * b_mean[c];
-                r_var_data[c] = (1.0f - momentum) * r_var_data[c] + momentum * b_var[c];
-            }
-
-            r_mean_cpu->uploadData(r_mean_data);
-            r_var_cpu->uploadData(r_var_data);
-
-            batch_mean = std::make_shared<Cpu_Matrix_Impl>(1, in_c, b_mean);
-            batch_var = std::make_shared<Cpu_Matrix_Impl>(1, in_c, b_var);
-
-            const std::vector<float> &gamma_data = gamma_cpu->getData();
-            const std::vector<float> &beta_data = beta_cpu->getData();
-
             for (std::size_t i = 0; i < spatial_count; ++i)
             {
-                for (std::uint32_t c = 0; c < in_c; ++c)
+                for (std::uint32_t c = 0; c < _input_channels; ++c)
                 {
-                    std::size_t idx = i * in_c + c;
-                    float val_x_hat = (data[idx] - b_mean[c]) / std::sqrt(b_var[c] + epsilon);
-                    x_hat_data[idx] = val_x_hat;
-                    out_data[idx] = gamma_data[c] * val_x_hat + beta_data[c];
+                    std::size_t index = i * _input_channels + c;
+                    float normalized_value = (storage[index] - batch_mean_cpu.storage[c]) / std::sqrt(batch_variance_cpu.storage[c] + _epsilon);
+                    normalized_input_cpu.storage[index] = normalized_value;
+                    output_cpu.storage[index] = gamma_cpu.storage[c] * normalized_value + beta_cpu.storage[c];
                 }
             }
         }
         else
         {
-            const std::vector<float> &r_mean_data = r_mean_cpu->getData();
-            const std::vector<float> &r_var_data = r_var_cpu->getData();
-            const std::vector<float> &gamma_data = gamma_cpu->getData();
-            const std::vector<float> &beta_data = beta_cpu->getData();
-
             for (std::size_t i = 0; i < spatial_count; ++i)
             {
-                for (std::uint32_t c = 0; c < in_c; ++c)
+                for (std::uint32_t c = 0; c < _input_channels; ++c)
                 {
-                    std::size_t idx = i * in_c + c;
-                    float val_x_hat = (data[idx] - r_mean_data[c]) / std::sqrt(r_var_data[c] + epsilon);
-                    x_hat_data[idx] = val_x_hat;
-                    out_data[idx] = gamma_data[c] * val_x_hat + beta_data[c];
+                    std::size_t index = i * _input_channels + c;
+                    float normalized_value = (storage[index] - running_mean_cpu.storage[c]) / std::sqrt(running_variance_cpu.storage[c] + _epsilon);
+                    normalized_input_cpu.storage[index] = normalized_value;
+                    output_cpu.storage[index] = gamma_cpu.storage[c] * normalized_value + beta_cpu.storage[c];
                 }
             }
         }
 
-        x_hat = std::make_shared<Cpu_Matrix_Impl>(n, d, std::move(x_hat_data));
-        return std::make_shared<Cpu_Matrix_Impl>(n, d, std::move(out_data));
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::batchNorm2dForward: is_training={}, output={}, running_mean={}, running_var={}",
+                                       _is_training, formatDataSample(output_cpu.storage),
+                                       formatDataSample(running_mean_cpu.storage), formatDataSample(running_variance_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::NORMALIZATION_COMPUTE | Log_Feature::FORWARD_EVALUATION);
     }
 
-    std::shared_ptr<Impl> batchNorm2dBackward(
-        const std::shared_ptr<Impl> &grad_output,
-        const std::shared_ptr<Impl> &gamma,
-        const std::shared_ptr<Impl> &batch_var,
-        const std::shared_ptr<Impl> &x_hat,
-        std::shared_ptr<Impl> &grad_gamma,
-        std::shared_ptr<Impl> &grad_beta,
-        std::uint32_t in_h, std::uint32_t in_w, std::uint32_t in_c,
-        float epsilon) const override
+    void batchNorm2dBackward(
+        const Impl &_gamma, const Impl &_batch_variance, const Impl &_normalized_input,
+        Impl &_gamma_gradient, Impl &_beta_gradient, Impl &_input_gradient,
+        std::uint32_t _input_height, std::uint32_t _input_width, std::uint32_t _input_channels, float _epsilon) const override
     {
-        std::size_t n = rows;
-        std::size_t d = in_h * in_w * in_c;
-        std::uint32_t spatial_count = static_cast<std::uint32_t>(n * in_h * in_w);
+        const auto &gamma_cpu = static_cast<const Cpu_Matrix_Impl &>(_gamma);
+        const auto &batch_variance_cpu = static_cast<const Cpu_Matrix_Impl &>(_batch_variance);
+        const auto &normalized_input_cpu = static_cast<const Cpu_Matrix_Impl &>(_normalized_input);
+        auto &gamma_gradient_cpu = static_cast<Cpu_Matrix_Impl &>(_gamma_gradient);
+        auto &beta_gradient_cpu = static_cast<Cpu_Matrix_Impl &>(_beta_gradient);
+        auto &input_gradient_cpu = static_cast<Cpu_Matrix_Impl &>(_input_gradient);
 
-        auto dout_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(grad_output);
-        auto gamma_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(gamma);
-        auto b_var_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(batch_var);
-        auto x_hat_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(x_hat);
+        std::size_t batch_size = rows;
+        std::size_t total_features = _input_height * _input_width * _input_channels;
+        std::uint32_t spatial_count = static_cast<std::uint32_t>(batch_size * _input_height * _input_width);
 
-        auto g_gamma_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(grad_gamma);
-        auto g_beta_cpu = std::dynamic_pointer_cast<Cpu_Matrix_Impl>(grad_beta);
-
-        const std::vector<float> &dout_data = dout_cpu->getData();
-        const std::vector<float> &gamma_data = gamma_cpu->getData();
-        const std::vector<float> &var_data = b_var_cpu->getData();
-        const std::vector<float> &x_hat_data = x_hat_cpu->getData();
-
-        std::vector<float> dgamma_data(in_c, 0.0f);
-        std::vector<float> dbeta_data(in_c, 0.0f);
-        std::vector<float> dx_data(n * d);
+        input_gradient_cpu.reshape(batch_size, total_features);
+        gamma_gradient_cpu.reshape(1, _input_channels);
+        beta_gradient_cpu.reshape(1, _input_channels);
+        std::fill(gamma_gradient_cpu.storage.begin(), gamma_gradient_cpu.storage.end(), 0.0f);
+        std::fill(beta_gradient_cpu.storage.begin(), beta_gradient_cpu.storage.end(), 0.0f);
 
         for (std::size_t i = 0; i < spatial_count; ++i)
         {
-            for (std::uint32_t c = 0; c < in_c; ++c)
+            for (std::uint32_t c = 0; c < _input_channels; ++c)
             {
-                std::size_t idx = i * in_c + c;
-                float dout = dout_data[idx];
-
-                dgamma_data[c] += dout * x_hat_data[idx];
-                dbeta_data[c] += dout;
+                std::size_t index = i * _input_channels + c;
+                float gradient_output_value = storage[index];
+                gamma_gradient_cpu.storage[c] += gradient_output_value * normalized_input_cpu.storage[index];
+                beta_gradient_cpu.storage[c] += gradient_output_value;
             }
         }
 
-        g_gamma_cpu->uploadData(dgamma_data);
-        g_beta_cpu->uploadData(dbeta_data);
-
-        float inv_m = 1.0f / static_cast<float>(spatial_count);
-
-        for (std::uint32_t c = 0; c < in_c; ++c)
+        float inverse_spatial = 1.0f / static_cast<float>(spatial_count);
+        for (std::uint32_t c = 0; c < _input_channels; ++c)
         {
-            float std_inv = 1.0f / std::sqrt(var_data[c] + epsilon);
-            float g_val = gamma_data[c];
-            float dg_val = dgamma_data[c];
-            float db_val = dbeta_data[c];
-
-            float coeff = g_val * std_inv * inv_m;
+            float inverse_standard_deviation = 1.0f / std::sqrt(batch_variance_cpu.storage[c] + _epsilon);
+            float gamma_value = gamma_cpu.storage[c];
+            float delta_gamma = gamma_gradient_cpu.storage[c];
+            float delta_beta = beta_gradient_cpu.storage[c];
+            float scaling_coefficient = gamma_value * inverse_standard_deviation * inverse_spatial;
 
             for (std::size_t i = 0; i < spatial_count; ++i)
             {
-                std::size_t idx = i * in_c + c;
-                dx_data[idx] = coeff * (static_cast<float>(spatial_count) * dout_data[idx] - db_val - x_hat_data[idx] * dg_val);
+                std::size_t index = i * _input_channels + c;
+                input_gradient_cpu.storage[index] = scaling_coefficient * (static_cast<float>(spatial_count) * storage[index] - delta_beta - normalized_input_cpu.storage[index] * delta_gamma);
             }
         }
 
-        return std::make_shared<Cpu_Matrix_Impl>(n, d, std::move(dx_data));
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::batchNorm2dBackward: input_grad={}, gamma_grad={}, beta_grad={}",
+                                       formatDataSample(input_gradient_cpu.storage),
+                                       formatDataSample(gamma_gradient_cpu.storage),
+                                       formatDataSample(beta_gradient_cpu.storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::NORMALIZATION_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
     }
 
-    void uploadData(const std::vector<float> &host_data) override
+    void cceLoss(const Impl &_target_implementation, Impl &_output_result, float _epsilon) const override
     {
-        if (host_data.size() != data.size())
+        validateSameDimensions(_target_implementation);
+        const auto &target_cpu = static_cast<const Cpu_Matrix_Impl &>(_target_implementation);
+        auto &output_cpu = static_cast<Cpu_Matrix_Impl &>(_output_result);
+        output_cpu.reshape(1, 1);
+
+        float loss_sum = 0.0f;
+        for (std::size_t i = 0; i < storage.size(); ++i)
         {
-            Logger::logMessage("Cpu_Matrix_Impl::uploadData: Size mismatch", LOG_ERROR, true);
-            throw std::invalid_argument("Size mismatch");
+            float probability_clamped = std::clamp(storage[i], _epsilon, 1.0f - _epsilon);
+            loss_sum += -target_cpu.storage[i] * std::log(probability_clamped);
         }
-        data = host_data;
+        output_cpu.storage[0] = loss_sum;
+
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::cceLoss: elements={}, epsilon={}, calculated_loss={:.6f}",
+                                       storage.size(), _epsilon, loss_sum),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::LOSS_COMPUTE);
+    }
+
+    void mseLoss(const Impl &_target_implementation, Impl &_output_result) const override
+    {
+        validateSameDimensions(_target_implementation);
+        const auto &target_cpu = static_cast<const Cpu_Matrix_Impl &>(_target_implementation);
+        auto &output_cpu = static_cast<Cpu_Matrix_Impl &>(_output_result);
+        output_cpu.reshape(1, 1);
+
+        float loss_sum = 0.0f;
+        for (std::size_t i = 0; i < storage.size(); ++i)
+        {
+            float difference = storage[i] - target_cpu.storage[i];
+            loss_sum += difference * difference;
+        }
+        output_cpu.storage[0] = loss_sum;
+
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::mseLoss: elements={}, calculated_loss={:.6f}",
+                                       storage.size(), loss_sum),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::LOSS_COMPUTE);
+    }
+
+    void maeLoss(const Impl &_target_implementation, Impl &_output_result) const override
+    {
+        validateSameDimensions(_target_implementation);
+        const auto &target_cpu = static_cast<const Cpu_Matrix_Impl &>(_target_implementation);
+        auto &output_cpu = static_cast<Cpu_Matrix_Impl &>(_output_result);
+        output_cpu.reshape(1, 1);
+
+        float loss_sum = 0.0f;
+        for (std::size_t i = 0; i < storage.size(); ++i)
+        {
+            loss_sum += std::abs(storage[i] - target_cpu.storage[i]);
+        }
+        output_cpu.storage[0] = loss_sum;
+
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::maeLoss: elements={}, calculated_loss={:.6f}",
+                                       storage.size(), loss_sum),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::LOSS_COMPUTE);
+    }
+
+    void bceLoss(const Impl &_target_implementation, Impl &_output_result, float _epsilon) const override
+    {
+        validateSameDimensions(_target_implementation);
+        const auto &target_cpu = static_cast<const Cpu_Matrix_Impl &>(_target_implementation);
+        auto &output_cpu = static_cast<Cpu_Matrix_Impl &>(_output_result);
+        output_cpu.reshape(1, 1);
+
+        float loss_sum = 0.0f;
+        for (std::size_t i = 0; i < storage.size(); ++i)
+        {
+            float probability_clamped = std::clamp(storage[i], _epsilon, 1.0f - _epsilon);
+            float target_value = target_cpu.storage[i];
+            loss_sum += -(target_value * std::log(probability_clamped) + (1.0f - target_value) * std::log(1.0f - probability_clamped));
+        }
+        output_cpu.storage[0] = loss_sum;
+
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::bceLoss: elements={}, epsilon={}, calculated_loss={:.6f}",
+                                       storage.size(), _epsilon, loss_sum),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::LOSS_COMPUTE);
+    }
+
+    void uploadData(const std::vector<float> &_host_data) override
+    {
+        if (_host_data.size() != rows * columns)
+        {
+            Logger::logMessage("Cpu_Matrix_Impl::uploadData: Host data size mismatch",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::TENSOR_INSPECTION);
+            throw std::invalid_argument("Host data size mismatch");
+        }
+        storage = _host_data;
+
+        Logger::logMessage(std::format("Cpu_Matrix_Impl::uploadData: uploaded {} elements, sample={}",
+                                       storage.size(), formatDataSample(storage)),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::TENSOR_INSPECTION);
     }
 };

@@ -1,95 +1,154 @@
 #pragma once
 
 #include <cstdint>
+#include <format>
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "helper/logger.h"
+#include "helper/magic_enum.hpp"
 #include "ilayer.h"
 #include "math/matrix.h"
 
-class GlobalAvgPool2d_Layer : public ILayer
+class Global_Avg_Pool_2d_Layer : public ILayer
 {
 private:
-    std::uint32_t in_h;
-    std::uint32_t in_w;
-    std::uint32_t channels;
+    std::uint32_t input_height = 0;
+    std::uint32_t input_width = 0;
+    std::uint32_t channels = 0;
 
-    Matrix inputs;
-    Matrix outputs;
+    Matrix input_matrix;
+    Matrix output_matrix;
+    Matrix input_gradient;
 
-    bool has_forward;
-    Execution_Target target;
+    bool is_forward_completed = false;
+    Execution_Target execution_target = Execution_Target::CPU;
 
 public:
-    GlobalAvgPool2d_Layer(std::uint32_t h, std::uint32_t w, std::uint32_t c, Execution_Target exec_target = Execution_Target::CPU)
-        : in_h(h), in_w(w), channels(c), target(exec_target), inputs(0, 0, exec_target), outputs(0, 0, exec_target), has_forward(false) {}
-
-    ~GlobalAvgPool2d_Layer() override = default;
-
-    Matrix forward(const Matrix &input_matrix) override
+    Global_Avg_Pool_2d_Layer(std::uint32_t _height,
+                             std::uint32_t _width,
+                             std::uint32_t _channels,
+                             Execution_Target _execution_target = Execution_Target::CPU)
+        : input_height(_height),
+          input_width(_width),
+          channels(_channels),
+          input_matrix(0, 0, _execution_target),
+          output_matrix(0, 0, _execution_target),
+          input_gradient(0, 0, _execution_target),
+          is_forward_completed(false),
+          execution_target(_execution_target)
     {
-        LAYER_LOG_DEBUG("GlobalAvgPool2d_Layer::forward: in_h=" + std::to_string(in_h) + ", in_w=" + std::to_string(in_w) + ", channels=" + std::to_string(channels));
-
-        inputs = input_matrix;
-        outputs = inputs.globalAvgPool2d(in_h, in_w, channels);
-        has_forward = true;
-        return outputs;
     }
 
-    Matrix backward(const Matrix &gradient_output) override
+    ~Global_Avg_Pool_2d_Layer() noexcept override = default;
+
+    Matrix forward(const Matrix &_input_matrix) override
     {
-        if (!has_forward)
+        Logger::logMessage(std::format("Global_Avg_Pool_2d_Layer::forward: input_height={}, input_width={}, channels={}",
+                                       input_height, input_width, channels),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::POOLING_COMPUTE | Log_Feature::FORWARD_EVALUATION);
+
+        input_matrix = _input_matrix;
+        input_matrix.globalAvgPool2d(output_matrix, input_height, input_width, channels);
+        is_forward_completed = true;
+        logBufferAddress(&input_matrix, "input_matrix (Forward)");
+        logBufferAddress(&output_matrix, "output_matrix (Forward)");
+
+        return output_matrix;
+    }
+
+    Matrix backward(const Matrix &_output_gradient) override
+    {
+        if (!is_forward_completed)
         {
-            Logger::logMessage("GlobalAvgPool2d_Layer::backward: Backward called before forward", LOG_ERROR, true);
+            Logger::logMessage("Global_Avg_Pool_2d_Layer::backward: Backward called before forward",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::POOLING_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
             throw std::logic_error("Backward called before forward");
         }
 
-        LAYER_LOG_DEBUG("GlobalAvgPool2d_Layer::backward: grad_output rows=" + std::to_string(gradient_output.getRows()) + ", cols=" + std::to_string(gradient_output.getCols()));
+        Logger::logMessage(std::format("Global_Avg_Pool_2d_Layer::backward: output_gradient rows={}, columns={}",
+                                       _output_gradient.getRows(),
+                                       _output_gradient.getColumns()),
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::POOLING_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
-        return gradient_output.globalAvgPool2dBackward(in_h, in_w, channels);
+        _output_gradient.globalAvgPool2dBackward(input_gradient, input_height, input_width, channels);
+
+        logBufferAddress(&input_matrix, "input_matrix (Backward)");
+        logBufferAddress(&input_gradient, "input_gradient (Backward)");
+        logBufferAddress(const_cast<Matrix *>(&_output_gradient), "output_gradient (Backward)");
+
+        return input_gradient;
     }
 
     void resetGradient() override
     {
-        inputs = Matrix(0, 0, target);
-        outputs = Matrix(0, 0, target);
-        has_forward = false;
+        is_forward_completed = false;
     }
 
-    bool hasParameters() const override
+     bool hasParameters() const noexcept override
     {
         return false;
     }
 
-    Layer_Type getLayerType() const override
+     Layer_Type getLayerType() const noexcept override
     {
         return Layer_Type::GLOBAL_AVG_POOL_2D;
     }
 
-    void saveConfig(std::ofstream &out_file) const override
+     Matrix getInput() override
     {
-        out_file.write(reinterpret_cast<const char *>(&in_h), sizeof(in_h));
-        out_file.write(reinterpret_cast<const char *>(&in_w), sizeof(in_w));
-        out_file.write(reinterpret_cast<const char *>(&channels), sizeof(channels));
+        return input_matrix;
     }
 
-    void saveInference(std::ofstream &out_file) const override {}
-    void loadInference(std::ifstream &in_file) override {}
-
-    void saveCheckpoint(std::ofstream &out_file) const override {}
-    void loadCheckpoint(std::ifstream &in_file) override {}
-
-    void setTarget(Execution_Target new_target) override
+     Matrix getOutput() override
     {
-        if (target == new_target)
-            return;
+        return output_matrix;
+    }
 
-        Logger::logMessage("GlobalAvgPool2d_Layer::setTarget: Changing execution target from " + static_cast<std::string>(magic_enum::enum_name<Execution_Target>(target)) + " to " + static_cast<std::string>(magic_enum::enum_name<Execution_Target>(new_target)), LOG_WARNING);
-        
-        target = new_target;
-        inputs.setExecutionTarget(new_target);
-        outputs.setExecutionTarget(new_target);
+    void saveConfiguration(std::ofstream &_output_file_stream) const override
+    {
+        _output_file_stream.write(reinterpret_cast<const char *>(&input_height), sizeof(input_height));
+        _output_file_stream.write(reinterpret_cast<const char *>(&input_width), sizeof(input_width));
+        _output_file_stream.write(reinterpret_cast<const char *>(&channels), sizeof(channels));
+    }
+
+    void saveInference(std::ofstream &_output_file_stream) const override {}
+    void loadInference(std::ifstream &_input_file_stream) override {}
+    void saveCheckpoint(std::ofstream &_output_file_stream) const override {}
+    void loadCheckpoint(std::ifstream &_input_file_stream) override {}
+
+    void setExecutionTarget(Execution_Target _new_execution_target) override
+    {
+        if (execution_target == _new_execution_target)
+        {
+            return;
+        }
+
+        Logger::logMessage(std::format("Global_Avg_Pool_2d_Layer::setExecutionTarget: Changing execution target from {} to {}",
+                                       magic_enum::enum_name(execution_target),
+                                       magic_enum::enum_name(_new_execution_target)),
+                           Log_Level::LOG_WARNING,
+                           true,
+                           0,
+                           Log_Feature::DEVICE_MANAGEMENT);
+
+        execution_target = _new_execution_target;
+        input_matrix.setExecutionTarget(_new_execution_target);
+        output_matrix.setExecutionTarget(_new_execution_target);
+        input_gradient.setExecutionTarget(_new_execution_target);
     }
 };
+
+using GlobalAvgPool2d_Layer = Global_Avg_Pool_2d_Layer;
