@@ -345,38 +345,38 @@ public:
         cleanUp();
     }
 
-    [[nodiscard]] VkPipelineLayout getPipelineLayout() const noexcept
+     VkPipelineLayout getPipelineLayout() const noexcept
     {
         return pipeline_layout;
     }
 
-    [[nodiscard]] VkDescriptorSetLayout getDescriptorSetLayout() const noexcept
+     VkDescriptorSetLayout getDescriptorSetLayout() const noexcept
     {
         return descriptor_set_layout;
     }
 
-    [[nodiscard]] const std::string &getPipelineFolder() const noexcept
+     const std::string &getPipelineFolder() const noexcept
     {
         return pipeline_folder;
     }
 
-    [[nodiscard]] VkDevice getDevice() const noexcept
+     VkDevice getDevice() const noexcept
     {
         return device;
     }
 
-    [[nodiscard]] const std::array<VkPipeline, Compute_Pipeline::COMPUTE_PIPELINE_END> &getPipelines() const noexcept
+     const std::array<VkPipeline, Compute_Pipeline::COMPUTE_PIPELINE_END> &getPipelines() const noexcept
     {
         return pipelines;
     }
 
-    [[nodiscard]] bool hasPipeline(Compute_Pipeline _pipeline) const noexcept
+     bool hasPipeline(Compute_Pipeline _pipeline) const noexcept
     {
         std::size_t pipeline_index = static_cast<std::size_t>(_pipeline);
         return pipeline_index < pipelines.size() && pipelines[pipeline_index] != VK_NULL_HANDLE;
     }
 
-    [[nodiscard]] VkPipeline getPipeline(Compute_Pipeline _pipeline) const
+     VkPipeline getPipeline(Compute_Pipeline _pipeline) const
     {
         std::size_t pipeline_index = static_cast<std::size_t>(_pipeline);
         if (pipeline_index >= pipelines.size())

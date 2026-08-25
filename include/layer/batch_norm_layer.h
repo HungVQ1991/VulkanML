@@ -176,37 +176,37 @@ public:
         is_forward_completed = false;
     }
 
-    [[nodiscard]] Matrix getWeights() const override
+     Matrix getWeights() const override
     {
         return gamma;
     }
 
-    [[nodiscard]] Matrix getBiases() const override
+     Matrix getBiases() const override
     {
         return beta;
     }
 
-    [[nodiscard]] Matrix getWeightsGradient() override
+     Matrix getWeightsGradient() override
     {
         return gamma_gradient;
     }
 
-    [[nodiscard]] Matrix getInput() override
+     Matrix getInput() override
     {
         return input_matrix;
     }
 
-    [[nodiscard]] Matrix getOutput() override
+     Matrix getOutput() override
     {
         return output_matrix;
     }
 
-    [[nodiscard]] bool hasParameters() const noexcept override
+     bool hasParameters() const noexcept override
     {
         return true;
     }
 
-    [[nodiscard]] Layer_Type getLayerType() const noexcept override
+     Layer_Type getLayerType() const noexcept override
     {
         return Layer_Type::BATCH_NORM;
     }

@@ -22,11 +22,11 @@ class ILearning_Rate
 public:
     virtual ~ILearning_Rate() noexcept = default;
 
-    [[nodiscard]] virtual Decay_Mode getType() const noexcept = 0;
+     virtual Decay_Mode getType() const noexcept = 0;
     virtual float updateRate() = 0;
     virtual void step(float _current_value = 0.0f) = 0;
-    [[nodiscard]] virtual float getCurrentRate() const noexcept = 0;
-    [[nodiscard]] virtual float getLearningRate() const noexcept = 0;
+     virtual float getCurrentRate() const noexcept = 0;
+     virtual float getLearningRate() const noexcept = 0;
 
     virtual void saveCheckpoint(std::ofstream &_output_file_stream) const = 0;
     virtual void loadCheckpoint(std::ifstream &_input_file_stream) = 0;

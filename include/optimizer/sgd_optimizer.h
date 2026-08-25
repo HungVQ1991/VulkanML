@@ -51,7 +51,7 @@ public:
 
     ~Sgd_Optimizer() noexcept override = default;
 
-    [[nodiscard]] Optimizer_Type getType() const noexcept override
+     Optimizer_Type getType() const noexcept override
     {
         return Optimizer_Type::SGD_OPTIMIZER;
     }
@@ -97,12 +97,12 @@ public:
                            Log_Feature::OPTIMIZER_STEP);
     }
 
-    [[nodiscard]] float getLearningRate() const noexcept
+     float getLearningRate() const noexcept
     {
         return learning_rate;
     }
 
-    [[nodiscard]] float getMaxGradient() const noexcept
+     float getMaxGradient() const noexcept
     {
         return max_gradient;
     }

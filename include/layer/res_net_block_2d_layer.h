@@ -202,22 +202,22 @@ public:
         }
     }
 
-    [[nodiscard]] bool hasParameters() const noexcept override
+     bool hasParameters() const noexcept override
     {
         return true;
     }
 
-    [[nodiscard]] Layer_Type getLayerType() const noexcept override
+     Layer_Type getLayerType() const noexcept override
     {
         return Layer_Type::RES_NET_BLOCK_2D;
     }
 
-    [[nodiscard]] Matrix getInput() override
+     Matrix getInput() override
     {
         return input_matrix;
     }
 
-    [[nodiscard]] Matrix getOutput() override
+     Matrix getOutput() override
     {
         return final_output;
     }

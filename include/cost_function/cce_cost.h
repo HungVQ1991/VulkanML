@@ -35,7 +35,7 @@ public:
 
     ~Cce_Cost() noexcept override = default;
 
-    [[nodiscard]] float computeLoss(const Matrix &_prediction_matrix, const Matrix &_target_matrix) const override
+     float computeLoss(const Matrix &_prediction_matrix, const Matrix &_target_matrix) const override
     {
         if (_prediction_matrix.getRows() != _target_matrix.getRows() || _prediction_matrix.getColumns() != _target_matrix.getColumns())
         {
@@ -75,7 +75,7 @@ public:
         return loss_matrix.getScalar() / static_cast<float>(batch_size);
     }
 
-    [[nodiscard]] Matrix computeGradient(const Matrix &_prediction_matrix, const Matrix &_target_matrix) const override
+     Matrix computeGradient(const Matrix &_prediction_matrix, const Matrix &_target_matrix) const override
     {
         if (_prediction_matrix.getRows() != _target_matrix.getRows() || _prediction_matrix.getColumns() != _target_matrix.getColumns())
         {
@@ -134,7 +134,7 @@ public:
         return gradient_matrix;
     }
 
-    [[nodiscard]] Cost_Type getType() const noexcept override
+     Cost_Type getType() const noexcept override
     {
         return Cost_Type::CCE;
     }

@@ -22,7 +22,7 @@ class IOptimizer
 public:
     virtual ~IOptimizer() noexcept = default;
 
-    [[nodiscard]] virtual Optimizer_Type getType() const noexcept = 0;
+     virtual Optimizer_Type getType() const noexcept = 0;
     virtual void step(const std::vector<std::pair<Matrix *, Matrix *>> &_parameter_gradient_pairs) = 0;
     virtual void reset() {}
     virtual void setLearningRate(float _learning_rate) = 0;

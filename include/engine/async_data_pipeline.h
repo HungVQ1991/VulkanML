@@ -411,35 +411,35 @@ public:
         return batch_data;
     }
 
-    [[nodiscard]] VkDevice getDevice() const noexcept
+     VkDevice getDevice() const noexcept
     {
         return device;
     }
 
-    [[nodiscard]] Execution_Target getExecutionTarget() const noexcept
+     Execution_Target getExecutionTarget() const noexcept
     {
         return execution_target;
     }
 
-    [[nodiscard]] bool isRunning() const noexcept
+     bool isRunning() const noexcept
     {
         return is_running.load();
     }
 
-    [[nodiscard]] std::size_t getProducerIndex() const noexcept
+     std::size_t getProducerIndex() const noexcept
     {
         return producer_index;
     }
 
-    [[nodiscard]] std::size_t getConsumerIndex() const noexcept
+     std::size_t getConsumerIndex() const noexcept
     {
         return consumer_index;
     }
 
-    [[nodiscard]] std::size_t getBufferSlotsCount() const noexcept
+     std::size_t getBufferSlotsCount() const noexcept
     {
         return BUFFER_SLOTS_COUNT;
     }
 
-    [[nodiscard]] virtual std::size_t getBatchSize() const = 0;
+     virtual std::size_t getBatchSize() const = 0;
 };

@@ -180,7 +180,7 @@ private:
 public:
     Training_Context() = default;
 
-    [[nodiscard]] std::size_t getCurrentEpoch() const noexcept
+     std::size_t getCurrentEpoch() const noexcept
     {
         return current_epoch;
     }
@@ -190,42 +190,42 @@ public:
         current_epoch = _epoch;
     }
 
-    [[nodiscard]] ICost_Function &getCostFunction()
+     ICost_Function &getCostFunction()
     {
         return *cost_function;
     }
 
-    [[nodiscard]] const ICost_Function &getCostFunction() const
+     const ICost_Function &getCostFunction() const
     {
         return *cost_function;
     }
 
-    [[nodiscard]] ILearning_Rate &getLearningRate()
+     ILearning_Rate &getLearningRate()
     {
         return *learning_rate_scheduler;
     }
 
-    [[nodiscard]] const ILearning_Rate &getLearningRate() const
+     const ILearning_Rate &getLearningRate() const
     {
         return *learning_rate_scheduler;
     }
 
-    [[nodiscard]] ILearning_Rate &getLearningRateScheduler()
+     ILearning_Rate &getLearningRateScheduler()
     {
         return *learning_rate_scheduler;
     }
 
-    [[nodiscard]] const ILearning_Rate &getLearningRateScheduler() const
+     const ILearning_Rate &getLearningRateScheduler() const
     {
         return *learning_rate_scheduler;
     }
 
-    [[nodiscard]] IOptimizer &getOptimizer()
+     IOptimizer &getOptimizer()
     {
         return *optimizer;
     }
 
-    [[nodiscard]] const IOptimizer &getOptimizer() const
+     const IOptimizer &getOptimizer() const
     {
         return *optimizer;
     }

@@ -212,22 +212,22 @@ public:
         fc_out.resetGradient();
     }
 
-    [[nodiscard]] bool hasParameters() const noexcept override
+     bool hasParameters() const noexcept override
     {
         return true;
     }
 
-    [[nodiscard]] Layer_Type getLayerType() const noexcept override
+     Layer_Type getLayerType() const noexcept override
     {
         return Layer_Type::RES_NET_20;
     }
 
-    [[nodiscard]] Matrix getInput() override
+     Matrix getInput() override
     {
         return input_matrix;
     }
 
-    [[nodiscard]] Matrix getOutput() override
+     Matrix getOutput() override
     {
         return output_matrix;
     }

@@ -132,22 +132,22 @@ public:
         }
     }
 
-    [[nodiscard]] const Snippet_Metadata &getMetadata(Compute_Pipeline _pipeline) const noexcept
+     const Snippet_Metadata &getMetadata(Compute_Pipeline _pipeline) const noexcept
     {
         return metadata_table[static_cast<std::size_t>(_pipeline)];
     }
 
-    [[nodiscard]] const Snippet_Metadata &getSnippetMetadata(Compute_Pipeline _pipeline) const noexcept
+     const Snippet_Metadata &getSnippetMetadata(Compute_Pipeline _pipeline) const noexcept
     {
         return metadata_table[static_cast<std::size_t>(_pipeline)];
     }
 
-    [[nodiscard]] const std::array<Snippet_Metadata, Compute_Pipeline::COMPUTE_PIPELINE_END> &getMetadataTable() const noexcept
+     const std::array<Snippet_Metadata, Compute_Pipeline::COMPUTE_PIPELINE_END> &getMetadataTable() const noexcept
     {
         return metadata_table;
     }
 
-    [[nodiscard]] bool hasMetadata(Compute_Pipeline _pipeline) const noexcept
+     bool hasMetadata(Compute_Pipeline _pipeline) const noexcept
     {
         std::size_t pipeline_index = static_cast<std::size_t>(_pipeline);
         return pipeline_index < metadata_table.size() && !metadata_table[pipeline_index].glsl_template.empty();

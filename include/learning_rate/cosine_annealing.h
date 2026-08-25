@@ -64,7 +64,7 @@ public:
 
     ~Cosine_Annealing() noexcept override = default;
 
-    [[nodiscard]] Decay_Mode getType() const noexcept override
+     Decay_Mode getType() const noexcept override
     {
         return Decay_Mode::COSINE_ANNEALING;
     }
@@ -103,7 +103,7 @@ public:
         updateRate();
     }
 
-    [[nodiscard]] float getCurrentRate() const noexcept override
+     float getCurrentRate() const noexcept override
     {
         return current_learning_rate;
     }
@@ -141,7 +141,7 @@ public:
                            Log_Feature::LR_SCHEDULER);
     }
 
-    [[nodiscard]] float getLearningRate() const noexcept override
+     float getLearningRate() const noexcept override
     {
         return learning_rate;
     }

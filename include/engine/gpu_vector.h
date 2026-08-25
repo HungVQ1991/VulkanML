@@ -440,19 +440,19 @@ namespace gpu
             context.deferDestruction(context.getCurrentFrame(), staging_buffer, staging_allocation);
         }
 
-        [[nodiscard]] std::uint64_t getId() const noexcept { return vector_id; }
-        [[nodiscard]] std::uint64_t getVectorId() const noexcept { return vector_id; }
-        [[nodiscard]] const Memory_Allocation &getAllocation() const noexcept { return allocation; }
-        [[nodiscard]] VkBuffer getBuffer() const noexcept { return buffer; }
-        [[nodiscard]] std::size_t getSize() const noexcept { return buffer_size_in_bytes / sizeof(float); }
-        [[nodiscard]] std::size_t getElementCount() const noexcept { return buffer_size_in_bytes / sizeof(float); }
-        [[nodiscard]] std::size_t getSizeBytes() const noexcept { return buffer_size_in_bytes; }
-        [[nodiscard]] std::size_t getByteSize() const noexcept { return buffer_size_in_bytes; }
-        [[nodiscard]] std::size_t getBufferSizeInBytes() const noexcept { return buffer_size_in_bytes; }
-        [[nodiscard]] const Vulkan_Context &getContext() const noexcept { return context; }
-        [[nodiscard]] VkDevice getDevice() const noexcept { return context.getDevice(); }
-        [[nodiscard]] std::uint32_t getUsedFrameIndex() const noexcept { return used_frame_index; }
-        [[nodiscard]] bool isEmpty() const noexcept { return buffer_size_in_bytes == 0 || buffer == VK_NULL_HANDLE; }
+         std::uint64_t getId() const noexcept { return vector_id; }
+         std::uint64_t getVectorId() const noexcept { return vector_id; }
+         const Memory_Allocation &getAllocation() const noexcept { return allocation; }
+         VkBuffer getBuffer() const noexcept { return buffer; }
+         std::size_t getSize() const noexcept { return buffer_size_in_bytes / sizeof(float); }
+         std::size_t getElementCount() const noexcept { return buffer_size_in_bytes / sizeof(float); }
+         std::size_t getSizeBytes() const noexcept { return buffer_size_in_bytes; }
+         std::size_t getByteSize() const noexcept { return buffer_size_in_bytes; }
+         std::size_t getBufferSizeInBytes() const noexcept { return buffer_size_in_bytes; }
+         const Vulkan_Context &getContext() const noexcept { return context; }
+         VkDevice getDevice() const noexcept { return context.getDevice(); }
+         std::uint32_t getUsedFrameIndex() const noexcept { return used_frame_index; }
+         bool isEmpty() const noexcept { return buffer_size_in_bytes == 0 || buffer == VK_NULL_HANDLE; }
 
         void markAsUsedInFrame(std::uint32_t frame_index) noexcept
         {

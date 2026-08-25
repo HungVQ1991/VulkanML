@@ -148,42 +148,42 @@ public:
         return input_gradient;
     }
 
-    [[nodiscard]] Matrix getWeights() const override
+     Matrix getWeights() const override
     {
         return weights;
     }
 
-    [[nodiscard]] Matrix getBiases() const override
+     Matrix getBiases() const override
     {
         return biases;
     }
 
-    [[nodiscard]] Matrix getWeightsGradient() override
+     Matrix getWeightsGradient() override
     {
         return weights_gradient;
     }
 
-    [[nodiscard]] Matrix getBiasesGradient()
+     Matrix getBiasesGradient()
     {
         return biases_gradient;
     }
 
-    [[nodiscard]] Matrix getInput() override
+     Matrix getInput() override
     {
         return input_matrix;
     }
 
-    [[nodiscard]] Matrix getOutput() override
+     Matrix getOutput() override
     {
         return output_matrix;
     }
 
-    [[nodiscard]] std::size_t getInputDimension() const noexcept
+     std::size_t getInputDimension() const noexcept
     {
         return input_dimension;
     }
 
-    [[nodiscard]] std::size_t getOutputDimension() const noexcept
+     std::size_t getOutputDimension() const noexcept
     {
         return output_dimension;
     }
@@ -220,12 +220,12 @@ public:
     {
     }
 
-    [[nodiscard]] bool hasParameters() const noexcept override
+     bool hasParameters() const noexcept override
     {
         return true;
     }
 
-    [[nodiscard]] Layer_Type getLayerType() const noexcept override
+     Layer_Type getLayerType() const noexcept override
     {
         return Layer_Type::LINEAR;
     }

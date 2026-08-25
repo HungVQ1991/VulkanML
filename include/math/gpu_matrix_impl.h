@@ -193,22 +193,22 @@ public:
 
     ~Gpu_Matrix_Impl() noexcept override = default;
 
-    [[nodiscard]] std::size_t getRows() const noexcept override
+     std::size_t getRows() const noexcept override
     {
         return rows;
     }
 
-    [[nodiscard]] std::size_t getColumns() const noexcept override
+     std::size_t getColumns() const noexcept override
     {
         return columns;
     }
 
-    [[nodiscard]] std::size_t getCols() const noexcept override
+     std::size_t getCols() const noexcept override
     {
         return columns;
     }
 
-    [[nodiscard]] const std::vector<float> &getData() const noexcept override
+     const std::vector<float> &getData() const noexcept override
     {
         Logger::logMessage("Gpu_Matrix_Impl::getData: Reading data from GPU, risk of synchronization stalls",
                            Log_Level::LOG_WARNING,
@@ -234,27 +234,27 @@ public:
         return host_cache;
     }
 
-    [[nodiscard]] Storage_Handle getStorage() const override
+     Storage_Handle getStorage() const override
     {
         return storage;
     }
 
-    [[nodiscard]] Mutable_Storage_Handle getStorage() override
+     Mutable_Storage_Handle getStorage() override
     {
         return storage;
     }
 
-    [[nodiscard]] std::shared_ptr<gpu::vector> getVector() override
+     std::shared_ptr<gpu::vector> getVector() override
     {
         return storage;
     }
 
-    [[nodiscard]] VkBuffer getBuffer() const noexcept
+     VkBuffer getBuffer() const noexcept
     {
         return storage ? storage->getBuffer() : VK_NULL_HANDLE;
     }
 
-    [[nodiscard]] bool isEmpty() const noexcept override
+     bool isEmpty() const noexcept override
     {
         return !storage || storage->isEmpty();
     }

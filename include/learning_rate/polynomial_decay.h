@@ -62,7 +62,7 @@ public:
 
     ~Polynomial_Decay() noexcept override = default;
 
-    [[nodiscard]] Decay_Mode getType() const noexcept override
+     Decay_Mode getType() const noexcept override
     {
         return Decay_Mode::POLYNOMIAL_DECAY;
     }
@@ -119,12 +119,12 @@ public:
         updateRate();
     }
 
-    [[nodiscard]] float getLearningRate() const noexcept override
+     float getLearningRate() const noexcept override
     {
         return learning_rate;
     }
 
-    [[nodiscard]] float getCurrentRate() const noexcept override
+     float getCurrentRate() const noexcept override
     {
         return current_learning_rate;
     }

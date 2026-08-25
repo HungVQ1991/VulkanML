@@ -28,22 +28,22 @@ public:
         compile_options.SetTargetSpirv(shaderc_spirv_version_1_5);
     }
 
-    [[nodiscard]] const shaderc::Compiler &getCompiler() const noexcept
+     const shaderc::Compiler &getCompiler() const noexcept
     {
         return compiler;
     }
 
-    [[nodiscard]] shaderc::Compiler &getCompiler() noexcept
+     shaderc::Compiler &getCompiler() noexcept
     {
         return compiler;
     }
 
-    [[nodiscard]] const shaderc::CompileOptions &getCompileOptions() const noexcept
+     const shaderc::CompileOptions &getCompileOptions() const noexcept
     {
         return compile_options;
     }
 
-    [[nodiscard]] shaderc::CompileOptions &getCompileOptions() noexcept
+     shaderc::CompileOptions &getCompileOptions() noexcept
     {
         return compile_options;
     }

@@ -341,7 +341,7 @@ public:
         setFileLogging(_enable);
     }
 
-    [[nodiscard]] static bool isFileLoggingEnabled() noexcept
+     static bool isFileLoggingEnabled() noexcept
     {
         Logger &instance = getInstance();
         std::lock_guard<std::mutex> lock(instance.logger_mutex);
@@ -360,7 +360,7 @@ public:
         setForceAllConsoleOutput(_enable);
     }
 
-    [[nodiscard]] static bool isForceAllConsoleOutputEnabled() noexcept
+     static bool isForceAllConsoleOutputEnabled() noexcept
     {
         Logger &instance = getInstance();
         std::lock_guard<std::mutex> lock(instance.logger_mutex);

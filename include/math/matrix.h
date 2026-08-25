@@ -110,32 +110,32 @@ public:
         initializeShape(_rows, _columns);
     }
 
-    [[nodiscard]] std::size_t getRows() const noexcept
+     std::size_t getRows() const noexcept
     {
         return implementation->getRows();
     }
 
-    [[nodiscard]] std::size_t getColumns() const noexcept
+     std::size_t getColumns() const noexcept
     {
         return implementation->getColumns();
     }
 
-    [[nodiscard]] std::size_t getCols() const noexcept
+     std::size_t getCols() const noexcept
     {
         return implementation->getColumns();
     }
 
-    [[nodiscard]] Execution_Target getExecutionTarget() const noexcept
+     Execution_Target getExecutionTarget() const noexcept
     {
         return execution_target;
     }
 
-    [[nodiscard]] Execution_Target getTarget() const noexcept
+     Execution_Target getTarget() const noexcept
     {
         return execution_target;
     }
 
-    [[nodiscard]] std::shared_ptr<Impl> getImplementation() const noexcept
+     std::shared_ptr<Impl> getImplementation() const noexcept
     {
         return implementation;
     }
@@ -156,18 +156,18 @@ public:
         }
     }
 
-    [[nodiscard]] std::vector<float> getData() const
+     std::vector<float> getData() const
     {
         return implementation->getData();
     }
 
-    [[nodiscard]] Storage_Handle getStorage() const
+     Storage_Handle getStorage() const
     {
         const Impl &const_implementation = *implementation;
         return const_implementation.getStorage();
     }
 
-    [[nodiscard]] Mutable_Storage_Handle getStorage()
+     Mutable_Storage_Handle getStorage()
     {
         return implementation->getStorage();
     }
@@ -177,7 +177,7 @@ public:
         implementation->uploadData(_host_data);
     }
 
-    [[nodiscard]] bool isEmpty() const noexcept
+     bool isEmpty() const noexcept
     {
         return implementation->isEmpty();
     }
@@ -564,133 +564,133 @@ public:
         implementation->bceLoss(*_target_matrix.implementation, *_output_result.implementation, _epsilon);
     }
 
-    [[nodiscard]] Matrix operator*(const Matrix &_other) const
+     Matrix operator*(const Matrix &_other) const
     {
         Matrix result(execution_target);
         matmul(_other, result);
         return result;
     }
 
-    [[nodiscard]] Matrix operator/(const Matrix &_other) const
+     Matrix operator/(const Matrix &_other) const
     {
         Matrix result(execution_target);
         matdiv(_other, result);
         return result;
     }
 
-    [[nodiscard]] Matrix operator+(const Matrix &_other) const
+     Matrix operator+(const Matrix &_other) const
     {
         Matrix result(execution_target);
         add(_other, result);
         return result;
     }
 
-    [[nodiscard]] Matrix operator-(const Matrix &_other) const
+     Matrix operator-(const Matrix &_other) const
     {
         Matrix result(execution_target);
         sub(_other, result);
         return result;
     }
 
-    [[nodiscard]] Matrix operator*(float _scalar) const
+     Matrix operator*(float _scalar) const
     {
         Matrix result(execution_target);
         mulScalar(_scalar, result);
         return result;
     }
 
-    [[nodiscard]] Matrix operator/(float _scalar) const
+     Matrix operator/(float _scalar) const
     {
         Matrix result(execution_target);
         divScalar(_scalar, result);
         return result;
     }
 
-    [[nodiscard]] Matrix hadamardMul(const Matrix &_other) const
+     Matrix hadamardMul(const Matrix &_other) const
     {
         Matrix result(execution_target);
         hadamardMul(_other, result);
         return result;
     }
 
-    [[nodiscard]] Matrix hadamardDiv(const Matrix &_other) const
+     Matrix hadamardDiv(const Matrix &_other) const
     {
         Matrix result(execution_target);
         hadamardDiv(_other, result);
         return result;
     }
 
-    [[nodiscard]] Matrix transpose() const
+     Matrix transpose() const
     {
         Matrix result(execution_target);
         transpose(result);
         return result;
     }
 
-    [[nodiscard]] Matrix inverse() const
+     Matrix inverse() const
     {
         Matrix result(execution_target);
         inverse(result);
         return result;
     }
 
-    [[nodiscard]] Matrix normalize() const
+     Matrix normalize() const
     {
         Matrix result(execution_target);
         normalize(result);
         return result;
     }
 
-    [[nodiscard]] Matrix relu() const
+     Matrix relu() const
     {
         Matrix result(execution_target);
         relu(result);
         return result;
     }
 
-    [[nodiscard]] Matrix reluBackward(const Matrix &_output_gradient) const
+     Matrix reluBackward(const Matrix &_output_gradient) const
     {
         Matrix result(execution_target);
         reluBackward(_output_gradient, result);
         return result;
     }
 
-    [[nodiscard]] Matrix gelu() const
+     Matrix gelu() const
     {
         Matrix result(execution_target);
         gelu(result);
         return result;
     }
 
-    [[nodiscard]] Matrix geluBackward(const Matrix &_output_gradient) const
+     Matrix geluBackward(const Matrix &_output_gradient) const
     {
         Matrix result(execution_target);
         geluBackward(_output_gradient, result);
         return result;
     }
 
-    [[nodiscard]] Matrix softmax() const
+     Matrix softmax() const
     {
         Matrix result(execution_target);
         softmax(result);
         return result;
     }
 
-    [[nodiscard]] Matrix softmaxBackward(const Matrix &_output_gradient) const
+     Matrix softmaxBackward(const Matrix &_output_gradient) const
     {
         Matrix result(execution_target);
         softmaxBackward(_output_gradient, result);
         return result;
     }
 
-    [[nodiscard]] Matrix matmulAdd(const Matrix &_other, const Matrix &_biases) const
+     Matrix matmulAdd(const Matrix &_other, const Matrix &_biases) const
     {
         Matrix result(execution_target);
         matmulAdd(_other, _biases, result);
         return result;
     }
 
-    [[nodiscard]] float getScalar() const
+     float getScalar() const
     {
         const auto host_data = getData();
         float sum_value = 0.0f;
@@ -745,7 +745,7 @@ public:
         _output_file_stream.write(reinterpret_cast<const char *>(host_data.data()), static_cast<std::streamsize>(host_data.size() * sizeof(float)));
     }
 
-    [[nodiscard]] static Matrix loadMatrix(std::ifstream &_input_file_stream, Execution_Target _execution_target = Execution_Target::CPU)
+     static Matrix loadMatrix(std::ifstream &_input_file_stream, Execution_Target _execution_target = Execution_Target::CPU)
     {
         if (!_input_file_stream.is_open())
         {

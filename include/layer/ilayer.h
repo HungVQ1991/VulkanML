@@ -121,13 +121,13 @@ public:
     virtual Matrix forward(const Matrix &_input_matrix) = 0;
     virtual Matrix backward(const Matrix &_output_gradient) = 0;
 
-    [[nodiscard]] virtual Matrix getWeights() const { return Matrix(0, 0); }
-    [[nodiscard]] virtual Matrix getBiases() const { return Matrix(0, 0); }
-    [[nodiscard]] virtual Matrix getWeightsGradient() { return Matrix(0, 0); }
-    [[nodiscard]] virtual Matrix getInput() { return Matrix(0, 0); }
-    [[nodiscard]] virtual Matrix getOutput() { return Matrix(0, 0); }
+     virtual Matrix getWeights() const { return Matrix(0, 0); }
+     virtual Matrix getBiases() const { return Matrix(0, 0); }
+     virtual Matrix getWeightsGradient() { return Matrix(0, 0); }
+     virtual Matrix getInput() { return Matrix(0, 0); }
+     virtual Matrix getOutput() { return Matrix(0, 0); }
 
-    [[nodiscard]] virtual bool hasParameters() const { return false; }
+     virtual bool hasParameters() const { return false; }
     virtual void resetGradient() {}
     virtual void resetGradients() { resetGradient(); }
     virtual void setTrainingMode(bool _is_training) {}
@@ -135,7 +135,7 @@ public:
     virtual std::vector<std::pair<Matrix *, Matrix *>> getParametersAndGradients() { return {}; }
     virtual std::vector<std::pair<Matrix *, Matrix *>> getParamsAndGrads() { return getParametersAndGradients(); }
 
-    [[nodiscard]] virtual Layer_Type getLayerType() const = 0;
+     virtual Layer_Type getLayerType() const = 0;
 
     virtual void saveConfiguration(std::ofstream &_output_file_stream) const = 0;
     virtual void saveConfig(std::ofstream &_output_file_stream) const { saveConfiguration(_output_file_stream); }

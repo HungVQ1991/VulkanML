@@ -162,7 +162,7 @@ public:
         return gradient_matrix;
     }
 
-    [[nodiscard]] std::vector<std::pair<Matrix *, Matrix *>> getParametersAndGradients()
+     std::vector<std::pair<Matrix *, Matrix *>> getParametersAndGradients()
     {
         std::vector<std::pair<Matrix *, Matrix *>> parameter_gradient_pairs;
         for (auto &layer : layers)
@@ -176,7 +176,7 @@ public:
         return parameter_gradient_pairs;
     }
 
-    [[nodiscard]] std::vector<std::pair<Matrix *, Matrix *>> getParamsAndGrads()
+     std::vector<std::pair<Matrix *, Matrix *>> getParamsAndGrads()
     {
         return getParametersAndGradients();
     }
@@ -582,82 +582,82 @@ public:
         setExecutionTarget(_execution_target);
     }
 
-    [[nodiscard]] const Matrix &getLastPrediction() const noexcept
+     const Matrix &getLastPrediction() const noexcept
     {
         return last_prediction;
     }
 
-    [[nodiscard]] const ILayer &getLayer(std::size_t _index) const
+     const ILayer &getLayer(std::size_t _index) const
     {
         return *layers.at(_index);
     }
 
-    [[nodiscard]] ILayer &getLayer(std::size_t _index)
+     ILayer &getLayer(std::size_t _index)
     {
         return *layers.at(_index);
     }
 
-    [[nodiscard]] std::size_t getLayerCount() const noexcept
+     std::size_t getLayerCount() const noexcept
     {
         return layers.size();
     }
 
-    [[nodiscard]] Training_Context &getContext() noexcept
+     Training_Context &getContext() noexcept
     {
         return training_context;
     }
 
-    [[nodiscard]] const Training_Context &getContext() const noexcept
+     const Training_Context &getContext() const noexcept
     {
         return training_context;
     }
 
-    [[nodiscard]] Training_Context &getTrainingContext() noexcept
+     Training_Context &getTrainingContext() noexcept
     {
         return training_context;
     }
 
-    [[nodiscard]] const Training_Context &getTrainingContext() const noexcept
+     const Training_Context &getTrainingContext() const noexcept
     {
         return training_context;
     }
 
-    [[nodiscard]] std::size_t getCurrentEpoch() const noexcept
+     std::size_t getCurrentEpoch() const noexcept
     {
         return training_context.getCurrentEpoch();
     }
 
-    [[nodiscard]] IOptimizer &getOptimizer()
+     IOptimizer &getOptimizer()
     {
         return training_context.getOptimizer();
     }
 
-    [[nodiscard]] const IOptimizer &getOptimizer() const
+     const IOptimizer &getOptimizer() const
     {
         return training_context.getOptimizer();
     }
 
-    [[nodiscard]] ICost_Function &getCostFunction()
+     ICost_Function &getCostFunction()
     {
         return training_context.getCostFunction();
     }
 
-    [[nodiscard]] const ICost_Function &getCostFunction() const
+     const ICost_Function &getCostFunction() const
     {
         return training_context.getCostFunction();
     }
 
-    [[nodiscard]] ILearning_Rate &getLearningRate()
+     ILearning_Rate &getLearningRate()
     {
         return training_context.getLearningRate();
     }
 
-    [[nodiscard]] const ILearning_Rate &getLearningRate() const
+     const ILearning_Rate &getLearningRate() const
     {
         return training_context.getLearningRate();
     }
 
-    [[nodiscard]] Execution_Target getExecutionTarget() const noexcept
+     Execution_Target getExecutionTarget() const noexcept
     {
         return execution_target;
     }

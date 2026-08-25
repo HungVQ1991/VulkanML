@@ -30,7 +30,7 @@ public:
 
     ~No_Decay() noexcept override = default;
 
-    [[nodiscard]] Decay_Mode getType() const noexcept override
+     Decay_Mode getType() const noexcept override
     {
         return Decay_Mode::NO_DECAY;
     }
@@ -49,12 +49,12 @@ public:
     {
     }
 
-    [[nodiscard]] float getCurrentRate() const noexcept override
+     float getCurrentRate() const noexcept override
     {
         return learning_rate;
     }
 
-    [[nodiscard]] float getLearningRate() const noexcept override
+     float getLearningRate() const noexcept override
     {
         return learning_rate;
     }

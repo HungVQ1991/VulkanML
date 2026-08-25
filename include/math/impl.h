@@ -23,12 +23,12 @@ class Impl
 public:
     virtual ~Impl() noexcept = default;
 
-    [[nodiscard]] virtual Storage_Handle getStorage() const = 0;
-    [[nodiscard]] virtual Mutable_Storage_Handle getStorage() = 0;
-    [[nodiscard]] virtual std::size_t getRows() const noexcept = 0;
-    [[nodiscard]] virtual std::size_t getColumns() const noexcept = 0;
-    [[nodiscard]] virtual std::size_t getCols() const noexcept { return getColumns(); }
-    [[nodiscard]] virtual const std::vector<float> &getData() const noexcept = 0;
+     virtual Storage_Handle getStorage() const = 0;
+     virtual Mutable_Storage_Handle getStorage() = 0;
+     virtual std::size_t getRows() const noexcept = 0;
+     virtual std::size_t getColumns() const noexcept = 0;
+     virtual std::size_t getCols() const noexcept { return getColumns(); }
+     virtual const std::vector<float> &getData() const noexcept = 0;
 
     virtual void reshape(std::size_t _rows, std::size_t _columns) = 0;
 
@@ -65,7 +65,7 @@ public:
         }
     }
 
-    [[nodiscard]] virtual std::shared_ptr<gpu::vector> getVector() { return {}; }
+     virtual std::shared_ptr<gpu::vector> getVector() { return {}; }
 
     virtual void matmul(const Impl &_other_implementation, Impl &_output_result) const = 0;
     virtual void matdiv(const Impl &_other_implementation, Impl &_output_result) const = 0;
@@ -164,5 +164,5 @@ public:
     virtual void maeLoss(const Impl &_target_implementation, Impl &_output_result) const = 0;
     virtual void bceLoss(const Impl &_target_implementation, Impl &_output_result, float _epsilon) const = 0;
 
-    [[nodiscard]] virtual bool isEmpty() const noexcept = 0;
+     virtual bool isEmpty() const noexcept = 0;
 };

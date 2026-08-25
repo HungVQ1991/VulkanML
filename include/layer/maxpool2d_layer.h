@@ -113,27 +113,27 @@ public:
         is_forward_completed = false;
     }
 
-    [[nodiscard]] bool hasParameters() const noexcept override
+     bool hasParameters() const noexcept override
     {
         return false;
     }
 
-    [[nodiscard]] Layer_Type getLayerType() const noexcept override
+     Layer_Type getLayerType() const noexcept override
     {
         return Layer_Type::MAX_POOL_2D;
     }
 
-    [[nodiscard]] Matrix getInput() override
+     Matrix getInput() override
     {
         return input_matrix;
     }
 
-    [[nodiscard]] Matrix getOutput() override
+     Matrix getOutput() override
     {
         return output_matrix;
     }
 
-    [[nodiscard]] Matrix getMask() const
+     Matrix getMask() const
     {
         return mask_matrix;
     }

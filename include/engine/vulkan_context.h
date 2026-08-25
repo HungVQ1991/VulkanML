@@ -423,7 +423,7 @@ public:
         }
     }
 
-    [[nodiscard]] Memory_Allocation allocateMemory(const VkMemoryRequirements &_memory_requirements, VkMemoryPropertyFlags _memory_properties) const
+     Memory_Allocation allocateMemory(const VkMemoryRequirements &_memory_requirements, VkMemoryPropertyFlags _memory_properties) const
     {
         return allocator->allocate(_memory_requirements, _memory_properties, physical_device);
     }
@@ -447,22 +447,22 @@ public:
         }
     }
 
-    [[nodiscard]] VkInstance getInstance() const noexcept { return instance; }
-    [[nodiscard]] VkPhysicalDevice getPhysicalDevice() const noexcept { return physical_device; }
-    [[nodiscard]] VkDevice getDevice() const noexcept { return device; }
-    [[nodiscard]] VkQueue getComputeQueue() const noexcept { return compute_queue; }
-    [[nodiscard]] VkCommandPool getCommandPool() const noexcept { return command_pool; }
-    [[nodiscard]] std::uint32_t getComputeQueueFamilyIndex() const noexcept { return compute_queue_family_index; }
-    [[nodiscard]] VkPipelineCache getPipelineCache() const noexcept { return pipeline_cache; }
-    [[nodiscard]] Vulkan_Sub_Allocator &getAllocator() const noexcept { return *allocator; }
-    [[nodiscard]] VkFence getFrameFence(std::uint32_t _frame_index) const noexcept { return fences[_frame_index]; }
-    [[nodiscard]] std::uint32_t getCurrentFrame() const noexcept { return current_frame; }
-    [[nodiscard]] bool isFrameReady(std::uint32_t _frame_index) const noexcept { return is_frame_ready[_frame_index]; }
-    [[nodiscard]] VkBuffer getStagingBuffer(std::uint32_t _frame_index) const noexcept { return staging_buffers[_frame_index]; }
-    [[nodiscard]] VkDeviceSize getStagingCapacity(std::uint32_t _frame_index) const noexcept { return staging_capacities[_frame_index]; }
-    [[nodiscard]] VkDeviceSize getCurrentStagingOffset(std::uint32_t _frame_index) const noexcept { return current_offsets[_frame_index]; }
+     VkInstance getInstance() const noexcept { return instance; }
+     VkPhysicalDevice getPhysicalDevice() const noexcept { return physical_device; }
+     VkDevice getDevice() const noexcept { return device; }
+     VkQueue getComputeQueue() const noexcept { return compute_queue; }
+     VkCommandPool getCommandPool() const noexcept { return command_pool; }
+     std::uint32_t getComputeQueueFamilyIndex() const noexcept { return compute_queue_family_index; }
+     VkPipelineCache getPipelineCache() const noexcept { return pipeline_cache; }
+     Vulkan_Sub_Allocator &getAllocator() const noexcept { return *allocator; }
+     VkFence getFrameFence(std::uint32_t _frame_index) const noexcept { return fences[_frame_index]; }
+     std::uint32_t getCurrentFrame() const noexcept { return current_frame; }
+     bool isFrameReady(std::uint32_t _frame_index) const noexcept { return is_frame_ready[_frame_index]; }
+     VkBuffer getStagingBuffer(std::uint32_t _frame_index) const noexcept { return staging_buffers[_frame_index]; }
+     VkDeviceSize getStagingCapacity(std::uint32_t _frame_index) const noexcept { return staging_capacities[_frame_index]; }
+     VkDeviceSize getCurrentStagingOffset(std::uint32_t _frame_index) const noexcept { return current_offsets[_frame_index]; }
 
-    [[nodiscard]] std::uint32_t findMemoryType(std::uint32_t _type_filter, VkMemoryPropertyFlags _memory_properties) const
+     std::uint32_t findMemoryType(std::uint32_t _type_filter, VkMemoryPropertyFlags _memory_properties) const
     {
         VkPhysicalDeviceMemoryProperties physical_device_memory_properties;
         vkGetPhysicalDeviceMemoryProperties(physical_device, &physical_device_memory_properties);
@@ -660,7 +660,7 @@ public:
         pending_transfer_tasks.push_back(_task);
     }
 
-    [[nodiscard]] std::vector<Buffer_Transfer_Task> getTransferTasks() const
+     std::vector<Buffer_Transfer_Task> getTransferTasks() const
     {
         std::lock_guard<std::mutex> lock(context_mutex);
         return pending_transfer_tasks;

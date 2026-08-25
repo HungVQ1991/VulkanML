@@ -61,48 +61,48 @@ public:
     Pipeline_Cache_Manager(Pipeline_Cache_Manager &&other) noexcept = default;
     Pipeline_Cache_Manager &operator=(Pipeline_Cache_Manager &&other) noexcept = default;
 
-    [[nodiscard]] const Vulkan_Context &getContext() const noexcept
+     const Vulkan_Context &getContext() const noexcept
     {
         return context;
     }
 
-    [[nodiscard]] VkPipelineLayout getPipelineLayout() const noexcept
+     VkPipelineLayout getPipelineLayout() const noexcept
     {
         return pipeline_layout;
     }
 
-    [[nodiscard]] const Shader_Compiler &getShaderCompiler() const noexcept
+     const Shader_Compiler &getShaderCompiler() const noexcept
     {
         return shader_compiler;
     }
 
-    [[nodiscard]] Shader_Compiler &getShaderCompiler() noexcept
+     Shader_Compiler &getShaderCompiler() noexcept
     {
         return shader_compiler;
     }
 
-    [[nodiscard]] VkPipelineCache getPipelineCache() const noexcept
+     VkPipelineCache getPipelineCache() const noexcept
     {
         return pipeline_cache;
     }
 
-    [[nodiscard]] const std::string &getCacheFilePath() const noexcept
+     const std::string &getCacheFilePath() const noexcept
     {
         return cache_file_path;
     }
 
-    [[nodiscard]] const std::unordered_map<std::size_t, VkPipeline> &getCachedPipelines() const noexcept
+     const std::unordered_map<std::size_t, VkPipeline> &getCachedPipelines() const noexcept
     {
         return cached_pipelines;
     }
 
-    [[nodiscard]] std::size_t getCachedPipelineCount() const noexcept
+     std::size_t getCachedPipelineCount() const noexcept
     {
         std::lock_guard<std::mutex> lock(cache_mutex);
         return cached_pipelines.size();
     }
 
-    [[nodiscard]] bool hasPipeline(std::size_t code_hash) const noexcept
+     bool hasPipeline(std::size_t code_hash) const noexcept
     {
         std::lock_guard<std::mutex> lock(cache_mutex);
         return cached_pipelines.contains(code_hash);

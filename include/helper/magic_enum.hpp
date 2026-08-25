@@ -1233,7 +1233,7 @@ constexpr auto enum_value(std::size_t index) noexcept -> detail::enable_if_t<E, 
 
 // Returns enum value at specified index.
 template <typename E, std::size_t I, detail::enum_subtype S = detail::subtype_v<E>>
-[[nodiscard]] constexpr auto enum_value() noexcept -> detail::enable_if_t<E, std::decay_t<E>> {
+ constexpr auto enum_value() noexcept -> detail::enable_if_t<E, std::decay_t<E>> {
   using D = std::decay_t<E>;
   static_assert(detail::is_reflected_v<D, S>, "magic_enum requires enum implementation and valid max and min.");
   static_assert(I < detail::count_v<D, S>, "magic_enum::enum_value out of range.");

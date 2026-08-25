@@ -114,7 +114,7 @@ public:
 
     ~Adam_Optimizer() noexcept override = default;
 
-    [[nodiscard]] Optimizer_Type getType() const noexcept override
+     Optimizer_Type getType() const noexcept override
     {
         return Optimizer_Type::ADAM_OPTIMIZER;
     }
@@ -200,32 +200,32 @@ public:
         timestep = 0;
     }
 
-    [[nodiscard]] float getLearningRate() const noexcept
+     float getLearningRate() const noexcept
     {
         return learning_rate;
     }
 
-    [[nodiscard]] float getMaxGradient() const noexcept
+     float getMaxGradient() const noexcept
     {
         return max_gradient;
     }
 
-    [[nodiscard]] float getBeta1() const noexcept
+     float getBeta1() const noexcept
     {
         return beta1;
     }
 
-    [[nodiscard]] float getBeta2() const noexcept
+     float getBeta2() const noexcept
     {
         return beta2;
     }
 
-    [[nodiscard]] float getEpsilon() const noexcept
+     float getEpsilon() const noexcept
     {
         return epsilon;
     }
 
-    [[nodiscard]] std::size_t getTimestep() const noexcept
+     std::size_t getTimestep() const noexcept
     {
         return timestep;
     }

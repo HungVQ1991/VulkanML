@@ -47,27 +47,27 @@ struct Cached_Graph_Template
     mutable bool is_mapping_log_enabled = true;
     bool is_valid = false;
 
-    [[nodiscard]] const std::vector<Compute_Node> &getFusedNodes() const noexcept
+     const std::vector<Compute_Node> &getFusedNodes() const noexcept
     {
         return fused_nodes;
     }
 
-    [[nodiscard]] const std::vector<std::vector<Buffer_Binding_Mapping>> &getBufferMappings() const noexcept
+     const std::vector<std::vector<Buffer_Binding_Mapping>> &getBufferMappings() const noexcept
     {
         return buffer_mappings;
     }
 
-    [[nodiscard]] const std::vector<std::vector<Push_Constant_Mapping>> &getPushConstantsMappings() const noexcept
+     const std::vector<std::vector<Push_Constant_Mapping>> &getPushConstantsMappings() const noexcept
     {
         return push_constants_mappings;
     }
 
-    [[nodiscard]] const std::vector<std::vector<std::uint32_t>> &getRawNodeIndices() const noexcept
+     const std::vector<std::vector<std::uint32_t>> &getRawNodeIndices() const noexcept
     {
         return raw_node_indices;
     }
 
-    [[nodiscard]] bool isValid() const noexcept
+     bool isValid() const noexcept
     {
         return is_valid;
     }

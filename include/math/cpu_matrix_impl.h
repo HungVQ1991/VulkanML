@@ -79,42 +79,42 @@ public:
 
     ~Cpu_Matrix_Impl() noexcept override = default;
 
-    [[nodiscard]] std::size_t getRows() const noexcept override
+     std::size_t getRows() const noexcept override
     {
         return rows;
     }
 
-    [[nodiscard]] std::size_t getColumns() const noexcept override
+     std::size_t getColumns() const noexcept override
     {
         return columns;
     }
 
-    [[nodiscard]] std::size_t getCols() const noexcept override
+     std::size_t getCols() const noexcept override
     {
         return columns;
     }
 
-    [[nodiscard]] const std::vector<float> &getData() const noexcept override
+     const std::vector<float> &getData() const noexcept override
     {
         return storage;
     }
 
-    [[nodiscard]] std::vector<float> &getData() noexcept
+     std::vector<float> &getData() noexcept
     {
         return storage;
     }
 
-    [[nodiscard]] Storage_Handle getStorage() const override
+     Storage_Handle getStorage() const override
     {
         return std::cref(storage);
     }
 
-    [[nodiscard]] Mutable_Storage_Handle getStorage() override
+     Mutable_Storage_Handle getStorage() override
     {
         return std::ref(storage);
     }
 
-    [[nodiscard]] bool isEmpty() const noexcept override
+     bool isEmpty() const noexcept override
     {
         return storage.empty();
     }

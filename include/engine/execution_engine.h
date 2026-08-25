@@ -136,77 +136,77 @@ public:
         return instance;
     }
 
-    [[nodiscard]] const Vulkan_Context &getContext() const noexcept
+     const Vulkan_Context &getContext() const noexcept
     {
         return *context;
     }
 
-    [[nodiscard]] Vulkan_Context &getContext() noexcept
+     Vulkan_Context &getContext() noexcept
     {
         return *context;
     }
 
-    [[nodiscard]] const Vulkan_Network &getNetwork() const noexcept
+     const Vulkan_Network &getNetwork() const noexcept
     {
         return *network;
     }
 
-    [[nodiscard]] Vulkan_Network &getNetwork() noexcept
+     Vulkan_Network &getNetwork() noexcept
     {
         return *network;
     }
 
-    [[nodiscard]] const Pipeline_Cache_Manager &getPipelineCacheManager() const noexcept
+     const Pipeline_Cache_Manager &getPipelineCacheManager() const noexcept
     {
         return *pipeline_cache_manager;
     }
 
-    [[nodiscard]] Pipeline_Cache_Manager &getPipelineCacheManager() noexcept
+     Pipeline_Cache_Manager &getPipelineCacheManager() noexcept
     {
         return *pipeline_cache_manager;
     }
 
-    [[nodiscard]] const Shader_Dictionary &getShaderDictionary() const noexcept
+     const Shader_Dictionary &getShaderDictionary() const noexcept
     {
         return *shader_dictionary;
     }
 
-    [[nodiscard]] Shader_Dictionary &getShaderDictionary() noexcept
+     Shader_Dictionary &getShaderDictionary() noexcept
     {
         return *shader_dictionary;
     }
 
-    [[nodiscard]] const Graph_Executor &getGraphExecutor() const noexcept
+     const Graph_Executor &getGraphExecutor() const noexcept
     {
         return *graph_executor;
     }
 
-    [[nodiscard]] Graph_Executor &getGraphExecutor() noexcept
+     Graph_Executor &getGraphExecutor() noexcept
     {
         return *graph_executor;
     }
 
-    [[nodiscard]] const Compute_Graph &getCurrentGraph() const noexcept
+     const Compute_Graph &getCurrentGraph() const noexcept
     {
         return current_graph;
     }
 
-    [[nodiscard]] Compute_Graph &getCurrentGraph() noexcept
+     Compute_Graph &getCurrentGraph() noexcept
     {
         return current_graph;
     }
 
-    [[nodiscard]] const std::string &getShaderFolderPath() const noexcept
+     const std::string &getShaderFolderPath() const noexcept
     {
         return shader_folder_path;
     }
 
-    [[nodiscard]] const std::unordered_map<std::size_t, Cached_Graph_Template> &getCachedGraphTemplates() const noexcept
+     const std::unordered_map<std::size_t, Cached_Graph_Template> &getCachedGraphTemplates() const noexcept
     {
         return cached_graph_templates;
     }
 
-    [[nodiscard]] bool isGraphCacheEnabled() const noexcept
+     bool isGraphCacheEnabled() const noexcept
     {
         return is_graph_cache_enabled;
     }

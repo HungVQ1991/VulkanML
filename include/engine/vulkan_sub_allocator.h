@@ -153,7 +153,7 @@ public:
         }
     }
 
-    [[nodiscard]] VkDeviceSize getOffset(std::uint32_t _tensor_id) const
+     VkDeviceSize getOffset(std::uint32_t _tensor_id) const
     {
         for (const auto &tensor : tensor_lifetimes)
         {
@@ -179,23 +179,23 @@ public:
         throw std::runtime_error(std::format("Memory_Planner::getOffset: Tensor ID {} not found in registry", _tensor_id));
     }
 
-    [[nodiscard]] VkDeviceSize getTotalMemoryRequired() const noexcept
+     VkDeviceSize getTotalMemoryRequired() const noexcept
     {
         return total_allocated_size;
     }
 
-    [[nodiscard]] const std::vector<Tensor_Lifetime> &getTensorLifetimes() const noexcept
+     const std::vector<Tensor_Lifetime> &getTensorLifetimes() const noexcept
     {
         return tensor_lifetimes;
     }
 
-    [[nodiscard]] bool hasTensor(std::uint32_t _tensor_id) const noexcept
+     bool hasTensor(std::uint32_t _tensor_id) const noexcept
     {
         return std::any_of(tensor_lifetimes.begin(), tensor_lifetimes.end(), [_tensor_id](const Tensor_Lifetime &lifetime)
                            { return lifetime.tensor_id == _tensor_id; });
     }
 
-    [[nodiscard]] bool isTensorPlanned(std::uint32_t _tensor_id) const noexcept
+     bool isTensorPlanned(std::uint32_t _tensor_id) const noexcept
     {
         for (const auto &tensor : tensor_lifetimes)
         {
@@ -368,62 +368,62 @@ public:
         }
     }
 
-    [[nodiscard]] Memory_Planner &getPlanner() noexcept
+     Memory_Planner &getPlanner() noexcept
     {
         return memory_planner;
     }
 
-    [[nodiscard]] const Memory_Planner &getPlanner() const noexcept
+     const Memory_Planner &getPlanner() const noexcept
     {
         return memory_planner;
     }
 
-    [[nodiscard]] Memory_Planner &getMemoryPlanner() noexcept
+     Memory_Planner &getMemoryPlanner() noexcept
     {
         return memory_planner;
     }
 
-    [[nodiscard]] const Memory_Planner &getMemoryPlanner() const noexcept
+     const Memory_Planner &getMemoryPlanner() const noexcept
     {
         return memory_planner;
     }
 
-    [[nodiscard]] VkDevice getDevice() const noexcept
+     VkDevice getDevice() const noexcept
     {
         return device;
     }
 
-    [[nodiscard]] const Vulkan_Context &getContext() const noexcept
+     const Vulkan_Context &getContext() const noexcept
     {
         return context;
     }
 
-    [[nodiscard]] VkPhysicalDevice getPhysicalDevice() const noexcept
+     VkPhysicalDevice getPhysicalDevice() const noexcept
     {
         return physical_device;
     }
 
-    [[nodiscard]] const std::vector<Memory_Chunk> &getMemoryChunks() const noexcept
+     const std::vector<Memory_Chunk> &getMemoryChunks() const noexcept
     {
         return memory_chunks;
     }
 
-    [[nodiscard]] std::size_t getMemoryChunkCount() const noexcept
+     std::size_t getMemoryChunkCount() const noexcept
     {
         return memory_chunks.size();
     }
 
-    [[nodiscard]] VkDeviceSize getDefaultChunkSize() const noexcept
+     VkDeviceSize getDefaultChunkSize() const noexcept
     {
         return default_chunk_size;
     }
 
-    [[nodiscard]] std::size_t getArenaChunkIndex() const noexcept
+     std::size_t getArenaChunkIndex() const noexcept
     {
         return arena_chunk_index;
     }
 
-    [[nodiscard]] bool hasArenaChunk() const noexcept
+     bool hasArenaChunk() const noexcept
     {
         return arena_chunk_index != std::numeric_limits<std::size_t>::max();
     }
