@@ -63,31 +63,77 @@ Neural Network
 ---
 
 ## Example
-
 ```cpp
-Execution_Target exec_target = Execution_Target::VULKAN_GPU;
-Neural_Network model(exec_target);
+#include <cstddef>
+#include <memory>
 
-model.setLearningRate(std::make_unique<Cosine_Annealing>(0.015f, 1e-5f, 30));
-model.setOptimizer(std::make_unique<Adam_Optimizer>(model.getLearningRate(), 0.9f, 0.999f, 1e-8f, 1.0f));
-model.setCostFunction(std::make_unique<CCE_Cost>());
+#include "cost_function/cce_cost.h"
+#include "engine/execution_engine.h"
+#include "helper/layer.h"
+#include "learning_rate/cosine_annealing.h"
+#include "math/matrix.h"
+#include "neural_network.h"
+#include "optimizer/adam_optimizer.h"
 
-model.addLayer(std::make_unique<Conv2d_Layer>(32, 32, 3, 32, 3, 1, 1));
-model.addLayer(std::make_unique<Batch_Norm_Layer>(32 * 32 * 32, 1e-5f, 0.1f));
-model.addLayer(std::make_unique<GeLU>());
-model.addLayer(std::make_unique<MaxPool2d_Layer>(32, 32, 32, 2, 2, 0));
+int main()
+{
+    constexpr std::size_t batch_size = 512;
+    constexpr std::size_t input_dimension = 784;    // 28x28 grayscale image
+    constexpr std::size_t output_dimension = 10;    // 10 output classes
+    constexpr std::size_t total_epochs = 1;
 
-model.addLayer(std::make_unique<Linear_Layer>(2048, 512));
-model.addLayer(std::make_unique<Batch_Norm_Layer>(512, 1e-5f, 0.1f));
-model.addLayer(std::make_unique<GeLU>());
-model.addLayer(std::make_unique<Linear_Layer>(512, 100));
-model.addLayer(std::make_unique<Softmax>(true));
+    // 1. Initialize on-disk binary Vulkan Pipeline Cache
+    Execution_Engine::getInstance()
+        .getPipelineCacheManager()
+        .initializePipelineCache("temp/pipeline_cache.bin");
 
-model.trainStep(input_mat, target_mat);
-model.getLearningRate().step();
+    // 2. Configure Backend and Model Instance
+    Execution_Target execution_target = Execution_Target::VULKAN_GPU;
+    Neural_Network neural_network(execution_target);
+    neural_network.setTrainingMode(true);
 
-model.saveTrainingCheckpoint("output/checkpoint_epoch_0.nnck", 0);
-model.saveInference("output/model.bin");
+    // 3. Set Scheduler, Optimizer, and Loss Function
+    neural_network.setLearningRate<Cosine_Annealing>(0.001f, 1e-5f, static_cast<int>(total_epochs));
+    neural_network.setOptimizer<Adam_Optimizer>(neural_network.getLearningRate(), 0.9f, 0.999f, 1e-8f, 1.0f);
+    neural_network.setCostFunction<Cce_Cost>();
+
+    // 4. Define Network Architecture (CNN + BatchNorm + GeLU + MaxPool + FC)
+    // Stage 1: 28x28x1 -> 14x14x16
+    neural_network.addLayer<Conv2d_Layer>(28, 28, 1, 16, 3, 1, 1, execution_target);
+    neural_network.addLayer<Batch_Norm_2d_Layer>(28, 28, 16, 1e-5f, 0.1f, execution_target);
+    neural_network.addLayer<Gelu_Layer>(execution_target);
+    neural_network.addLayer<Max_Pool_2d_Layer>(28, 28, 16, 2, 2, 0, execution_target);
+
+    // Stage 2: 14x14x16 -> 7x7x32
+    neural_network.addLayer<Conv2d_Layer>(14, 14, 16, 32, 3, 1, 1, execution_target);
+    neural_network.addLayer<Batch_Norm_2d_Layer>(14, 14, 32, 1e-5f, 0.1f, execution_target);
+    neural_network.addLayer<Gelu_Layer>(execution_target);
+    neural_network.addLayer<Max_Pool_2d_Layer>(14, 14, 32, 2, 2, 0, execution_target);
+
+    // Classifier Head: 1568 -> 128 -> 10
+    neural_network.addLayer<Linear_Layer>(7 * 7 * 32, 128, execution_target);
+    neural_network.addLayer<Batch_Norm_Layer>(128, 1e-5f, 0.1f, execution_target);
+    neural_network.addLayer<Gelu_Layer>(execution_target);
+
+    neural_network.addLayer<Linear_Layer>(128, output_dimension, execution_target);
+    neural_network.addLayer<Softmax_Layer>(true, execution_target); // Fused Loss shortcut
+
+    // 5. Precompile & Warmup Graph Optimization (JIT Operator Fusion)
+    neural_network.compileAndWarmup(batch_size, input_dimension, output_dimension);
+
+    // 6. Execute Training Step
+    Matrix input_matrix(batch_size, input_dimension, execution_target);
+    Matrix target_matrix(batch_size, output_dimension, execution_target);
+
+    neural_network.trainStep(input_matrix, target_matrix);
+    neural_network.getLearningRate().step();
+
+    // 7. Save Checkpoint and Inference Model Artifacts
+    neural_network.saveTrainingCheckpoint("output/checkpoint_epoch_0.nnck", 0);
+    neural_network.saveInference("output/mnist/model.bin");
+
+    return 0;
+}
 ```
 
 ---
