@@ -158,19 +158,13 @@ Every major component is implemented from scratch to maximize learning value.
 
 Planned features include:
 
-- Tensor abstraction
 - Automatic differentiation (Autograd)
 - Computational graph
-- Momentum / Adam optimizer
 - Dropout layer
-- ResNet skip connections / residual blocks
 - Vulkan kernel fusion
 - FP16 support
 - Descriptor pool optimization
 - Memory pooling
-- Compute shader tiling
-- Shared memory optimizations
-
 ---
 
 ## Why Vulkan?
