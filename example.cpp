@@ -38,7 +38,7 @@
 
 constexpr std::size_t INPUT_DIMENSION = 784;
 constexpr std::size_t OUTPUT_DIMENSION = 10;
-constexpr std::size_t BATCH_SIZE = 512;
+constexpr std::size_t BATCH_SIZE = 8;
 constexpr std::size_t TOTAL_EPOCHS = 1;
 
 std::uint32_t swapByteOrder(std::uint32_t _value)
@@ -262,7 +262,7 @@ double runBenchmark(Execution_Target _execution_target,
         _images_count,
         BATCH_SIZE,
         Execution_Engine::getInstance().getContext().getDevice(),
-        false);
+        true);
 
     data_pipeline.initializeBuffers(BATCH_SIZE, INPUT_DIMENSION, OUTPUT_DIMENSION, _execution_target);
 
@@ -391,9 +391,10 @@ void evaluateModel(Neural_Network &_neural_network,
 
 int main()
 {
-    Logger::setFileLogging(false);
+    Logger::setFileLogging(true);
     Logger::setOnlyActiveFeatures(Log_Feature::NONE);
     Logger::setConsoleOutput(true);
+    Execution_Engine::getInstance().setCooperativeMatrixEnabled(true);
 
     std::vector<float> train_images_data;
     std::vector<float> train_labels_data;
@@ -439,19 +440,11 @@ int main()
     neural_network.addLayer<Softmax_Layer>(true);
 
     neural_network.compileAndWarmup(BATCH_SIZE, INPUT_DIMENSION, OUTPUT_DIMENSION);
-    Logger::logMessage("Starting training benchmark with Data Augmentation...",
-                       Log_Level::LOG_INFO,
-                       true,
-                       0,
-                       Log_Feature::TRAINING);
+    Logger::logMessage("Starting training benchmark with Data Augmentation...", Log_Level::LOG_INFO, true, 0, Log_Feature::TRAINING);
     double elapsed_duration_ms = runBenchmark(execution_target, train_images_data, train_labels_data, train_images_count, neural_network);
     std::string mes = std::format("Training completed in {:.4f} s", elapsed_duration_ms / 1000.0);
     std::cout << mes << "\n";
-    Logger::logMessage(mes,
-                       Log_Level::LOG_INFO,
-                       true,
-                       0,
-                       Log_Feature::TRAINING);
+    Logger::logMessage(mes, Log_Level::LOG_INFO, true, 0, Log_Feature::TRAINING);
 
     neural_network.setTrainingMode(false);
     evaluateModel(neural_network, test_images_data, test_labels_data, test_images_count, execution_target);

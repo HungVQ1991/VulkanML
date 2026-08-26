@@ -19,6 +19,8 @@
 #include "helper/magic_enum.hpp"
 #include "shader_dictionary.h"
 
+extern bool is_coop;
+
 #ifndef ENABLE_SHADER_FUSION
 #define ENABLE_SHADER_FUSION 1
 #endif
@@ -260,7 +262,13 @@ private:
         const auto &consumer_metadata = shader_dictionary.getMetadata(_consumer_pipeline);
         const auto &producer_metadata = shader_dictionary.getMetadata(_producer_pipeline);
 
-        if (consumer_metadata.is_writing_multiple_elements || consumer_metadata.shared_memory_size > 0)
+        if (is_coop && (producer_metadata.is_cooperative_matrix_support || consumer_metadata.is_cooperative_matrix_support))
+        {
+            return false;
+        }
+
+        std::uint32_t consumer_shared_memory = is_coop ? consumer_metadata.cooperative_shared_memory_size : consumer_metadata.shared_memory_size;
+        if (consumer_metadata.is_writing_multiple_elements || consumer_shared_memory > 0)
         {
             return false;
         }
@@ -301,8 +309,8 @@ private:
         {
             if (_producer_class == Operation_Class::MATRIX_2D)
             {
-                std::uint64_t total_threads_producer = static_cast<std::uint64_t>(_producer_node.workgroup_count_x) * 16 *
-                                                       static_cast<std::uint64_t>(_producer_node.workgroup_count_y) * 16;
+                std::uint64_t total_threads_producer = static_cast<std::uint64_t>(_producer_node.workgroup_count_x) * (is_coop ? 32 : 16) *
+                                                       static_cast<std::uint64_t>(_producer_node.workgroup_count_y) * (is_coop ? 1 : 16);
                 std::uint64_t total_threads_consumer = static_cast<std::uint64_t>(_consumer_node.workgroup_count_x) * 256;
                 return (total_threads_producer >= total_threads_consumer);
             }
@@ -344,8 +352,9 @@ private:
     {
         const auto &shader_dictionary = Shader_Dictionary::getInstance();
         const auto &next_metadata = shader_dictionary.getMetadata(_next_node.pipeline_id);
+        std::uint32_t next_shared_memory = is_coop ? next_metadata.cooperative_shared_memory_size : next_metadata.shared_memory_size;
 
-        if (next_metadata.shared_memory_size > 0 || _consumer_class == Operation_Class::STANDALONE)
+        if (next_shared_memory > 0 || _consumer_class == Operation_Class::STANDALONE || (is_coop && next_metadata.is_cooperative_matrix_support))
         {
             _fused_node.workgroup_count_x = _next_node.workgroup_count_x;
             _fused_node.workgroup_count_y = 1;
@@ -902,7 +911,7 @@ public:
                 }
             }
 
-            _output_graph.addNode(node);
+            _output_graph.addNode(std::move(node));
         }
 #endif
     }

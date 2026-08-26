@@ -27,6 +27,8 @@
 #include "vulkan_context.h"
 #include "vulkan_network.h"
 
+extern bool is_coop;
+
 struct Persistent_Descriptor_Entry
 {
     VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
@@ -208,6 +210,46 @@ private:
         return _text;
     }
 
+    void insertBufferMemoryBarriers(VkCommandBuffer _command_buffer, const std::vector<std::shared_ptr<gpu::vector>> &_buffers) const
+    {
+        if (_buffers.empty())
+        {
+            return;
+        }
+
+        std::vector<VkBufferMemoryBarrier> buffer_barriers;
+        buffer_barriers.reserve(_buffers.size());
+
+        for (const auto &vector_pointer : _buffers)
+        {
+            if (vector_pointer && vector_pointer->getBuffer() != VK_NULL_HANDLE)
+            {
+                buffer_barriers.push_back(VkBufferMemoryBarrier{
+                    .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+                    .pNext = nullptr,
+                    .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+                    .dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                    .buffer = vector_pointer->getBuffer(),
+                    .offset = 0,
+                    .size = VK_WHOLE_SIZE});
+            }
+        }
+
+        if (!buffer_barriers.empty())
+        {
+            vkCmdPipelineBarrier(
+                _command_buffer,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0,
+                0, nullptr,
+                static_cast<std::uint32_t>(buffer_barriers.size()), buffer_barriers.data(),
+                0, nullptr);
+        }
+    }
+
     void executeFallbackNode(VkCommandBuffer _command_buffer, const Compute_Node &_node, std::size_t _node_index, std::uint32_t _frame_index)
     {
         VkDevice device = context.getDevice();
@@ -296,7 +338,18 @@ private:
 
             if (operation_index < _node.fused_operations.size() - 1)
             {
-                insertMemoryBarrier(_command_buffer);
+                std::vector<std::shared_ptr<gpu::vector>> output_buffers;
+                for (std::uint32_t out_index : operation.output_buffer_indices)
+                {
+                    if (out_index < _node.buffers.size() && _node.buffers[out_index])
+                    {
+                        output_buffers.push_back(_node.buffers[out_index]);
+                    }
+                }
+                if (!output_buffers.empty())
+                {
+                    insertBufferMemoryBarriers(_command_buffer, output_buffers);
+                }
             }
         }
     }
@@ -356,24 +409,6 @@ private:
         shared_write_descriptor_sets.reserve(32);
         shared_fused_buffers.reserve(32);
         shared_external_buffer_indices.reserve(32);
-    }
-
-    void insertMemoryBarrier(VkCommandBuffer _command_buffer) const
-    {
-        VkMemoryBarrier memory_barrier{
-            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
-            .pNext = nullptr,
-            .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
-            .dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT};
-
-        vkCmdPipelineBarrier(
-            _command_buffer,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            0,
-            1, &memory_barrier,
-            0, nullptr,
-            0, nullptr);
     }
 
     void updateDescriptorSet(VkDescriptorSet _descriptor_set, const std::vector<std::shared_ptr<gpu::vector>> &_buffers) const
@@ -619,9 +654,18 @@ public:
 
             if (primary_operation_class == Operation_Class::MATRIX_2D || primary_operation_class == Operation_Class::TENSOR_3D)
             {
-                local_size_x = 16;
-                local_size_y = 16;
-                local_size_z = 1;
+                if (is_coop && shader_dictionary.getMetadata(primary_pipeline).is_cooperative_matrix_support)
+                {
+                    local_size_x = 32;
+                    local_size_y = 1;
+                    local_size_z = 1;
+                }
+                else
+                {
+                    local_size_x = 16;
+                    local_size_y = 16;
+                    local_size_z = 1;
+                }
             }
 
             for (const auto &operation : _node.fused_operations)
@@ -631,31 +675,35 @@ public:
                 {
                     has_reduction = true;
                 }
-                if (metadata.shared_memory_size > 0)
+
+                std::uint32_t op_shared_memory_size = (is_coop && metadata.is_cooperative_matrix_support)
+                                                          ? metadata.cooperative_shared_memory_size
+                                                          : metadata.shared_memory_size;
+
+                if (op_shared_memory_size > 0)
                 {
                     has_shared_memory = true;
                     has_reduction = true;
-                    max_shared_memory_size = std::max(max_shared_memory_size, metadata.shared_memory_size);
+                    max_shared_memory_size = std::max(max_shared_memory_size, op_shared_memory_size);
                 }
-                if (operation.pipeline_id == Compute_Pipeline::MATMUL ||
-                    operation.pipeline_id == Compute_Pipeline::MATMUL_ADD ||
-                    operation.pipeline_id == Compute_Pipeline::LINEAR_FORWARD ||
-                    operation.pipeline_id == Compute_Pipeline::LINEAR_BACKWARD_INPUT ||
-                    operation.pipeline_id == Compute_Pipeline::LINEAR_BACKWARD_WEIGHT_BIAS)
+
+                bool is_using_manual_tiles = metadata.glsl_template.find("tile_a") != std::string::npos;
+
+                if (is_using_manual_tiles && (!is_coop || !metadata.is_cooperative_matrix_support))
                 {
                     has_matrix_tiles = true;
                 }
             }
         }
 
-        if (has_reduction)
+        if (has_reduction && (!is_coop || !shader_dictionary.getMetadata(primary_pipeline).is_cooperative_matrix_support))
         {
             local_size_x = 256;
             local_size_y = 1;
             local_size_z = 1;
         }
 
-        Shader_Generator shader_generator(local_size_x, local_size_y, local_size_z);
+        Shader_Generator shader_generator(local_size_x, local_size_y, local_size_z, "float");
 
         if (has_reduction)
         {
@@ -664,7 +712,7 @@ public:
 
         if (has_shared_memory && max_shared_memory_size > 0)
         {
-            shader_generator.addSharedMemory(max_shared_memory_size, "shared_mem_0");
+            shader_generator.addSharedMemory(max_shared_memory_size, "shared_mem_0", "float");
         }
 
         if (has_matrix_tiles)
@@ -739,10 +787,13 @@ public:
 
         if (primary_operation_class == Operation_Class::MATRIX_2D)
         {
-            shader_generator.addLogicSnippet("    uint c = gl_GlobalInvocationID.x;");
-            shader_generator.addLogicSnippet("    uint r = gl_GlobalInvocationID.y;");
-            shader_generator.addLogicSnippet("    uint lc = gl_LocalInvocationID.x;");
-            shader_generator.addLogicSnippet("    uint lr = gl_LocalInvocationID.y;");
+            if (!is_coop || !shader_dictionary.getMetadata(primary_pipeline).is_cooperative_matrix_support)
+            {
+                shader_generator.addLogicSnippet("    uint c = gl_GlobalInvocationID.x;");
+                shader_generator.addLogicSnippet("    uint r = gl_GlobalInvocationID.y;");
+                shader_generator.addLogicSnippet("    uint lc = gl_LocalInvocationID.x;");
+                shader_generator.addLogicSnippet("    uint lr = gl_LocalInvocationID.y;");
+            }
         }
         else if (primary_operation_class == Operation_Class::STANDALONE)
         {
@@ -874,8 +925,12 @@ public:
                 }
             }
 
+            const std::string &raw_template = (is_coop && metadata.is_cooperative_matrix_support && !metadata.cooperative_glsl_template.empty())
+                                                  ? metadata.cooperative_glsl_template
+                                                  : metadata.glsl_template;
+
             std::uint32_t push_constants_word_offset = operation.push_constants_offset / 4;
-            std::string snippet = replacePlaceholders(metadata.glsl_template,
+            std::string snippet = replacePlaceholders(raw_template,
                                                       inputs,
                                                       is_input_register_flags,
                                                       outputs,
@@ -917,11 +972,14 @@ public:
                 }
                 else if (primary_operation_class == Operation_Class::MATRIX_2D)
                 {
-                    remove_exact(snippet, "uint r = gl_GlobalInvocationID.y;");
-                    remove_exact(snippet, "uint c = gl_GlobalInvocationID.x;");
-                    remove_exact(snippet, "uint lc = gl_LocalInvocationID.x;");
-                    remove_exact(snippet, "uint lr = gl_LocalInvocationID.y;");
-                    remove_pattern(snippet, "if (r >= ", " return;");
+                    if (!is_coop || !shader_dictionary.getMetadata(primary_pipeline).is_cooperative_matrix_support)
+                    {
+                        remove_exact(snippet, "uint r = gl_GlobalInvocationID.y;");
+                        remove_exact(snippet, "uint c = gl_GlobalInvocationID.x;");
+                        remove_exact(snippet, "uint lc = gl_LocalInvocationID.x;");
+                        remove_exact(snippet, "uint lr = gl_LocalInvocationID.y;");
+                        remove_pattern(snippet, "if (r >= ", " return;");
+                    }
                 }
                 else if (primary_operation_class == Operation_Class::TENSOR_3D)
                 {
@@ -954,7 +1012,7 @@ public:
 
             shader_generator.addLogicSnippet(std::format("    {}", snippet));
 
-            if (operation_index == 0 && !metadata.index_expression.empty())
+            if (operation_index == 0 && !metadata.index_expression.empty() && (!is_coop || !metadata.is_cooperative_matrix_support))
             {
                 std::string resolved_expression = metadata.index_expression;
                 for (int push_constant_index = 31; push_constant_index >= 0; --push_constant_index)
@@ -1356,7 +1414,7 @@ public:
 
             if (node.is_barrier_required_after)
             {
-                insertMemoryBarrier(command_buffer);
+                insertBufferMemoryBarriers(command_buffer, node.buffers);
             }
         }
 

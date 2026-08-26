@@ -462,46 +462,46 @@ public:
         }
     }
 
-    Memory_Allocation allocateAliased(std::uint32_t _tensor_id, VkDeviceSize _size, VkMemoryPropertyFlags _memory_properties, VkPhysicalDevice _target_physical_device = VK_NULL_HANDLE)
-    {
-        std::lock_guard<std::mutex> lock(allocator_mutex);
+    // Memory_Allocation allocateAliased(std::uint32_t _tensor_id, VkDeviceSize _size, VkMemoryPropertyFlags _memory_properties, VkPhysicalDevice _target_physical_device = VK_NULL_HANDLE)
+    // {
+    //     std::lock_guard<std::mutex> lock(allocator_mutex);
 
-        if (_target_physical_device != VK_NULL_HANDLE && physical_device != _target_physical_device)
-        {
-            physical_device = _target_physical_device;
-            vkGetPhysicalDeviceMemoryProperties(physical_device, &physical_device_memory_properties);
-        }
+    //     if (_target_physical_device != VK_NULL_HANDLE && physical_device != _target_physical_device)
+    //     {
+    //         physical_device = _target_physical_device;
+    //         vkGetPhysicalDeviceMemoryProperties(physical_device, &physical_device_memory_properties);
+    //     }
 
-        VkDeviceSize planned_offset = memory_planner.getOffset(_tensor_id);
-        VkDeviceSize total_required = memory_planner.getTotalMemoryRequired();
+    //     VkDeviceSize planned_offset = memory_planner.getOffset(_tensor_id);
+    //     VkDeviceSize total_required = memory_planner.getTotalMemoryRequired();
 
-        if (arena_chunk_index == std::numeric_limits<std::size_t>::max())
-        {
-            VkMemoryRequirements memory_requirements{
-                .size = total_required,
-                .alignment = 16,
-                .memoryTypeBits = 0xFFFFFFFF};
-            arena_chunk_index = createChunk(memory_requirements, _memory_properties, true);
-        }
+    //     if (arena_chunk_index == std::numeric_limits<std::size_t>::max())
+    //     {
+    //         VkMemoryRequirements memory_requirements{
+    //             .size = total_required,
+    //             .alignment = 16,
+    //             .memoryTypeBits = 0xFFFFFFFF};
+    //         arena_chunk_index = createChunk(memory_requirements, _memory_properties, true);
+    //     }
 
-        auto &arena_chunk = memory_chunks[arena_chunk_index];
-        if (planned_offset + _size > arena_chunk.chunk_size)
-        {
-            Logger::logMessage(std::format("Vulkan_Sub_Allocator::allocateAliased: Out of bounds on arena chunk {} (offset={}, size={}, chunk_size={})",
-                                           arena_chunk_index, planned_offset, _size, arena_chunk.chunk_size),
-                               Log_Level::LOG_ERROR,
-                               true,
-                               0,
-                               Log_Feature::MEMORY_ALLOCATION);
-            throw std::runtime_error("Vulkan_Sub_Allocator::allocateAliased: Requested offset + size exceeds arena capacity");
-        }
+    //     auto &arena_chunk = memory_chunks[arena_chunk_index];
+    //     if (planned_offset + _size > arena_chunk.chunk_size)
+    //     {
+    //         Logger::logMessage(std::format("Vulkan_Sub_Allocator::allocateAliased: Out of bounds on arena chunk {} (offset={}, size={}, chunk_size={})",
+    //                                        arena_chunk_index, planned_offset, _size, arena_chunk.chunk_size),
+    //                            Log_Level::LOG_ERROR,
+    //                            true,
+    //                            0,
+    //                            Log_Feature::MEMORY_ALLOCATION);
+    //         throw std::runtime_error("Vulkan_Sub_Allocator::allocateAliased: Requested offset + size exceeds arena capacity");
+    //     }
 
-        return Memory_Allocation{
-            .memory = arena_chunk.device_memory,
-            .offset = planned_offset,
-            .size = _size,
-            .chunk_index = arena_chunk_index};
-    }
+    //     return Memory_Allocation{
+    //         .memory = arena_chunk.device_memory,
+    //         .offset = planned_offset,
+    //         .size = _size,
+    //         .chunk_index = arena_chunk_index};
+    // }
 
     Memory_Allocation allocate(const VkMemoryRequirements &_memory_requirements, VkMemoryPropertyFlags _memory_properties, VkPhysicalDevice _target_physical_device = VK_NULL_HANDLE)
     {

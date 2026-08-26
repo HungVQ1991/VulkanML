@@ -28,10 +28,13 @@ struct Snippet_Metadata
     std::uint32_t input_count = 0;
     std::uint32_t output_count = 0;
     std::uint32_t shared_memory_size = 0;
+    std::uint32_t cooperative_shared_memory_size = 0;
     bool is_writing_multiple_elements = false;
+    bool is_cooperative_matrix_support = false;
     std::vector<std::uint32_t> accumulator_output_indices;
     std::vector<std::uint32_t> persistent_output_indices;
     std::string glsl_template;
+    std::string cooperative_glsl_template;
     std::string index_expression;
     Operation_Class operation_class = Operation_Class::STANDALONE;
 };
@@ -40,7 +43,7 @@ class Shader_Dictionary
 {
 private:
     using json = nlohmann::json;
-    std::array<Snippet_Metadata, Compute_Pipeline::COMPUTE_PIPELINE_END> metadata_table;
+    std::array<Snippet_Metadata, static_cast<std::size_t>(Compute_Pipeline::COMPUTE_PIPELINE_END)> metadata_table;
 
 public:
     explicit Shader_Dictionary(const std::string &_file_path = "compute_shader/shader_dictionary.json")
@@ -58,8 +61,8 @@ public:
     Shader_Dictionary(const Shader_Dictionary &) = delete;
     Shader_Dictionary &operator=(const Shader_Dictionary &) = delete;
 
-    Shader_Dictionary(Shader_Dictionary &&other) noexcept = default;
-    Shader_Dictionary &operator=(Shader_Dictionary &&other) noexcept = default;
+    Shader_Dictionary(Shader_Dictionary &&_other) noexcept = default;
+    Shader_Dictionary &operator=(Shader_Dictionary &&_other) noexcept = default;
 
     static const Shader_Dictionary &getInstance(const std::string &_file_path = "compute_shader/shader_dictionary.json")
     {
@@ -89,7 +92,7 @@ public:
         json root_json;
         file_stream >> root_json;
 
-        for (std::size_t pipeline_index = 0; pipeline_index < Compute_Pipeline::COMPUTE_PIPELINE_END; ++pipeline_index)
+        for (std::size_t pipeline_index = 0; pipeline_index < static_cast<std::size_t>(Compute_Pipeline::COMPUTE_PIPELINE_END); ++pipeline_index)
         {
             auto pipeline_enum = static_cast<Compute_Pipeline>(pipeline_index);
             std::string pipeline_name = std::string(magic_enum::enum_name(pipeline_enum));
@@ -122,32 +125,55 @@ public:
                     .input_count = json_entry.value("input_count", 0u),
                     .output_count = json_entry.value("output_count", 0u),
                     .shared_memory_size = json_entry.value("shared_mem_size", 0u),
+                    .cooperative_shared_memory_size = json_entry.value("cooperative_shared_mem_size", 0u),
                     .is_writing_multiple_elements = json_entry.value("writes_multiple_elements", false),
+                    .is_cooperative_matrix_support = json_entry.value("supports_cooperative_matrix", false),
                     .accumulator_output_indices = json_entry.value("accumulator_output_indices", std::vector<std::uint32_t>{}),
                     .persistent_output_indices = json_entry.value("persistent_outputs", std::vector<std::uint32_t>{}),
                     .glsl_template = json_entry.value("code", ""),
+                    .cooperative_glsl_template = json_entry.value("cooperative_matrix_code", ""),
                     .index_expression = json_entry.value("index_expr", ""),
                     .operation_class = parsed_operation_class};
             }
         }
     }
 
-     const Snippet_Metadata &getMetadata(Compute_Pipeline _pipeline) const noexcept
+    [[nodiscard]] const Snippet_Metadata &getMetadata(Compute_Pipeline _pipeline) const noexcept
     {
         return metadata_table[static_cast<std::size_t>(_pipeline)];
     }
 
-     const Snippet_Metadata &getSnippetMetadata(Compute_Pipeline _pipeline) const noexcept
+    [[nodiscard]] const Snippet_Metadata &getSnippetMetadata(Compute_Pipeline _pipeline) const noexcept
     {
         return metadata_table[static_cast<std::size_t>(_pipeline)];
     }
 
-     const std::array<Snippet_Metadata, Compute_Pipeline::COMPUTE_PIPELINE_END> &getMetadataTable() const noexcept
+    [[nodiscard]] const std::string &getGlslTemplate(Compute_Pipeline _pipeline, bool _use_cooperative_matrix) const noexcept
+    {
+        const auto &meta = metadata_table[static_cast<std::size_t>(_pipeline)];
+        if (_use_cooperative_matrix && meta.is_cooperative_matrix_support && !meta.cooperative_glsl_template.empty())
+        {
+            return meta.cooperative_glsl_template;
+        }
+        return meta.glsl_template;
+    }
+
+    [[nodiscard]] std::uint32_t getSharedMemorySize(Compute_Pipeline _pipeline, bool _use_cooperative_matrix) const noexcept
+    {
+        const auto &meta = metadata_table[static_cast<std::size_t>(_pipeline)];
+        if (_use_cooperative_matrix && meta.is_cooperative_matrix_support)
+        {
+            return meta.cooperative_shared_memory_size;
+        }
+        return meta.shared_memory_size;
+    }
+
+    [[nodiscard]] const std::array<Snippet_Metadata, static_cast<std::size_t>(Compute_Pipeline::COMPUTE_PIPELINE_END)> &getMetadataTable() const noexcept
     {
         return metadata_table;
     }
 
-     bool hasMetadata(Compute_Pipeline _pipeline) const noexcept
+    [[nodiscard]] bool hasMetadata(Compute_Pipeline _pipeline) const noexcept
     {
         std::size_t pipeline_index = static_cast<std::size_t>(_pipeline);
         return pipeline_index < metadata_table.size() && !metadata_table[pipeline_index].glsl_template.empty();
