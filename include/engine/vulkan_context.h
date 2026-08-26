@@ -62,6 +62,10 @@ private:
     VkCommandPool command_pool = VK_NULL_HANDLE;
     std::uint32_t compute_queue_family_index = 0;
 
+    bool is_cooperative_matrix_supported = false;
+    bool is_cooperative_matrix_enabled = false;
+    VkCooperativeMatrixPropertiesKHR cooperative_matrix_properties{};
+
     std::unique_ptr<Vulkan_Sub_Allocator> allocator;
 
     mutable VkBuffer staging_buffers[MAX_FRAMES_IN_FLIGHT]{VK_NULL_HANDLE, VK_NULL_HANDLE};
@@ -287,12 +291,65 @@ private:
             .queueCount = 1,
             .pQueuePriorities = &queue_priority};
 
-        std::vector<const char *> required_extensions = {};
+        std::uint32_t extension_count = 0;
+        vkEnumerateDeviceExtensionProperties(physical_device, nullptr, &extension_count, nullptr);
+        std::vector<VkExtensionProperties> available_extensions(extension_count);
+        vkEnumerateDeviceExtensionProperties(physical_device, nullptr, &extension_count, available_extensions.data());
+
+        auto is_extension_available = [&available_extensions](const char *_extension_name)
+        {
+            return std::any_of(available_extensions.begin(), available_extensions.end(),
+                               [_extension_name](const VkExtensionProperties &_props)
+                               {
+                                   return std::strcmp(_props.extensionName, _extension_name) == 0;
+                               });
+        };
+
+        std::vector<const char *> required_extensions;
+
+        bool has_coop_mat_ext = is_extension_available(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
+        bool has_float16_ext = is_extension_available(VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME);
+        bool has_storage16_ext = is_extension_available(VK_KHR_16BIT_STORAGE_EXTENSION_NAME);
+
+        void *device_create_pnext = nullptr;
+
+        VkPhysicalDeviceCooperativeMatrixFeaturesKHR cooperative_matrix_features{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR,
+            .pNext = nullptr,
+            .cooperativeMatrix = VK_TRUE,
+            .cooperativeMatrixRobustBufferAccess = VK_FALSE};
+
+        VkPhysicalDeviceFloat16Int8FeaturesKHR float16_features{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FLOAT16_INT8_FEATURES_KHR,
+            .pNext = nullptr,
+            .shaderFloat16 = VK_TRUE,
+            .shaderInt8 = VK_FALSE};
+
+        VkPhysicalDevice16BitStorageFeatures storage_16bit_features{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES,
+            .pNext = nullptr,
+            .storageBuffer16BitAccess = VK_TRUE,
+            .uniformAndStorageBuffer16BitAccess = VK_FALSE,
+            .storagePushConstant16 = VK_FALSE,
+            .storageInputOutput16 = VK_FALSE};
+
+        if (has_coop_mat_ext && has_float16_ext && has_storage16_ext)
+        {
+            required_extensions.push_back(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
+            required_extensions.push_back(VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME);
+            required_extensions.push_back(VK_KHR_16BIT_STORAGE_EXTENSION_NAME);
+
+            storage_16bit_features.pNext = &float16_features;
+            float16_features.pNext = &cooperative_matrix_features;
+            device_create_pnext = &storage_16bit_features;
+            is_cooperative_matrix_supported = true;
+        }
+
         VkPhysicalDeviceFeatures enabled_features{};
 
         VkDeviceCreateInfo device_create_information{
             .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-            .pNext = nullptr,
+            .pNext = device_create_pnext,
             .flags = 0,
             .queueCreateInfoCount = 1,
             .pQueueCreateInfos = &queue_create_information,
@@ -313,6 +370,77 @@ private:
         }
 
         vkGetDeviceQueue(device, compute_queue_family_index, 0, &compute_queue);
+    }
+
+    void queryCooperativeMatrixSupport()
+    {
+        if (!is_cooperative_matrix_supported)
+        {
+            return;
+        }
+
+        auto vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR = reinterpret_cast<PFN_vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR>(
+            vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR"));
+
+        if (!vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR)
+        {
+            is_cooperative_matrix_supported = false;
+            is_cooperative_matrix_enabled = false;
+            return;
+        }
+
+        std::uint32_t property_count = 0;
+        if (vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR(physical_device, &property_count, nullptr) != VK_SUCCESS || property_count == 0)
+        {
+            is_cooperative_matrix_supported = false;
+            is_cooperative_matrix_enabled = false;
+            return;
+        }
+
+        std::vector<VkCooperativeMatrixPropertiesKHR> properties(
+            property_count,
+            VkCooperativeMatrixPropertiesKHR{
+                .sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR,
+                .pNext = nullptr});
+
+        if (vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR(physical_device, &property_count, properties.data()) != VK_SUCCESS)
+        {
+            is_cooperative_matrix_supported = false;
+            is_cooperative_matrix_enabled = false;
+            return;
+        }
+
+        bool found_supported_configuration = false;
+        for (const auto &prop : properties)
+        {
+            if (prop.MSize == 16 && prop.NSize == 16 && prop.KSize == 16 && prop.scope == VK_SCOPE_SUBGROUP_KHR)
+            {
+                cooperative_matrix_properties = prop;
+                found_supported_configuration = true;
+                break;
+            }
+        }
+
+        if (found_supported_configuration)
+        {
+            is_cooperative_matrix_supported = true;
+            is_cooperative_matrix_enabled = true;
+            Logger::logMessage("Vulkan_Context::queryCooperativeMatrixSupport: Cooperative matrix (16x16x16, Subgroup) supported and enabled",
+                               Log_Level::LOG_INFO,
+                               true,
+                               0,
+                               Log_Feature::DEVICE_MANAGEMENT);
+        }
+        else
+        {
+            is_cooperative_matrix_supported = false;
+            is_cooperative_matrix_enabled = false;
+            Logger::logMessage("Vulkan_Context::queryCooperativeMatrixSupport: Cooperative matrix 16x16x16 configuration not found",
+                               Log_Level::LOG_WARNING,
+                               true,
+                               0,
+                               Log_Feature::DEVICE_MANAGEMENT);
+        }
     }
 
     void createCommandPool()
@@ -365,6 +493,7 @@ public:
         initializeInstance();
         selectPhysicalDevice();
         createLogicalDevice();
+        queryCooperativeMatrixSupport();
         createPipelineCache();
         createCommandPool();
         initializeFences();
@@ -423,7 +552,7 @@ public:
         }
     }
 
-     Memory_Allocation allocateMemory(const VkMemoryRequirements &_memory_requirements, VkMemoryPropertyFlags _memory_properties) const
+    Memory_Allocation allocateMemory(const VkMemoryRequirements &_memory_requirements, VkMemoryPropertyFlags _memory_properties) const
     {
         return allocator->allocate(_memory_requirements, _memory_properties, physical_device);
     }
@@ -447,22 +576,33 @@ public:
         }
     }
 
-     VkInstance getInstance() const noexcept { return instance; }
-     VkPhysicalDevice getPhysicalDevice() const noexcept { return physical_device; }
-     VkDevice getDevice() const noexcept { return device; }
-     VkQueue getComputeQueue() const noexcept { return compute_queue; }
-     VkCommandPool getCommandPool() const noexcept { return command_pool; }
-     std::uint32_t getComputeQueueFamilyIndex() const noexcept { return compute_queue_family_index; }
-     VkPipelineCache getPipelineCache() const noexcept { return pipeline_cache; }
-     Vulkan_Sub_Allocator &getAllocator() const noexcept { return *allocator; }
-     VkFence getFrameFence(std::uint32_t _frame_index) const noexcept { return fences[_frame_index]; }
-     std::uint32_t getCurrentFrame() const noexcept { return current_frame; }
-     bool isFrameReady(std::uint32_t _frame_index) const noexcept { return is_frame_ready[_frame_index]; }
-     VkBuffer getStagingBuffer(std::uint32_t _frame_index) const noexcept { return staging_buffers[_frame_index]; }
-     VkDeviceSize getStagingCapacity(std::uint32_t _frame_index) const noexcept { return staging_capacities[_frame_index]; }
-     VkDeviceSize getCurrentStagingOffset(std::uint32_t _frame_index) const noexcept { return current_offsets[_frame_index]; }
+    [[nodiscard]] VkInstance getInstance() const noexcept { return instance; }
+    [[nodiscard]] VkPhysicalDevice getPhysicalDevice() const noexcept { return physical_device; }
+    [[nodiscard]] VkDevice getDevice() const noexcept { return device; }
+    [[nodiscard]] VkQueue getComputeQueue() const noexcept { return compute_queue; }
+    [[nodiscard]] VkCommandPool getCommandPool() const noexcept { return command_pool; }
+    [[nodiscard]] std::uint32_t getComputeQueueFamilyIndex() const noexcept { return compute_queue_family_index; }
+    [[nodiscard]] VkPipelineCache getPipelineCache() const noexcept { return pipeline_cache; }
+    [[nodiscard]] Vulkan_Sub_Allocator &getAllocator() const noexcept { return *allocator; }
+    [[nodiscard]] VkFence getFrameFence(std::uint32_t _frame_index) const noexcept { return fences[_frame_index]; }
+    [[nodiscard]] std::uint32_t getCurrentFrame() const noexcept { return current_frame; }
+    [[nodiscard]] bool isFrameReady(std::uint32_t _frame_index) const noexcept { return is_frame_ready[_frame_index]; }
+    [[nodiscard]] VkBuffer getStagingBuffer(std::uint32_t _frame_index) const noexcept { return staging_buffers[_frame_index]; }
+    [[nodiscard]] VkDeviceSize getStagingCapacity(std::uint32_t _frame_index) const noexcept { return staging_capacities[_frame_index]; }
+    [[nodiscard]] VkDeviceSize getCurrentStagingOffset(std::uint32_t _frame_index) const noexcept { return current_offsets[_frame_index]; }
+    [[nodiscard]] bool isCooperativeMatrixSupported() const noexcept { return is_cooperative_matrix_supported; }
+    [[nodiscard]] bool isCooperativeMatrixEnabled() const noexcept { return is_cooperative_matrix_supported && is_cooperative_matrix_enabled; }
+    [[nodiscard]] const VkCooperativeMatrixPropertiesKHR &getCooperativeMatrixProperties() const noexcept { return cooperative_matrix_properties; }
 
-     std::uint32_t findMemoryType(std::uint32_t _type_filter, VkMemoryPropertyFlags _memory_properties) const
+    void setCooperativeMatrixEnabled(bool _enable) noexcept
+    {
+        if (is_cooperative_matrix_supported)
+        {
+            is_cooperative_matrix_enabled = _enable;
+        }
+    }
+
+    std::uint32_t findMemoryType(std::uint32_t _type_filter, VkMemoryPropertyFlags _memory_properties) const
     {
         VkPhysicalDeviceMemoryProperties physical_device_memory_properties;
         vkGetPhysicalDeviceMemoryProperties(physical_device, &physical_device_memory_properties);
@@ -660,7 +800,7 @@ public:
         pending_transfer_tasks.push_back(_task);
     }
 
-     std::vector<Buffer_Transfer_Task> getTransferTasks() const
+    const std::vector<Buffer_Transfer_Task> &getTransferTasks() const
     {
         std::lock_guard<std::mutex> lock(context_mutex);
         return pending_transfer_tasks;

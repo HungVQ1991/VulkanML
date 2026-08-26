@@ -18,6 +18,8 @@
 #include "shader_compiler.h"
 #include "vulkan_context.h"
 
+extern bool is_coop;
+
 class Pipeline_Cache_Manager
 {
 private:
@@ -308,10 +310,15 @@ public:
             throw std::runtime_error("Failed to create shader module for fused pipeline");
         }
 
+        VkPipelineShaderStageRequiredSubgroupSizeCreateInfo required_subgroup_size_create_information{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO,
+            .pNext = nullptr,
+            .requiredSubgroupSize = 32};
+
         VkPipelineShaderStageCreateInfo shader_stage_create_information{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
+            .pNext = is_coop ? &required_subgroup_size_create_information : nullptr,
+            .flags = is_coop ? VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT : 0u,
             .stage = VK_SHADER_STAGE_COMPUTE_BIT,
             .module = shader_module,
             .pName = "main",

@@ -11,6 +11,8 @@
 
 #include "helper/logger.h"
 
+extern bool is_coop;
+
 enum class Buffer_Access
 {
     READ_ONLY,
@@ -48,7 +50,7 @@ public:
         data.insert(data.end(), byte_pointer, byte_pointer + size);
     }
 
-     VkSpecializationInfo build() const noexcept
+    [[nodiscard]] VkSpecializationInfo build() const noexcept
     {
         return VkSpecializationInfo{
             .mapEntryCount = static_cast<std::uint32_t>(entries.size()),
@@ -57,7 +59,7 @@ public:
             .pData = data.data()};
     }
 
-     bool empty() const noexcept
+    [[nodiscard]] bool empty() const noexcept
     {
         return entries.empty();
     }
@@ -77,6 +79,7 @@ private:
     std::uint32_t group_z;
     std::uint32_t current_binding = 0;
     std::uint32_t var_counter = 0;
+    std::string default_data_type = "float";
 
     std::ostringstream header_stream;
     std::ostringstream specialization_stream;
@@ -89,14 +92,24 @@ private:
     std::vector<Specialization_Constant_Entry> spec_constants;
 
 public:
-    Shader_Generator(std::uint32_t _group_x, std::uint32_t _group_y = 1, std::uint32_t _group_z = 1)
-        : group_x(_group_x), group_y(_group_y), group_z(_group_z)
+    Shader_Generator(std::uint32_t _group_x, std::uint32_t _group_y = 1, std::uint32_t _group_z = 1, const std::string &_default_data_type = "float")
+        : group_x(_group_x), group_y(_group_y), group_z(_group_z), default_data_type(_default_data_type)
     {
-        Logger::logMessage(std::format("Shader_Generator::Shader_Generator: Initializing generator with local_size ({}, {}, {})", _group_x, _group_y, _group_z),
+        Logger::logMessage(std::format("Shader_Generator::Shader_Generator: Initializing generator with local_size ({}, {}, {}) and default type '{}'", _group_x, _group_y, _group_z, _default_data_type),
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
                            Log_Feature::SHADER_GENERATION);
+    }
+
+    void setDefaultDataType(const std::string &_type_name) noexcept
+    {
+        default_data_type = _type_name;
+    }
+
+    [[nodiscard]] const std::string &getDefaultDataType() const noexcept
+    {
+        return default_data_type;
     }
 
     void enableSubgroupOperations()
@@ -140,14 +153,14 @@ public:
                                              _constant_id, _type_name, _name, _default_value);
     }
 
-     const std::vector<Specialization_Constant_Entry> &getSpecializationConstants() const noexcept
+    [[nodiscard]] const std::vector<Specialization_Constant_Entry> &getSpecializationConstants() const noexcept
     {
         return spec_constants;
     }
 
     std::string addBuffer(std::uint32_t _binding_index,
                           const std::string &_buffer_name = "",
-                          const std::string &_type_name = "float",
+                          const std::string &_type_name = "",
                           Buffer_Access _access = Buffer_Access::READ_WRITE)
     {
         if (current_binding >= 32)
@@ -170,16 +183,17 @@ public:
             break;
         }
 
+        std::string resolved_type = _type_name.empty() ? default_data_type : _type_name;
         std::string name = _buffer_name.empty() ? std::format("buf_{}", _binding_index) : _buffer_name;
         Logger::logMessage(std::format("Shader_Generator::addBuffer: Added buffer binding {} with name '{}' of type '{}' and access '{}'",
-                                       _binding_index, name, _type_name, qualifier),
+                                       _binding_index, name, resolved_type, qualifier),
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
                            Log_Feature::SHADER_GENERATION);
 
         bindings_stream << std::format("layout(std430, binding = {}) {} buffer Buffer_{} {{ {} {}[]; }};\n",
-                                       _binding_index, qualifier, _binding_index, _type_name, name);
+                                       _binding_index, qualifier, _binding_index, resolved_type, name);
         return name;
     }
 
@@ -190,15 +204,16 @@ public:
         bindings_stream << "} pc;\n\n";
     }
 
-    std::string addSharedMemory(std::uint32_t _size, const std::string &_prefix = "shared_mem", const std::string &_type_name = "float")
+    std::string addSharedMemory(std::uint32_t _size, const std::string &_prefix = "shared_mem", const std::string &_type_name = "")
     {
+        std::string resolved_type = _type_name.empty() ? default_data_type : _type_name;
         std::string name = std::format("{}_{}", _prefix, var_counter++);
-        Logger::logMessage(std::format("Shader_Generator::addSharedMemory: Added shared memory array '{}' of size {} of type '{}'", name, _size, _type_name),
+        Logger::logMessage(std::format("Shader_Generator::addSharedMemory: Added shared memory array '{}' of size {} of type '{}'", name, _size, resolved_type),
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
                            Log_Feature::SHADER_GENERATION);
-        shared_memory_stream << std::format("shared {} {}[{}];\n", _type_name, name, _size);
+        shared_memory_stream << std::format("shared {} {}[{}];\n", resolved_type, name, _size);
         return name;
     }
 
@@ -226,6 +241,13 @@ public:
                            Log_Feature::SHADER_GENERATION);
         std::ostringstream final_shader;
         final_shader << "#version 450\n";
+
+        if (is_coop)
+        {
+            final_shader << "#extension GL_KHR_cooperative_matrix : enable\n";
+            final_shader << "#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable\n";
+            final_shader << "#extension GL_KHR_memory_scope_semantics : enable\n";
+        }
 
         if (is_subgroup_enabled)
         {

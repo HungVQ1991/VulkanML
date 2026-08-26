@@ -47,6 +47,12 @@ private:
     std::shared_ptr<gpu::vector> storage;
     mutable std::vector<float> host_cache;
 
+    static inline bool is_graph_logging_enabled = true;
+
+public:
+    static inline std::size_t distinct_operations_count;
+
+private:
     template <typename Pipeline_Enum, typename Push_Constants_Type>
     void pushToGraph(Pipeline_Enum _pipeline_id,
                      const std::vector<std::shared_ptr<gpu::vector>> &_buffers,
@@ -78,26 +84,30 @@ private:
 
         Execution_Engine::getInstance().getCurrentGraph().addNode(node);
 
-        std::string buffer_trace;
-        for (std::size_t index = 0; index < _buffers.size(); ++index)
+        if (is_graph_logging_enabled)
         {
-            if (_buffers[index])
+            std::string buffer_trace;
+            for (std::size_t index = 0; index < _buffers.size(); ++index)
             {
-                buffer_trace += std::format(" [Arg{}: ID={}, Buffer={:p}, Offset={}]",
-                                            index,
-                                            _buffers[index]->getId(),
-                                            static_cast<void *>(_buffers[index]->getBuffer()),
-                                            _buffers[index]->getAllocation().offset);
+                if (_buffers[index])
+                {
+                    buffer_trace += std::format(" [Arg{}: ID={}, Buffer={:p}, Offset={}]",
+                                                index,
+                                                _buffers[index]->getId(),
+                                                static_cast<void *>(_buffers[index]->getBuffer()),
+                                                _buffers[index]->getAllocation().offset);
+                }
             }
-        }
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::pushToGraph: Operation: {} | {}",
-                                       magic_enum::enum_name(_pipeline_id),
-                                       buffer_trace),
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::GRAPH_RECORDING);
+            is_graph_logging_enabled = Logger::logMessage(
+                std::format("Gpu_Matrix_Impl::pushToGraph: Operation: {} | {}",
+                            magic_enum::enum_name(_pipeline_id),
+                            buffer_trace),
+                Log_Level::LOG_DEBUG,
+                true,
+                distinct_operations_count,
+                Log_Feature::GRAPH_RECORDING);
+        }
     }
 
     const Gpu_Matrix_Impl &castToGpuMatrix(const Impl &_other_implementation, const std::string &_error_message) const noexcept

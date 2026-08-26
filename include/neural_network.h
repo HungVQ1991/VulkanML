@@ -233,6 +233,7 @@ public:
             Execution_Engine &engine = Execution_Engine::getInstance();
             engine.enableGraphCaching(true);
             engine.warmCache(engine.getCurrentGraph());
+            Gpu_Matrix_Impl::distinct_operations_count = engine.getCurrentGraph().getNodeCount();
             engine.getCurrentGraph().clear();
             engine.waitIdle();
         }

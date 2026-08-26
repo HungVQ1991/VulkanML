@@ -19,6 +19,8 @@
 #include "vulkan_context.h"
 #include "vulkan_network.h"
 
+extern bool is_coop;
+
 class Execution_Engine
 {
 private:
@@ -38,6 +40,7 @@ private:
     {
         const auto &nodes = graph.getNodes();
         std::size_t graph_signature_hash = nodes.size();
+        graph_signature_hash ^= static_cast<std::size_t>(is_coop ? 1 : 0) + 0x9e3779b9 + (graph_signature_hash << 6) + (graph_signature_hash >> 2);
 
         for (std::size_t i = 0; i < nodes.size(); ++i)
         {
@@ -101,6 +104,7 @@ private:
                            Log_Feature::DEVICE_MANAGEMENT | Log_Feature::DISPATCH_EXECUTION);
 
         context = std::make_unique<Vulkan_Context>();
+        is_coop = context->isCooperativeMatrixEnabled();
         network = std::make_unique<Vulkan_Network>(*context, shader_folder_path);
         pipeline_cache_manager = std::make_unique<Pipeline_Cache_Manager>(*context, network->getPipelineLayout());
         shader_dictionary = std::make_unique<Shader_Dictionary>("compute_shader/shader_dictionary.json");
@@ -222,6 +226,42 @@ public:
     [[nodiscard]] bool isGraphCacheEnabled() const noexcept
     {
         return is_graph_cache_enabled;
+    }
+
+    [[nodiscard]] bool isCooperativeMatrixSupported() const noexcept
+    {
+        return context && context->isCooperativeMatrixSupported();
+    }
+
+    [[nodiscard]] bool isCooperativeMatrixEnabled() const noexcept
+    {
+        return is_coop;
+    }
+
+    void setCooperativeMatrixEnabled(bool _enable)
+    {
+        if (_enable && (!context || !context->isCooperativeMatrixSupported()))
+        {
+            Logger::logMessage("Execution_Engine::setCooperativeMatrixEnabled: Device does not support Cooperative Matrix",
+                               Log_Level::LOG_WARNING,
+                               true,
+                               0,
+                               Log_Feature::DEVICE_MANAGEMENT);
+            return;
+        }
+
+        if (is_coop == _enable)
+        {
+            return;
+        }
+
+        waitIdle();
+        is_coop = _enable;
+        if (context)
+        {
+            context->setCooperativeMatrixEnabled(_enable);
+        }
+        invalidateGraphCache();
     }
 
     void setGraphCachingEnabled(bool _is_enabled)

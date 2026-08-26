@@ -17,6 +17,8 @@
 #include "helper/magic_enum.hpp"
 #include "vulkan_context.h"
 
+extern bool is_coop;
+
 constexpr std::uint32_t DESCRIPTOR_BINDINGS_COUNT = 32;
 
 enum Compute_Pipeline
@@ -143,10 +145,15 @@ private:
         std::vector<char> shader_code = readSpirvFile(_shader_path);
         VkShaderModule shader_module = createShaderModule(shader_code);
 
+        VkPipelineShaderStageRequiredSubgroupSizeCreateInfo required_subgroup_size_create_information{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO,
+            .pNext = nullptr,
+            .requiredSubgroupSize = 32};
+
         VkPipelineShaderStageCreateInfo shader_stage_create_information{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
+            .pNext = is_coop ? &required_subgroup_size_create_information : nullptr,
+            .flags = is_coop ? VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT : 0u,
             .stage = VK_SHADER_STAGE_COMPUTE_BIT,
             .module = shader_module,
             .pName = "main",
@@ -345,38 +352,38 @@ public:
         cleanUp();
     }
 
-     VkPipelineLayout getPipelineLayout() const noexcept
+    [[nodiscard]] VkPipelineLayout getPipelineLayout() const noexcept
     {
         return pipeline_layout;
     }
 
-     VkDescriptorSetLayout getDescriptorSetLayout() const noexcept
+    [[nodiscard]] VkDescriptorSetLayout getDescriptorSetLayout() const noexcept
     {
         return descriptor_set_layout;
     }
 
-     const std::string &getPipelineFolder() const noexcept
+    [[nodiscard]] const std::string &getPipelineFolder() const noexcept
     {
         return pipeline_folder;
     }
 
-     VkDevice getDevice() const noexcept
+    [[nodiscard]] VkDevice getDevice() const noexcept
     {
         return device;
     }
 
-     const std::array<VkPipeline, Compute_Pipeline::COMPUTE_PIPELINE_END> &getPipelines() const noexcept
+    [[nodiscard]] const std::array<VkPipeline, Compute_Pipeline::COMPUTE_PIPELINE_END> &getPipelines() const noexcept
     {
         return pipelines;
     }
 
-     bool hasPipeline(Compute_Pipeline _pipeline) const noexcept
+    [[nodiscard]] bool hasPipeline(Compute_Pipeline _pipeline) const noexcept
     {
         std::size_t pipeline_index = static_cast<std::size_t>(_pipeline);
         return pipeline_index < pipelines.size() && pipelines[pipeline_index] != VK_NULL_HANDLE;
     }
 
-     VkPipeline getPipeline(Compute_Pipeline _pipeline) const
+    [[nodiscard]] VkPipeline getPipeline(Compute_Pipeline _pipeline) const
     {
         std::size_t pipeline_index = static_cast<std::size_t>(_pipeline);
         if (pipeline_index >= pipelines.size())
