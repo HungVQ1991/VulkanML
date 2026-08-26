@@ -37,13 +37,13 @@ Unlike production frameworks that hide implementation details behind large abstr
 ## Project Architecture
 
 ```
-                             Neural Network
+Neural Network
                                    │
-        ┌─────────────┼────────────┴──────────┼─────────────┐
-        │             |                       |             │
-     Layers     Loss Functions            Optimizer    LR Schedulers
-        │                                                   │
-        └───────────────────────────────────────────────────┘
+    ┌─────────────┬────────────────┴──────────────┬─────────────┐
+    │             │                               │             │
+ Layers     Cost Functions                    Optimizers   LR Schedulers
+    │             │                               │             │
+    └─────────────┴────────────────┬──────────────┴─────────────┘
                                    │
                                Matrix API
                                    │
@@ -51,7 +51,13 @@ Unlike production frameworks that hide implementation details behind large abstr
                   │                                 │
              CPU Backend                     Vulkan Backend
                   │                                 │
-             Native C++                      Compute Shaders
+             Native C++                       Compute Graph
+                                                    │
+                                             Graph Optimizer
+                                          (Operator Fusion JIT)
+                                                    │
+                                             Graph Executor
+                                      (Vulkan Compute Pipelines)
 ```
 
 ---
