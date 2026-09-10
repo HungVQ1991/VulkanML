@@ -63,7 +63,7 @@ private:
     {
         if (_buffers.size() > 16)
         {
-            Logger::logMessage("Gpu_Matrix_Impl::pushToGraph: Exceeded maximum supported buffer count",
+            Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::pushToGraph: Exceeded maximum supported buffer count"},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -100,9 +100,9 @@ private:
             }
 
             is_graph_logging_enabled = Logger::logMessage(
-                std::format("Gpu_Matrix_Impl::pushToGraph: Operation: {} | {}",
-                            magic_enum::enum_name(_pipeline_id),
-                            buffer_trace),
+                Input_Format{"Gpu_Matrix_Impl::pushToGraph: Operation: {} | {}",
+                             magic_enum::enum_name(_pipeline_id),
+                             buffer_trace},
                 Log_Level::LOG_DEBUG,
                 true,
                 distinct_operations_count,
@@ -152,10 +152,10 @@ private:
             .columns = static_cast<std::uint32_t>(columns),
             .is_broadcast = static_cast<std::uint32_t>(is_broadcast_applied ? 1 : 0)};
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::executeElementwise: total_elements={}, columns={}, is_broadcast={}",
-                                       elementwise_dimensions.total_elements,
-                                       elementwise_dimensions.columns,
-                                       elementwise_dimensions.is_broadcast),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::executeElementwise: total_elements={}, columns={}, is_broadcast={}",
+                                        elementwise_dimensions.total_elements,
+                                        elementwise_dimensions.columns,
+                                        elementwise_dimensions.is_broadcast},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -183,7 +183,7 @@ public:
     {
         if (_host_data.size() != _rows * _columns)
         {
-            Logger::logMessage("Gpu_Matrix_Impl::Gpu_Matrix_Impl: Host data size mismatch",
+            Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::Gpu_Matrix_Impl: Host data size mismatch"},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -203,31 +203,31 @@ public:
 
     ~Gpu_Matrix_Impl() noexcept override = default;
 
-     std::size_t getRows() const noexcept override
+    std::size_t getRows() const noexcept override
     {
         return rows;
     }
 
-     std::size_t getColumns() const noexcept override
+    std::size_t getColumns() const noexcept override
     {
         return columns;
     }
 
-     std::size_t getCols() const noexcept override
+    std::size_t getCols() const noexcept override
     {
         return columns;
     }
 
-     const std::vector<float> &getData() const noexcept override
+    const std::vector<float> &getData() const noexcept override
     {
-        Logger::logMessage("Gpu_Matrix_Impl::getData: Reading data from GPU, risk of synchronization stalls",
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::getData: Reading data from GPU, risk of synchronization stalls"},
                            Log_Level::LOG_WARNING,
                            true,
                            1,
                            Log_Feature::MEMORY_TRANSFER);
         if (rows == 0 || columns == 0)
         {
-            Logger::logMessage(std::format("Gpu_Matrix_Impl::getData: Zero dimension encountered (rows={}, columns={})", rows, columns),
+            Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::getData: Zero dimension encountered (rows={}, columns={})", rows, columns},
                                Log_Level::LOG_WARNING,
                                true,
                                0,
@@ -244,27 +244,27 @@ public:
         return host_cache;
     }
 
-     Storage_Handle getStorage() const override
+    Storage_Handle getStorage() const override
     {
         return storage;
     }
 
-     Mutable_Storage_Handle getStorage() override
+    Mutable_Storage_Handle getStorage() override
     {
         return storage;
     }
 
-     std::shared_ptr<gpu::vector> getVector() override
+    std::shared_ptr<gpu::vector> getVector() override
     {
         return storage;
     }
 
-     VkBuffer getBuffer() const noexcept
+    VkBuffer getBuffer() const noexcept
     {
         return storage ? storage->getBuffer() : VK_NULL_HANDLE;
     }
 
-     bool isEmpty() const noexcept override
+    bool isEmpty() const noexcept override
     {
         return !storage || storage->isEmpty();
     }
@@ -301,13 +301,13 @@ public:
             .columns_a = static_cast<std::uint32_t>(columns),
             .columns_b = static_cast<std::uint32_t>(output_gpu.getColumns())};
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::matmul: rows_a={}, columns_a={}, columns_b={}",
-                                       matrix_dimensions.rows_a,
-                                       matrix_dimensions.columns_a,
-                                       matrix_dimensions.columns_b),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::matmul: rows_a={}, columns_a={}, columns_b={}",
+                                        matrix_dimensions.rows_a,
+                                        matrix_dimensions.columns_a,
+                                        matrix_dimensions.columns_b},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::DENSE_COMPUTE);
 
         pushToGraph(Compute_Pipeline::MATMUL,
@@ -339,10 +339,10 @@ public:
             float scalar;
         } constants{total_elements, _scalar};
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::mulScalar: total_elements={}, scalar={}", constants.total_elements, constants.scalar),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::mulScalar: total_elements={}, scalar={}", constants.total_elements, constants.scalar},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::DENSE_COMPUTE);
 
         pushToGraph(Compute_Pipeline::MUL_SCALAR, {storage, output_gpu.storage}, constants, (total_elements + 255) / 256);
@@ -352,7 +352,7 @@ public:
     {
         if (std::abs(_scalar) < 1e-8f)
         {
-            Logger::logMessage("Gpu_Matrix_Impl::divScalar: Division by zero",
+            Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::divScalar: Division by zero"},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -369,10 +369,10 @@ public:
             float scalar;
         } constants{total_elements, 1.0f / _scalar};
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::divScalar: total_elements={}, scalar={}", constants.total_elements, constants.scalar),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::divScalar: total_elements={}, scalar={}", constants.total_elements, constants.scalar},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::DENSE_COMPUTE);
 
         pushToGraph(Compute_Pipeline::MUL_SCALAR, {storage, output_gpu.storage}, constants, (total_elements + 255) / 256);
@@ -397,10 +397,10 @@ public:
             .rows = static_cast<std::uint32_t>(rows),
             .columns = static_cast<std::uint32_t>(columns)};
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::transpose: rows={}, columns={}", transpose_dimensions.rows, transpose_dimensions.columns),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::transpose: rows={}, columns={}", transpose_dimensions.rows, transpose_dimensions.columns},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::DENSE_COMPUTE);
 
         pushToGraph(Compute_Pipeline::TRANSPOSE,
@@ -416,10 +416,10 @@ public:
         output_gpu.reshape(rows, columns);
         std::uint32_t total_elements = static_cast<std::uint32_t>(rows * columns);
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::relu: total_elements={}", total_elements),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::relu: total_elements={}", total_elements},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::ACTIVATION_COMPUTE | Log_Feature::FORWARD_EVALUATION);
 
         pushToGraph(Compute_Pipeline::RELU, {storage, output_gpu.storage}, total_elements, (total_elements + 255) / 256);
@@ -433,10 +433,10 @@ public:
         input_gradient_gpu.reshape(rows, columns);
         std::uint32_t total_elements = static_cast<std::uint32_t>(rows * columns);
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::reluBackward: total_elements={}", total_elements),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::reluBackward: total_elements={}", total_elements},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::ACTIVATION_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
         pushToGraph(Compute_Pipeline::RELU_BACKWARD, {storage, output_gradient_gpu.storage, input_gradient_gpu.storage}, total_elements, (total_elements + 255) / 256);
@@ -448,10 +448,10 @@ public:
         output_gpu.reshape(rows, columns);
         std::uint32_t total_elements = static_cast<std::uint32_t>(rows * columns);
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::gelu: total_elements={}", total_elements),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::gelu: total_elements={}", total_elements},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::ACTIVATION_COMPUTE | Log_Feature::FORWARD_EVALUATION);
 
         pushToGraph(Compute_Pipeline::GELU, {storage, output_gpu.storage}, total_elements, (total_elements + 255) / 256);
@@ -465,10 +465,10 @@ public:
         input_gradient_gpu.reshape(rows, columns);
         std::uint32_t total_elements = static_cast<std::uint32_t>(rows * columns);
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::geluBackward: total_elements={}", total_elements),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::geluBackward: total_elements={}", total_elements},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::ACTIVATION_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
         pushToGraph(Compute_Pipeline::GELU_BACKWARD, {storage, output_gradient_gpu.storage, input_gradient_gpu.storage}, total_elements, (total_elements + 255) / 256);
@@ -486,10 +486,10 @@ public:
             std::uint32_t dimension_size;
         } constants{dimension_size};
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::inverse: dimension_size={}", constants.dimension_size),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::inverse: dimension_size={}", constants.dimension_size},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::DENSE_COMPUTE);
 
         pushToGraph(Compute_Pipeline::MATRIX_INVERSE, {storage, output_gpu.storage}, constants, 1, 1, 1);
@@ -506,10 +506,10 @@ public:
             std::uint32_t total_elements;
         } constants{total_elements};
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::normalize: total_elements={}", constants.total_elements),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::normalize: total_elements={}", constants.total_elements},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::NORMALIZATION_COMPUTE);
 
         pushToGraph(Compute_Pipeline::NORMALIZE, {storage, output_gpu.storage}, constants, 1, 1, 1);
@@ -526,10 +526,10 @@ public:
             std::uint32_t columns;
         } constants{static_cast<std::uint32_t>(rows), static_cast<std::uint32_t>(columns)};
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::softmax: rows={}, columns={}", constants.rows, constants.columns),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::softmax: rows={}, columns={}", constants.rows, constants.columns},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::ACTIVATION_COMPUTE | Log_Feature::FORWARD_EVALUATION);
 
         pushToGraph(Compute_Pipeline::SOFTMAX, {storage, output_gpu.storage}, constants, constants.rows, 1, 1);
@@ -548,10 +548,10 @@ public:
             std::uint32_t columns;
         } constants{static_cast<std::uint32_t>(rows), static_cast<std::uint32_t>(columns)};
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::softmaxBackward: rows={}, columns={}", constants.rows, constants.columns),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::softmaxBackward: rows={}, columns={}", constants.rows, constants.columns},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::ACTIVATION_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
         pushToGraph(Compute_Pipeline::SOFTMAX_BACKWARD, {storage, output_gradient_gpu.storage, input_gradient_gpu.storage}, constants, constants.rows, 1, 1);
@@ -570,10 +570,10 @@ public:
             float max_gradient;
         } constants{total_elements, _learning_rate, _max_gradient};
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::sgdUpdate: total_elements={}, learning_rate={}, max_gradient={}",
-                                       constants.total_elements,
-                                       constants.learning_rate,
-                                       constants.max_gradient),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::sgdUpdate: total_elements={}, learning_rate={}, max_gradient={}",
+                                        constants.total_elements,
+                                        constants.learning_rate,
+                                        constants.max_gradient},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -624,15 +624,15 @@ public:
                     1.0f / bias_correction_first,
                     1.0f / std::sqrt(bias_correction_second)};
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::adamUpdate: total_elements={}, learning_rate={}, beta1={}, beta2={}, epsilon={}, max_gradient={}, inv_first={}, inv_sqrt_second={}",
-                                       constants.total_elements,
-                                       constants.learning_rate,
-                                       constants.beta1,
-                                       constants.beta2,
-                                       constants.epsilon,
-                                       constants.max_gradient,
-                                       constants.inverse_bias_correction_first,
-                                       constants.inverse_sqrt_bias_correction_second),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::adamUpdate: total_elements={}, learning_rate={}, beta1={}, beta2={}, epsilon={}, max_gradient={}, inv_first={}, inv_sqrt_second={}",
+                                        constants.total_elements,
+                                        constants.learning_rate,
+                                        constants.beta1,
+                                        constants.beta2,
+                                        constants.epsilon,
+                                        constants.max_gradient,
+                                        constants.inverse_bias_correction_first,
+                                        constants.inverse_sqrt_bias_correction_second},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -660,7 +660,7 @@ public:
 
         if (biases_gpu.getRows() != 1 && biases_gpu.getRows() != rows)
         {
-            Logger::logMessage(std::format("Gpu_Matrix_Impl::matmulAdd: Bias rows mismatch (expected 1 or {}, got {})", rows, biases_gpu.getRows()),
+            Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::matmulAdd: Bias rows mismatch (expected 1 or {}, got {})", rows, biases_gpu.getRows()},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -669,7 +669,7 @@ public:
         }
         if (biases_gpu.getColumns() != weights_gpu.getColumns())
         {
-            Logger::logMessage(std::format("Gpu_Matrix_Impl::matmulAdd: Bias columns mismatch (expected {}, got {})", weights_gpu.getColumns(), biases_gpu.getColumns()),
+            Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::matmulAdd: Bias columns mismatch (expected {}, got {})", weights_gpu.getColumns(), biases_gpu.getColumns()},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -690,14 +690,14 @@ public:
                     static_cast<std::uint32_t>(weights_gpu.columns),
                     0};
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::matmulAdd: rows_x={}, columns_x={}, columns_w={}, padding={}",
-                                       constants.rows_x,
-                                       constants.columns_x,
-                                       constants.columns_weights,
-                                       constants.padding),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::matmulAdd: rows_x={}, columns_x={}, columns_w={}, padding={}",
+                                        constants.rows_x,
+                                        constants.columns_x,
+                                        constants.columns_weights,
+                                        constants.padding},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::DENSE_COMPUTE);
 
         pushToGraph(Compute_Pipeline::MATMUL_ADD,
@@ -737,20 +737,20 @@ public:
             std::uint32_t padding;
         } constants{batch_size, _input_height, _input_width, _input_channels, output_height, output_width, _output_channels, _kernel_size, _stride, _padding};
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::conv2d: batch_size={}, input_height={}, input_width={}, input_channels={}, output_height={}, output_width={}, output_channels={}, kernel_size={}, stride={}, padding={}",
-                                       constants.batch_size,
-                                       constants.input_height,
-                                       constants.input_width,
-                                       constants.input_channels,
-                                       constants.output_height,
-                                       constants.output_width,
-                                       constants.output_channels,
-                                       constants.kernel_size,
-                                       constants.stride,
-                                       constants.padding),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::conv2d: batch_size={}, input_height={}, input_width={}, input_channels={}, output_height={}, output_width={}, output_channels={}, kernel_size={}, stride={}, padding={}",
+                                        constants.batch_size,
+                                        constants.input_height,
+                                        constants.input_width,
+                                        constants.input_channels,
+                                        constants.output_height,
+                                        constants.output_width,
+                                        constants.output_channels,
+                                        constants.kernel_size,
+                                        constants.stride,
+                                        constants.padding},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::CONV2D_COMPUTE | Log_Feature::FORWARD_EVALUATION);
 
         pushToGraph(Compute_Pipeline::CONV2D_FORWARD_PASS,
@@ -787,20 +787,20 @@ public:
             std::uint32_t padding;
         } constants{batch_size, _input_height, _input_width, _input_channels, _output_height, _output_width, _output_channels, _kernel_size, _stride, _padding};
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::conv2dBackwardInput: batch_size={}, input_height={}, input_width={}, input_channels={}, output_height={}, output_width={}, output_channels={}, kernel_size={}, stride={}, padding={}",
-                                       constants.batch_size,
-                                       constants.input_height,
-                                       constants.input_width,
-                                       constants.input_channels,
-                                       constants.output_height,
-                                       constants.output_width,
-                                       constants.output_channels,
-                                       constants.kernel_size,
-                                       constants.stride,
-                                       constants.padding),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::conv2dBackwardInput: batch_size={}, input_height={}, input_width={}, input_channels={}, output_height={}, output_width={}, output_channels={}, kernel_size={}, stride={}, padding={}",
+                                        constants.batch_size,
+                                        constants.input_height,
+                                        constants.input_width,
+                                        constants.input_channels,
+                                        constants.output_height,
+                                        constants.output_width,
+                                        constants.output_channels,
+                                        constants.kernel_size,
+                                        constants.stride,
+                                        constants.padding},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::CONV2D_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
         pushToGraph(Compute_Pipeline::CONV2D_BACKWARD_PASS_INPUT_GRADIENT,
@@ -839,20 +839,20 @@ public:
             std::uint32_t padding;
         } constants{batch_size, _input_height, _input_width, _input_channels, _output_height, _output_width, _output_channels, _kernel_size, _stride, _padding};
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::conv2dBackwardWeight: batch_size={}, input_height={}, input_width={}, input_channels={}, output_height={}, output_width={}, output_channels={}, kernel_size={}, stride={}, padding={}",
-                                       constants.batch_size,
-                                       constants.input_height,
-                                       constants.input_width,
-                                       constants.input_channels,
-                                       constants.output_height,
-                                       constants.output_width,
-                                       constants.output_channels,
-                                       constants.kernel_size,
-                                       constants.stride,
-                                       constants.padding),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::conv2dBackwardWeight: batch_size={}, input_height={}, input_width={}, input_channels={}, output_height={}, output_width={}, output_channels={}, kernel_size={}, stride={}, padding={}",
+                                        constants.batch_size,
+                                        constants.input_height,
+                                        constants.input_width,
+                                        constants.input_channels,
+                                        constants.output_height,
+                                        constants.output_width,
+                                        constants.output_channels,
+                                        constants.kernel_size,
+                                        constants.stride,
+                                        constants.padding},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::CONV2D_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
         pushToGraph(Compute_Pipeline::CONV2D_BACKWARD_PASS_WEIGHT_BIAS_GRADIENT,
@@ -891,19 +891,19 @@ public:
             std::uint32_t padding;
         } constants{batch_size, _input_height, _input_width, _channels, output_height, output_width, _kernel_size, _stride, _padding};
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::maxpool2d: batch_size={}, input_height={}, input_width={}, channels={}, output_height={}, output_width={}, kernel_size={}, stride={}, padding={}",
-                                       constants.batch_size,
-                                       constants.input_height,
-                                       constants.input_width,
-                                       constants.channels,
-                                       constants.output_height,
-                                       constants.output_width,
-                                       constants.kernel_size,
-                                       constants.stride,
-                                       constants.padding),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::maxpool2d: batch_size={}, input_height={}, input_width={}, channels={}, output_height={}, output_width={}, kernel_size={}, stride={}, padding={}",
+                                        constants.batch_size,
+                                        constants.input_height,
+                                        constants.input_width,
+                                        constants.channels,
+                                        constants.output_height,
+                                        constants.output_width,
+                                        constants.kernel_size,
+                                        constants.stride,
+                                        constants.padding},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::POOLING_COMPUTE | Log_Feature::FORWARD_EVALUATION);
 
         pushToGraph(Compute_Pipeline::MAXPOOL2D_FORWARD,
@@ -939,19 +939,19 @@ public:
             std::uint32_t padding;
         } constants{batch_size, _input_height, _input_width, _channels, _output_height, _output_width, _kernel_size, _stride, _padding};
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::maxpool2dBackward: batch_size={}, input_height={}, input_width={}, channels={}, output_height={}, output_width={}, kernel_size={}, stride={}, padding={}",
-                                       constants.batch_size,
-                                       constants.input_height,
-                                       constants.input_width,
-                                       constants.channels,
-                                       constants.output_height,
-                                       constants.output_width,
-                                       constants.kernel_size,
-                                       constants.stride,
-                                       constants.padding),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::maxpool2dBackward: batch_size={}, input_height={}, input_width={}, channels={}, output_height={}, output_width={}, kernel_size={}, stride={}, padding={}",
+                                        constants.batch_size,
+                                        constants.input_height,
+                                        constants.input_width,
+                                        constants.channels,
+                                        constants.output_height,
+                                        constants.output_width,
+                                        constants.kernel_size,
+                                        constants.stride,
+                                        constants.padding},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::POOLING_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
         pushToGraph(Compute_Pipeline::MAXPOOL2D_BACKWARD,
@@ -976,14 +976,14 @@ public:
             std::uint32_t channels;
         } constants{batch_size, _input_height, _input_width, _channels};
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::globalAvgPool2d: batch_size={}, input_height={}, input_width={}, channels={}",
-                                       constants.batch_size,
-                                       constants.input_height,
-                                       constants.input_width,
-                                       constants.channels),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::globalAvgPool2d: batch_size={}, input_height={}, input_width={}, channels={}",
+                                        constants.batch_size,
+                                        constants.input_height,
+                                        constants.input_width,
+                                        constants.channels},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::POOLING_COMPUTE | Log_Feature::FORWARD_EVALUATION);
 
         pushToGraph(Compute_Pipeline::GLOBAL_AVGPOOL_FORWARD, {storage, output_gpu.storage}, constants, (_channels + 255) / 256, batch_size, 1);
@@ -1003,14 +1003,14 @@ public:
             std::uint32_t channels;
         } constants{batch_size, _input_height, _input_width, _channels};
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::globalAvgPool2dBackward: batch_size={}, input_height={}, input_width={}, channels={}",
-                                       constants.batch_size,
-                                       constants.input_height,
-                                       constants.input_width,
-                                       constants.channels),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::globalAvgPool2dBackward: batch_size={}, input_height={}, input_width={}, channels={}",
+                                        constants.batch_size,
+                                        constants.input_height,
+                                        constants.input_width,
+                                        constants.channels},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::POOLING_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
         pushToGraph(Compute_Pipeline::GLOBAL_AVGPOOL_BACKWARD, {storage, input_gradient_gpu.storage}, constants, (_channels + 15) / 16, (_input_width + 15) / 16, batch_size * _input_height);
@@ -1033,11 +1033,11 @@ public:
         output_gpu.reshape(batch_count, feature_dimension);
         normalized_input_gpu.reshape(batch_count, feature_dimension);
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::batchNormForward: batch_count={}, feature_dimension={}, momentum={}, epsilon={}, is_training={}",
-                                       batch_count, feature_dimension, _momentum, _epsilon, _is_training),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::batchNormForward: batch_count={}, feature_dimension={}, momentum={}, epsilon={}, is_training={}",
+                                        batch_count, feature_dimension, _momentum, _epsilon, _is_training},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::NORMALIZATION_COMPUTE | Log_Feature::FORWARD_EVALUATION);
 
         if (_is_training)
@@ -1113,11 +1113,11 @@ public:
         beta_gradient_gpu.reshape(1, feature_dimension);
         input_gradient_gpu.reshape(batch_count, feature_dimension);
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::batchNormBackward: batch_count={}, feature_dimension={}, epsilon={}",
-                                       batch_count, feature_dimension, _epsilon),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::batchNormBackward: batch_count={}, feature_dimension={}, epsilon={}",
+                                        batch_count, feature_dimension, _epsilon},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::NORMALIZATION_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
         struct BatchNorm_Backward_Stats_Push_Constants
@@ -1158,7 +1158,7 @@ public:
 
         if (biases_gpu.getRows() != 1 && biases_gpu.getRows() != rows)
         {
-            Logger::logMessage(std::format("Gpu_Matrix_Impl::linearForward: Bias rows mismatch (expected 1 or {}, got {})", rows, biases_gpu.getRows()),
+            Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::linearForward: Bias rows mismatch (expected 1 or {}, got {})", rows, biases_gpu.getRows()},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -1167,7 +1167,7 @@ public:
         }
         if (biases_gpu.getColumns() != weights_gpu.getColumns())
         {
-            Logger::logMessage(std::format("Gpu_Matrix_Impl::linearForward: Bias columns mismatch (expected {}, got {})", weights_gpu.getColumns(), biases_gpu.getColumns()),
+            Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::linearForward: Bias columns mismatch (expected {}, got {})", weights_gpu.getColumns(), biases_gpu.getColumns()},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -1188,13 +1188,13 @@ public:
                     static_cast<std::uint32_t>(weights_gpu.columns),
                     0};
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::linearForward: batch_size={}, input_dimension={}, output_dimension={}",
-                                       constants.rows_x,
-                                       constants.columns_x,
-                                       constants.columns_weights),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::linearForward: batch_size={}, input_dimension={}, output_dimension={}",
+                                        constants.rows_x,
+                                        constants.columns_x,
+                                        constants.columns_weights},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::DENSE_COMPUTE | Log_Feature::FORWARD_EVALUATION);
 
         pushToGraph(Compute_Pipeline::MATMUL_ADD,
@@ -1212,7 +1212,7 @@ public:
 
         if (columns != weights_gpu.getColumns())
         {
-            Logger::logMessage(std::format("Gpu_Matrix_Impl::linearBackwardInput: Output gradient columns ({}) mismatch with weights columns ({})", columns, weights_gpu.getColumns()),
+            Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::linearBackwardInput: Output gradient columns ({}) mismatch with weights columns ({})", columns, weights_gpu.getColumns()},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -1231,13 +1231,13 @@ public:
                     static_cast<std::uint32_t>(weights_gpu.rows),
                     static_cast<std::uint32_t>(columns)};
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::linearBackwardInput: batch_size={}, input_dimension={}, output_dimension={}",
-                                       constants.batch_size,
-                                       constants.input_dimension,
-                                       constants.output_dimension),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::linearBackwardInput: batch_size={}, input_dimension={}, output_dimension={}",
+                                        constants.batch_size,
+                                        constants.input_dimension,
+                                        constants.output_dimension},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::DENSE_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
         pushToGraph(Compute_Pipeline::LINEAR_BACKWARD_INPUT,
@@ -1256,7 +1256,7 @@ public:
 
         if (rows != output_gradient_gpu.getRows())
         {
-            Logger::logMessage(std::format("Gpu_Matrix_Impl::linearBackwardWeightBias: Batch size mismatch between input ({}) and output gradient ({})", rows, output_gradient_gpu.getRows()),
+            Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::linearBackwardWeightBias: Batch size mismatch between input ({}) and output gradient ({})", rows, output_gradient_gpu.getRows()},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -1276,13 +1276,13 @@ public:
                     static_cast<std::uint32_t>(columns),
                     static_cast<std::uint32_t>(output_gradient_gpu.columns)};
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::linearBackwardWeightBias: batch_size={}, input_dimension={}, output_dimension={}",
-                                       constants.batch_size,
-                                       constants.input_dimension,
-                                       constants.output_dimension),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::linearBackwardWeightBias: batch_size={}, input_dimension={}, output_dimension={}",
+                                        constants.batch_size,
+                                        constants.input_dimension,
+                                        constants.output_dimension},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::DENSE_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
         pushToGraph(Compute_Pipeline::LINEAR_BACKWARD_WEIGHT_BIAS,
@@ -1314,11 +1314,11 @@ public:
         output_gpu.reshape(batch_size, total_features);
         normalized_input_gpu.reshape(batch_size, total_features);
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::batchNorm2dForward: batch_size={}, input_channels={}, input_height={}, input_width={}, momentum={}, epsilon={}, is_training={}",
-                                       batch_size, _input_channels, _input_height, _input_width, _momentum, _epsilon, _is_training),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::batchNorm2dForward: batch_size={}, input_channels={}, input_height={}, input_width={}, momentum={}, epsilon={}, is_training={}",
+                                        batch_size, _input_channels, _input_height, _input_width, _momentum, _epsilon, _is_training},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::NORMALIZATION_COMPUTE | Log_Feature::FORWARD_EVALUATION);
 
         if (_is_training)
@@ -1394,11 +1394,11 @@ public:
         gamma_gradient_gpu.reshape(1, _input_channels);
         beta_gradient_gpu.reshape(1, _input_channels);
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::batchNorm2dBackward: batch_size={}, input_channels={}, input_height={}, input_width={}, epsilon={}",
-                                       batch_size, _input_channels, _input_height, _input_width, _epsilon),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::batchNorm2dBackward: batch_size={}, input_channels={}, input_height={}, input_width={}, epsilon={}",
+                                        batch_size, _input_channels, _input_height, _input_width, _epsilon},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::NORMALIZATION_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
         struct BatchNorm2d_Backward_Stats_Push_Constants
@@ -1447,10 +1447,10 @@ public:
             float epsilon;
         } constants{total_elements, _epsilon};
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::cceLoss: total_elements={}, epsilon={}", constants.total_elements, constants.epsilon),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::cceLoss: total_elements={}, epsilon={}", constants.total_elements, constants.epsilon},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::LOSS_COMPUTE);
 
         pushToGraph(Compute_Pipeline::CCE_LOSS, {storage, target_gpu.storage, output_gpu.storage}, constants, workgroup_count_x, 1, 1);
@@ -1471,10 +1471,10 @@ public:
             std::uint32_t total_elements;
         } constants{total_elements};
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::mseLoss: total_elements={}", constants.total_elements),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::mseLoss: total_elements={}", constants.total_elements},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::LOSS_COMPUTE);
 
         pushToGraph(Compute_Pipeline::MSE_LOSS, {storage, target_gpu.storage, output_gpu.storage}, constants, workgroup_count_x, 1, 1);
@@ -1495,10 +1495,10 @@ public:
             std::uint32_t total_elements;
         } constants{total_elements};
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::maeLoss: total_elements={}", constants.total_elements),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::maeLoss: total_elements={}", constants.total_elements},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::LOSS_COMPUTE);
 
         pushToGraph(Compute_Pipeline::MAE_LOSS, {storage, target_gpu.storage, output_gpu.storage}, constants, workgroup_count_x, 1, 1);
@@ -1520,20 +1520,45 @@ public:
             float epsilon;
         } constants{total_elements, _epsilon};
 
-        Logger::logMessage(std::format("Gpu_Matrix_Impl::bceLoss: total_elements={}, epsilon={}", constants.total_elements, constants.epsilon),
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::bceLoss: total_elements={}, epsilon={}", constants.total_elements, constants.epsilon},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::LOSS_COMPUTE);
 
         pushToGraph(Compute_Pipeline::BCE_LOSS, {storage, target_gpu.storage, output_gpu.storage}, constants, workgroup_count_x, 1, 1);
+    }
+
+    void huberLoss(const Impl &_target_implementation, Impl &_output_result, float _delta) const override
+    {
+        validateSameDimensions(_target_implementation);
+        const auto &target_gpu = castToGpuMatrix(_target_implementation, "Gpu_Matrix_Impl::huberLoss: Invalid target matrix");
+        auto &output_gpu = castToGpuMatrix(_output_result, "Gpu_Matrix_Impl::huberLoss: Invalid output matrix");
+
+        std::uint32_t total_elements = static_cast<std::uint32_t>(rows * columns);
+        std::uint32_t workgroup_count_x = (total_elements + 255) / 256;
+        output_gpu.reshape(1, workgroup_count_x);
+
+        struct Huber_Loss_Push_Constants
+        {
+            std::uint32_t total_elements;
+            float delta;
+        } constants{total_elements, _delta};
+
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::huberLoss: total_elements={}, delta={}", constants.total_elements, constants.delta},
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           1,
+                           Log_Feature::LOSS_COMPUTE);
+
+        pushToGraph(Compute_Pipeline::HUBER_LOSS, {storage, target_gpu.storage, output_gpu.storage}, constants, workgroup_count_x, 1, 1);
     }
 
     void uploadData(const std::vector<float> &_host_data) override
     {
         if (_host_data.size() != rows * columns)
         {
-            Logger::logMessage("Gpu_Matrix_Impl::uploadData: Host data size mismatch",
+            Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::uploadData: Host data size mismatch"},
                                Log_Level::LOG_ERROR,
                                true,
                                0,

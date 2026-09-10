@@ -58,6 +58,9 @@ private:
         case Cost_Type::CCE:
             cost_function = std::make_unique<Cce_Cost>(1e-7f, _execution_target);
             break;
+        case Cost_Type::HUBER:
+            cost_function = std::make_unique<Huber_Cost>(1.0f, _execution_target);
+            break;
         default:
             Logger::logMessage("Training_Context::createCostFunction: Unknown cost type",
                                Log_Level::LOG_ERROR,
@@ -180,7 +183,12 @@ private:
 public:
     Training_Context() = default;
 
-     std::size_t getCurrentEpoch() const noexcept
+    Training_Context(const Training_Context &) = delete;
+    Training_Context &operator=(const Training_Context &) = delete;
+    Training_Context(Training_Context &&) noexcept = default;
+    Training_Context &operator=(Training_Context &&) noexcept = default;
+
+    std::size_t getCurrentEpoch() const noexcept
     {
         return current_epoch;
     }
@@ -190,42 +198,42 @@ public:
         current_epoch = _epoch;
     }
 
-     ICost_Function &getCostFunction()
+    ICost_Function &getCostFunction()
     {
         return *cost_function;
     }
 
-     const ICost_Function &getCostFunction() const
+    const ICost_Function &getCostFunction() const
     {
         return *cost_function;
     }
 
-     ILearning_Rate &getLearningRate()
+    ILearning_Rate &getLearningRate()
     {
         return *learning_rate_scheduler;
     }
 
-     const ILearning_Rate &getLearningRate() const
+    const ILearning_Rate &getLearningRate() const
     {
         return *learning_rate_scheduler;
     }
 
-     ILearning_Rate &getLearningRateScheduler()
+    ILearning_Rate &getLearningRateScheduler()
     {
         return *learning_rate_scheduler;
     }
 
-     const ILearning_Rate &getLearningRateScheduler() const
+    const ILearning_Rate &getLearningRateScheduler() const
     {
         return *learning_rate_scheduler;
     }
 
-     IOptimizer &getOptimizer()
+    IOptimizer &getOptimizer()
     {
         return *optimizer;
     }
 
-     const IOptimizer &getOptimizer() const
+    const IOptimizer &getOptimizer() const
     {
         return *optimizer;
     }
@@ -378,6 +386,32 @@ public:
             _input_file_stream.read(reinterpret_cast<char *>(&stride), sizeof(stride));
             _input_file_stream.read(reinterpret_cast<char *>(&padding), sizeof(padding));
             return std::make_unique<Max_Pool_2d_Layer>(input_height, input_width, channels, kernel_size, stride, padding, _execution_target);
+        }
+        case Layer_Type::RES_NET_BLOCK_2D:
+        {
+            std::uint32_t input_height = 0;
+            std::uint32_t input_width = 0;
+            std::uint32_t input_channels = 0;
+            std::uint32_t output_channels = 0;
+            std::uint32_t stride = 0;
+            _input_file_stream.read(reinterpret_cast<char *>(&input_height), sizeof(input_height));
+            _input_file_stream.read(reinterpret_cast<char *>(&input_width), sizeof(input_width));
+            _input_file_stream.read(reinterpret_cast<char *>(&input_channels), sizeof(input_channels));
+            _input_file_stream.read(reinterpret_cast<char *>(&output_channels), sizeof(output_channels));
+            _input_file_stream.read(reinterpret_cast<char *>(&stride), sizeof(stride));
+            return std::make_unique<Res_Net_Block_2d_Layer>(input_height, input_width, input_channels, output_channels, stride, _execution_target);
+        }
+        case Layer_Type::RES_NET_20:
+        {
+            std::uint32_t input_height = 0;
+            std::uint32_t input_width = 0;
+            std::uint32_t input_channels = 0;
+            std::uint32_t num_classes = 0;
+            _input_file_stream.read(reinterpret_cast<char *>(&input_height), sizeof(input_height));
+            _input_file_stream.read(reinterpret_cast<char *>(&input_width), sizeof(input_width));
+            _input_file_stream.read(reinterpret_cast<char *>(&input_channels), sizeof(input_channels));
+            _input_file_stream.read(reinterpret_cast<char *>(&num_classes), sizeof(num_classes));
+            return std::make_unique<Res_Net_20_Layer>(input_height, input_width, input_channels, num_classes, _execution_target);
         }
         case Layer_Type::SOFTMAX:
         {

@@ -14,7 +14,12 @@
 #include <vulkan/vulkan.h>
 
 #include "helper/logger.h"
+#include "helper/magic_enum.hpp"
 #include "vulkan_sub_allocator.h"
+
+#ifndef IS_VULKAN_DEBUG_VALIDATION
+#define IS_VULKAN_DEBUG_VALIDATION 0
+#endif
 
 constexpr bool IS_DEBUG_VALIDATION_ENABLED = false;
 constexpr std::uint32_t MAX_FRAMES_IN_FLIGHT = 2;
@@ -141,6 +146,8 @@ private:
             .pfnUserCallback = debugCallback,
             .pUserData = nullptr};
 
+#if IS_VULKAN_DEBUG_VALIDATION
+#endif
         VkInstanceCreateInfo create_information{
             .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
             .pNext = IS_DEBUG_VALIDATION_ENABLED ? &debug_create_information : nullptr,
@@ -224,7 +231,13 @@ private:
 
         std::vector<VkPhysicalDevice> devices(device_count);
         vkEnumeratePhysicalDevices(instance, &device_count, devices.data());
+        for (VkPhysicalDevice dev : devices)
+        {
+            VkPhysicalDeviceProperties prop;
+            vkGetPhysicalDeviceProperties(dev, &prop);
+            std::cout << prop.deviceName << "\n";
 
+        }
         constexpr std::array<std::size_t, 5> priority_order = {2, 1, 3, 4, 0};
         VkPhysicalDevice best_device = VK_NULL_HANDLE;
         std::uint32_t best_compute_family_index = 0;
@@ -275,7 +288,9 @@ private:
                                Log_Feature::DEVICE_MANAGEMENT);
             throw std::runtime_error("Failed to find a suitable GPU");
         }
-
+        VkPhysicalDeviceProperties prop;
+        vkGetPhysicalDeviceProperties(best_device, &prop);
+        std::cout << static_cast<std::string>(magic_enum::enum_name<VkPhysicalDeviceType>(prop.deviceType))<< "\n";
         physical_device = best_device;
         compute_queue_family_index = best_compute_family_index;
     }
@@ -576,23 +591,23 @@ public:
         }
     }
 
-    [[nodiscard]] VkInstance getInstance() const noexcept { return instance; }
-    [[nodiscard]] VkPhysicalDevice getPhysicalDevice() const noexcept { return physical_device; }
-    [[nodiscard]] VkDevice getDevice() const noexcept { return device; }
-    [[nodiscard]] VkQueue getComputeQueue() const noexcept { return compute_queue; }
-    [[nodiscard]] VkCommandPool getCommandPool() const noexcept { return command_pool; }
-    [[nodiscard]] std::uint32_t getComputeQueueFamilyIndex() const noexcept { return compute_queue_family_index; }
-    [[nodiscard]] VkPipelineCache getPipelineCache() const noexcept { return pipeline_cache; }
-    [[nodiscard]] Vulkan_Sub_Allocator &getAllocator() const noexcept { return *allocator; }
-    [[nodiscard]] VkFence getFrameFence(std::uint32_t _frame_index) const noexcept { return fences[_frame_index]; }
-    [[nodiscard]] std::uint32_t getCurrentFrame() const noexcept { return current_frame; }
-    [[nodiscard]] bool isFrameReady(std::uint32_t _frame_index) const noexcept { return is_frame_ready[_frame_index]; }
-    [[nodiscard]] VkBuffer getStagingBuffer(std::uint32_t _frame_index) const noexcept { return staging_buffers[_frame_index]; }
-    [[nodiscard]] VkDeviceSize getStagingCapacity(std::uint32_t _frame_index) const noexcept { return staging_capacities[_frame_index]; }
-    [[nodiscard]] VkDeviceSize getCurrentStagingOffset(std::uint32_t _frame_index) const noexcept { return current_offsets[_frame_index]; }
-    [[nodiscard]] bool isCooperativeMatrixSupported() const noexcept { return is_cooperative_matrix_supported; }
-    [[nodiscard]] bool isCooperativeMatrixEnabled() const noexcept { return is_cooperative_matrix_supported && is_cooperative_matrix_enabled; }
-    [[nodiscard]] const VkCooperativeMatrixPropertiesKHR &getCooperativeMatrixProperties() const noexcept { return cooperative_matrix_properties; }
+     VkInstance getInstance() const noexcept { return instance; }
+     VkPhysicalDevice getPhysicalDevice() const noexcept { return physical_device; }
+     VkDevice getDevice() const noexcept { return device; }
+     VkQueue getComputeQueue() const noexcept { return compute_queue; }
+     VkCommandPool getCommandPool() const noexcept { return command_pool; }
+     std::uint32_t getComputeQueueFamilyIndex() const noexcept { return compute_queue_family_index; }
+     VkPipelineCache getPipelineCache() const noexcept { return pipeline_cache; }
+     Vulkan_Sub_Allocator &getAllocator() const noexcept { return *allocator; }
+     VkFence getFrameFence(std::uint32_t _frame_index) const noexcept { return fences[_frame_index]; }
+     std::uint32_t getCurrentFrame() const noexcept { return current_frame; }
+     bool isFrameReady(std::uint32_t _frame_index) const noexcept { return is_frame_ready[_frame_index]; }
+     VkBuffer getStagingBuffer(std::uint32_t _frame_index) const noexcept { return staging_buffers[_frame_index]; }
+     VkDeviceSize getStagingCapacity(std::uint32_t _frame_index) const noexcept { return staging_capacities[_frame_index]; }
+     VkDeviceSize getCurrentStagingOffset(std::uint32_t _frame_index) const noexcept { return current_offsets[_frame_index]; }
+     bool isCooperativeMatrixSupported() const noexcept { return is_cooperative_matrix_supported; }
+     bool isCooperativeMatrixEnabled() const noexcept { return is_cooperative_matrix_supported && is_cooperative_matrix_enabled; }
+     const VkCooperativeMatrixPropertiesKHR &getCooperativeMatrixProperties() const noexcept { return cooperative_matrix_properties; }
 
     void setCooperativeMatrixEnabled(bool _enable) noexcept
     {

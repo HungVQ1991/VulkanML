@@ -222,6 +222,8 @@ public:
         return final_output;
     }
 
+    Execution_Target getExecutionTarget() const override { return execution_target; }
+
     std::vector<std::pair<Matrix *, Matrix *>> getParametersAndGradients() override
     {
         return cached_parameters_and_gradients;

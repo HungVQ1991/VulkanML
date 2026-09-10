@@ -11,6 +11,7 @@
 
 #include "cost_function/bce_cost.h"
 #include "cost_function/cce_cost.h"
+#include "cost_function/huber_cost.h"
 #include "cost_function/mae_cost.h"
 #include "cost_function/mse_cost.h"
 #include "engine/async_data_pipeline.h"
@@ -40,6 +41,9 @@
 #include "neural_network.h"
 #include "optimizer/adam_optimizer.h"
 #include "optimizer/sgd_optimizer.h"
+#include "rl/dqn_agent.h"
+#include "rl/replay_buffer.h"
+#include "rl/transition.h"
 
 bool nearlyEqual(float a, float b, float eps = 1e-3f)
 {
@@ -254,6 +258,21 @@ bool testCceLoss(Execution_Target exec_target)
 
     Matrix grad_matrix = cost_func.computeGradient(pred, target);
     bool grad_ok = verifyMatrix(grad_matrix, {-0.3f, 0.2f, 0.1f});
+
+    return loss_ok && grad_ok;
+}
+
+bool testHuberLoss(Execution_Target exec_target)
+{
+    Huber_Cost cost_func(1.0f, exec_target);
+    Matrix pred(1, 3, {1.0f, 2.0f, 5.0f}, exec_target);
+    Matrix target(1, 3, {1.5f, 4.0f, 2.0f}, exec_target);
+
+    float loss_val = cost_func.computeLoss(pred, target);
+    bool loss_ok = nearlyEqual(loss_val, 1.375f);
+
+    Matrix grad_matrix = cost_func.computeGradient(pred, target);
+    bool grad_ok = verifyMatrix(grad_matrix, {-0.166667f, -0.333333f, 0.333333f});
 
     return loss_ok && grad_ok;
 }
@@ -589,7 +608,6 @@ bool testOperatorFusionAndGraphExecution()
     }
 
     engine.executeGraph();
-    std::vector<float> res_data = mat_relu.getData();
 
     return verifyMatrix(mat_relu, {3.0f, 5.0f, 7.0f, 9.0f});
 }
@@ -624,6 +642,88 @@ bool testAsyncDataPipeline()
     return b1_ok && b2_ok;
 }
 
+bool testReplayBuffer()
+{
+    constexpr std::size_t capacity = 4;
+    Replay_Buffer buffer(capacity, 1337);
+
+    if (buffer.getSize() != 0 || buffer.getCapacity() != capacity || buffer.isReady(1))
+    {
+        return false;
+    }
+
+    for (std::size_t i = 0; i < 5; ++i)
+    {
+        buffer.push(Transition{
+            .state = {static_cast<float>(i), static_cast<float>(i + 1)},
+            .action = i % 2,
+            .reward = static_cast<float>(i) * 0.5f,
+            .next_state = {static_cast<float>(i + 1), static_cast<float>(i + 2)},
+            .is_terminal = (i == 4)});
+    }
+
+    if (buffer.getSize() != capacity || !buffer.isReady(capacity) || buffer.isReady(capacity + 1))
+    {
+        return false;
+    }
+
+    Transition_Batch batch = buffer.sample(2);
+    bool batch_dim_ok = (batch.batch_size == 2 && batch.state_dimension == 2 &&
+                         batch.states.size() == 4 && batch.next_states.size() == 4 &&
+                         batch.actions.size() == 2 && batch.rewards.size() == 2 &&
+                         batch.terminals.size() == 2);
+
+    buffer.clear();
+    bool clear_ok = (buffer.getSize() == 0 && !buffer.isReady(1));
+
+    return batch_dim_ok && clear_ok;
+}
+
+bool testDqnAgent(Execution_Target exec_target)
+{
+    constexpr std::size_t state_dim = 2;
+    constexpr std::size_t action_dim = 2;
+
+    Neural_Network q_net(exec_target);
+    q_net.addLayer<Linear_Layer>(state_dim, action_dim, exec_target);
+    q_net.setCostFunction<Huber_Cost>(1.0f, exec_target);
+    q_net.setOptimizer<Adam_Optimizer>(0.01f);
+
+    Neural_Network target_net(exec_target);
+    target_net.addLayer<Linear_Layer>(state_dim, action_dim, exec_target);
+    target_net.setCostFunction<Huber_Cost>(1.0f, exec_target);
+    target_net.setOptimizer<Adam_Optimizer>(0.01f);
+
+    Dqn_Agent agent(std::move(q_net), state_dim, action_dim, 100, 0.99f, 0.0f, 0.01f, 0.95f, exec_target, 1234);
+    agent.initializeTargetNetworkFromPrototype(std::move(target_net));
+    agent.setTargetUpdateParameters(2, false);
+
+    std::size_t deterministic_action = agent.selectAction({1.0f, 0.5f}, false);
+    bool action_ok = (deterministic_action < action_dim);
+
+    for (std::size_t i = 0; i < 6; ++i)
+    {
+        agent.storeTransition(Transition{
+            .state = {static_cast<float>(i), 1.0f},
+            .action = i % action_dim,
+            .reward = 1.0f,
+            .next_state = {static_cast<float>(i + 1), 1.0f},
+            .is_terminal = (i % 3 == 0)});
+    }
+
+    agent.trainStep(4);
+    agent.trainStep(4);
+
+    agent.setEpsilon(1.0f);
+    agent.decayEpsilon();
+    bool epsilon_ok = nearlyEqual(agent.getEpsilon(), 0.95f);
+
+    agent.synchronizeTargetNetworkSoft(0.1f);
+    agent.synchronizeTargetNetworkHard();
+
+    return action_ok && epsilon_ok;
+}
+
 void runTestSuite(Execution_Target exec_target, const std::string &target_name)
 {
     std::cout << "========================================\n";
@@ -652,6 +752,7 @@ void runTestSuite(Execution_Target exec_target, const std::string &target_name)
     std::cout << "  MAE Cost & Gradient:               " << (testMaeLoss(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "  BCE Cost & Gradient:               " << (testBceLoss(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "  CCE Cost & Gradient:               " << (testCceLoss(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Huber Cost & Gradient:             " << (testHuberLoss(exec_target) ? "PASS" : "FAIL") << "\n";
 
     std::cout << "\n[5. Neural Network Layers]\n";
     std::cout << "  Linear Layer (Forward & Backward): " << (testLinearLayer(exec_target) ? "PASS" : "FAIL") << "\n";
@@ -666,7 +767,10 @@ void runTestSuite(Execution_Target exec_target, const std::string &target_name)
     std::cout << "  SGD Optimizer Step:                " << (testSgdOptimizer(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "  Adam Optimizer Step:               " << (testAdamOptimizer(exec_target) ? "PASS" : "FAIL") << "\n";
 
-    std::cout << "\n[7. Serialization & I/O]\n";
+    std::cout << "\n[7. Reinforcement Learning]\n";
+    std::cout << "  DQN Agent (Train Step & Target Sync): " << (testDqnAgent(exec_target) ? "PASS" : "FAIL") << "\n";
+
+    std::cout << "\n[8. Serialization & I/O]\n";
     std::cout << "  Matrix Binary I/O:                 " << (testMatrixSerialization(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "  Model Inference I/O (NNI1):        " << (testModelInferenceSerialization(exec_target) ? "PASS" : "FAIL") << "\n\n";
 }
@@ -688,6 +792,7 @@ int main()
     std::cout << "  Sub-Allocator & Garbage Collector: " << (testVulkanSubAllocatorAndGarbageCollection() ? "PASS" : "FAIL") << "\n";
     std::cout << "  Operator Fusion & Graph Dispatch:  " << (testOperatorFusionAndGraphExecution() ? "PASS" : "FAIL") << "\n";
     std::cout << "  Async Data Pipeline Double-Buffer: " << (testAsyncDataPipeline() ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Replay Buffer Capacity & Sampling: " << (testReplayBuffer() ? "PASS" : "FAIL") << "\n";
     std::cout << "========================================\n";
 
     return 0;

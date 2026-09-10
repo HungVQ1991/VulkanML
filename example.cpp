@@ -241,7 +241,7 @@ public:
     {
     }
 
-    [[nodiscard]] std::size_t getBatchSize() const override
+     std::size_t getBatchSize() const override
     {
         return batch_size;
     }
@@ -251,7 +251,8 @@ double runBenchmark(Execution_Target _execution_target,
                     const std::vector<float> &_images_data,
                     const std::vector<float> &_labels_data,
                     std::uint32_t _images_count,
-                    Neural_Network &_neural_network)
+                    Neural_Network &_neural_network,
+                    std::string save_file_filepath)
 {
     std::size_t steps_per_epoch = _images_count / BATCH_SIZE;
     _neural_network.getLearningRate().setMaxEpoch(static_cast<int>(TOTAL_EPOCHS));
@@ -268,7 +269,7 @@ double runBenchmark(Execution_Target _execution_target,
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    _neural_network.fit(data_pipeline, TOTAL_EPOCHS, steps_per_epoch, BATCH_SIZE, INPUT_DIMENSION, OUTPUT_DIMENSION);
+    _neural_network.fit(data_pipeline, TOTAL_EPOCHS, steps_per_epoch, BATCH_SIZE, INPUT_DIMENSION, OUTPUT_DIMENSION, save_file_filepath);
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> elapsed_duration = end_time - start_time;
@@ -392,7 +393,7 @@ void evaluateModel(Neural_Network &_neural_network,
 int main()
 {
     Logger::setFileLogging(true);
-    Logger::setOnlyActiveFeatures(Log_Feature::NONE);
+    Logger::setOnlyActiveFeatures(Log_Feature::LAYER_INSPECTION);
     Logger::setConsoleOutput(true);
     Execution_Engine::getInstance().setCooperativeMatrixEnabled(true);
 
@@ -439,9 +440,8 @@ int main()
     neural_network.addLayer<Linear_Layer>(128, OUTPUT_DIMENSION);
     neural_network.addLayer<Softmax_Layer>(true);
 
-    neural_network.compileAndWarmup(BATCH_SIZE, INPUT_DIMENSION, OUTPUT_DIMENSION);
     Logger::logMessage("Starting training benchmark with Data Augmentation...", Log_Level::LOG_INFO, true, 0, Log_Feature::TRAINING);
-    double elapsed_duration_ms = runBenchmark(execution_target, train_images_data, train_labels_data, train_images_count, neural_network);
+    double elapsed_duration_ms = runBenchmark(execution_target, train_images_data, train_labels_data, train_images_count, neural_network, "output/mnist/checkpoint_{}");
     std::string mes = std::format("Training completed in {:.4f} s", elapsed_duration_ms / 1000.0);
     std::cout << mes << "\n";
     Logger::logMessage(mes, Log_Level::LOG_INFO, true, 0, Log_Feature::TRAINING);

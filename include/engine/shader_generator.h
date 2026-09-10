@@ -50,7 +50,7 @@ public:
         data.insert(data.end(), byte_pointer, byte_pointer + size);
     }
 
-    [[nodiscard]] VkSpecializationInfo build() const noexcept
+     VkSpecializationInfo build() const noexcept
     {
         return VkSpecializationInfo{
             .mapEntryCount = static_cast<std::uint32_t>(entries.size()),
@@ -59,7 +59,7 @@ public:
             .pData = data.data()};
     }
 
-    [[nodiscard]] bool empty() const noexcept
+     bool empty() const noexcept
     {
         return entries.empty();
     }
@@ -107,7 +107,7 @@ public:
         default_data_type = _type_name;
     }
 
-    [[nodiscard]] const std::string &getDefaultDataType() const noexcept
+     const std::string &getDefaultDataType() const noexcept
     {
         return default_data_type;
     }
@@ -153,7 +153,7 @@ public:
                                              _constant_id, _type_name, _name, _default_value);
     }
 
-    [[nodiscard]] const std::vector<Specialization_Constant_Entry> &getSpecializationConstants() const noexcept
+     const std::vector<Specialization_Constant_Entry> &getSpecializationConstants() const noexcept
     {
         return spec_constants;
     }

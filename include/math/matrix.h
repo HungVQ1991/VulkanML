@@ -564,6 +564,11 @@ public:
         implementation->bceLoss(*_target_matrix.implementation, *_output_result.implementation, _epsilon);
     }
 
+    void huberLoss(const Matrix &_target_matrix, Matrix &_output_result, float _delta = 1.0f) const
+    {
+        implementation->huberLoss(*_target_matrix.implementation, *_output_result.implementation, _delta);
+    }
+
      Matrix operator*(const Matrix &_other) const
     {
         Matrix result(execution_target);

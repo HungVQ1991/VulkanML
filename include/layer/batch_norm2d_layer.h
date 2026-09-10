@@ -109,7 +109,7 @@ public:
     {
         if (!is_forward_completed)
         {
-            Logger::logMessage("Batch_Norm_2d_Layer::backward: Backward called before forward",
+            Logger::logMessage(Input_Format{"Batch_Norm_2d_Layer::backward: Backward called before forward"},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -138,7 +138,7 @@ public:
         is_forward_completed = false;
     }
 
-     bool hasParameters() const noexcept override
+    bool hasParameters() const noexcept override
     {
         return true;
     }
@@ -148,32 +148,34 @@ public:
         return {{&gamma, &gamma_gradient}, {&beta, &beta_gradient}};
     }
 
-     Layer_Type getLayerType() const noexcept override
+    Layer_Type getLayerType() const noexcept override
     {
         return Layer_Type::BATCH_NORM_2D;
     }
 
-     Matrix getOutput() override
+    Matrix getOutput() override
     {
         return output_matrix;
     }
 
-     Matrix getInput() override
+    Matrix getInput() override
     {
         return input_matrix;
     }
 
-     Matrix getWeights() const override
+    Matrix getWeights() const override
     {
         return gamma;
     }
 
-     Matrix getBiases() const override
+    Matrix getBiases() const override
     {
         return beta;
     }
 
-     Matrix getWeightsGradient() override
+    Execution_Target getExecutionTarget() const override { return execution_target; }
+
+    Matrix getWeightsGradient() override
     {
         return gamma_gradient;
     }
@@ -185,13 +187,7 @@ public:
             return;
         }
 
-        Logger::logMessage(std::format("Batch_Norm_2d_Layer::setExecutionTarget: Changing execution target from {} to {}",
-                                       magic_enum::enum_name(execution_target),
-                                       magic_enum::enum_name(_new_execution_target)),
-                           Log_Level::LOG_WARNING,
-                           true,
-                           0,
-                           Log_Feature::DEVICE_MANAGEMENT);
+        logChangeExecutionTarget(_new_execution_target);
 
         execution_target = _new_execution_target;
         gamma.setExecutionTarget(_new_execution_target);

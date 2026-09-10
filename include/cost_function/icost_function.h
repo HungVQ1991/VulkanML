@@ -12,6 +12,7 @@ enum class Cost_Type : std::uint32_t
     MAE,
     BCE,
     CCE,
+    HUBER,
     COST_TYPE_END
 };
 

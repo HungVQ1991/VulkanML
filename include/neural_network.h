@@ -48,6 +48,11 @@ public:
         }
     }
 
+    Neural_Network(const Neural_Network &) = delete;
+    Neural_Network &operator=(const Neural_Network &) = delete;
+    Neural_Network(Neural_Network &&) noexcept = default;
+    Neural_Network &operator=(Neural_Network &&) noexcept = default;
+
     void addLayer(std::unique_ptr<ILayer> _layer)
     {
         if (!_layer)
@@ -162,7 +167,7 @@ public:
         return gradient_matrix;
     }
 
-     std::vector<std::pair<Matrix *, Matrix *>> getParametersAndGradients()
+    std::vector<std::pair<Matrix *, Matrix *>> getParametersAndGradients()
     {
         std::vector<std::pair<Matrix *, Matrix *>> parameter_gradient_pairs;
         for (auto &layer : layers)
@@ -176,7 +181,7 @@ public:
         return parameter_gradient_pairs;
     }
 
-     std::vector<std::pair<Matrix *, Matrix *>> getParamsAndGrads()
+    std::vector<std::pair<Matrix *, Matrix *>> getParamsAndGrads()
     {
         return getParametersAndGradients();
     }
@@ -307,12 +312,48 @@ public:
         }
     }
 
+    int findSubString(std::string_view string, std::string_view sub_string)
+    {
+        if (sub_string.empty())
+            return 0;
+        auto pos = string.find(sub_string);
+        return (pos != std::string_view::npos) ? static_cast<int>(pos) : -1;
+    }
+
+    std::string modifyFilepath(const std::string &input, size_t epoch)
+    {
+        if (input.empty())
+            return "";
+        std::string output = "";
+        if (findSubString(input, ".nnck") != static_cast<int>(input.size()) - 5)
+        {
+            if (!input.contains("{}"))
+            {
+                if (input.back() == '_')
+                    output = input + std::format("epoch_{}.nnck", epoch);
+                else
+                    output = input + std::format("_epoch_{}.nnck", epoch);
+            }
+            else
+                output = std::vformat(input + ".nnck", std::make_format_args(epoch));
+        }
+        else
+        {
+            if (input.contains("{}"))
+                output = std::vformat(input, std::make_format_args(epoch));
+            else
+                output = input;
+        }
+        return output;
+    }
+
     void fit(Async_Data_Pipeline &_data_pipeline,
-             std::size_t _total_epochs,
-             std::size_t _steps_per_epoch,
-             std::size_t _batch_size,
-             std::size_t _input_dimension,
-             std::size_t _output_dimension)
+             size_t _total_epochs,
+             size_t _steps_per_epoch,
+             size_t _batch_size,
+             size_t _input_dimension,
+             size_t _output_dimension,
+             std::string checkpoint_file_path)
     {
         setTrainingMode(true);
 
@@ -321,12 +362,15 @@ public:
         _data_pipeline.setDevice(engine.getContext().getDevice());
         _data_pipeline.start();
 
+        compileAndWarmup(_batch_size, _input_dimension, _output_dimension);
+
         for (std::size_t epoch = training_context.getCurrentEpoch(); epoch < _total_epochs; ++epoch)
         {
+            Logger::logMessage("Start of epoch " + std::to_string(epoch), Log_Level::LOG_INFO, true);
             training_context.setCurrentEpoch(epoch);
-
             for (std::size_t step_index = 0; step_index < _steps_per_epoch; ++step_index)
             {
+                // Logger::logMessage("Start of step " + std::to_string(step_index), Log_Level::LOG_INFO, true);
                 Batch_Data batch_data = _data_pipeline.nextBatch(_batch_size, _input_dimension, _output_dimension);
 
                 if (batch_data.input_matrix && batch_data.target_matrix)
@@ -340,11 +384,12 @@ public:
                     trainStep(*batch_data.input_matrix, *batch_data.target_matrix, batch_data.fence);
                 }
             }
-
+            if (checkpoint_file_path != "")
+                saveTrainingCheckpoint(modifyFilepath(checkpoint_file_path, epoch), epoch);
             training_context.getLearningRate().step();
+            Logger::resetLogCounters();
         }
 
-        engine.waitIdle();
         training_context.setCurrentEpoch(_total_epochs);
         _data_pipeline.stop();
     }
@@ -518,8 +563,9 @@ public:
         }
     }
 
-    void loadTrainingCheckpoint(const std::string &_file_path, std::size_t _total_epochs, Execution_Target _execution_target = Execution_Target::CPU)
+    void loadTrainingCheckpoint(const std::string &_file_path, std::size_t _total_epochs)
     {
+        Execution_Target _execution_target = getExecutionTarget();
         std::ifstream input_file_stream(_file_path, std::ios::binary);
         if (!input_file_stream.is_open())
         {
@@ -583,82 +629,82 @@ public:
         setExecutionTarget(_execution_target);
     }
 
-     const Matrix &getLastPrediction() const noexcept
+    const Matrix &getLastPrediction() const noexcept
     {
         return last_prediction;
     }
 
-     const ILayer &getLayer(std::size_t _index) const
+    const ILayer &getLayer(std::size_t _index) const
     {
         return *layers.at(_index);
     }
 
-     ILayer &getLayer(std::size_t _index)
+    ILayer &getLayer(std::size_t _index)
     {
         return *layers.at(_index);
     }
 
-     std::size_t getLayerCount() const noexcept
+    std::size_t getLayerCount() const noexcept
     {
         return layers.size();
     }
 
-     Training_Context &getContext() noexcept
+    Training_Context &getContext() noexcept
     {
         return training_context;
     }
 
-     const Training_Context &getContext() const noexcept
+    const Training_Context &getContext() const noexcept
     {
         return training_context;
     }
 
-     Training_Context &getTrainingContext() noexcept
+    Training_Context &getTrainingContext() noexcept
     {
         return training_context;
     }
 
-     const Training_Context &getTrainingContext() const noexcept
+    const Training_Context &getTrainingContext() const noexcept
     {
         return training_context;
     }
 
-     std::size_t getCurrentEpoch() const noexcept
+    std::size_t getCurrentEpoch() const noexcept
     {
         return training_context.getCurrentEpoch();
     }
 
-     IOptimizer &getOptimizer()
+    IOptimizer &getOptimizer()
     {
         return training_context.getOptimizer();
     }
 
-     const IOptimizer &getOptimizer() const
+    const IOptimizer &getOptimizer() const
     {
         return training_context.getOptimizer();
     }
 
-     ICost_Function &getCostFunction()
+    ICost_Function &getCostFunction()
     {
         return training_context.getCostFunction();
     }
 
-     const ICost_Function &getCostFunction() const
+    const ICost_Function &getCostFunction() const
     {
         return training_context.getCostFunction();
     }
 
-     ILearning_Rate &getLearningRate()
+    ILearning_Rate &getLearningRate()
     {
         return training_context.getLearningRate();
     }
 
-     const ILearning_Rate &getLearningRate() const
+    const ILearning_Rate &getLearningRate() const
     {
         return training_context.getLearningRate();
     }
 
-     Execution_Target getExecutionTarget() const noexcept
+    Execution_Target getExecutionTarget() const noexcept
     {
         return execution_target;
     }

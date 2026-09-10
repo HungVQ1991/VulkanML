@@ -5,3 +5,4 @@
 #include "cost_function/mae_cost.h"
 #include "cost_function/bce_cost.h"
 #include "cost_function/cce_cost.h"
+#include "cost_function/huber_cost.h"

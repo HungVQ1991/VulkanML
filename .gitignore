@@ -15,3 +15,6 @@ compile.bat
 convert.cpp
 .VSCodeCounter/
 temp/
+include/c_api.cpp
+include/rl/
+*.bin

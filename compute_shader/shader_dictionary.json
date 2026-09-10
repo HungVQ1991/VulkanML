@@ -311,6 +311,13 @@
     "supports_cooperative_matrix": false,
     "code": "if (global_id >= {pc_0}) return; float p = clamp({in_0}[global_id], 1e-7, 1.0 - 1e-7); float y = {in_1}[global_id]; {out_0}[global_id] = -(y * log(p) + (1.0 - y) * log(1.0 - p));"
   },
+  "HUBER_LOSS": {
+    "op_class": "ELEMENTWISE",
+    "input_count": 2,
+    "output_count": 1,
+    "supports_cooperative_matrix": false,
+    "code": "if (global_id >= {pc_0}) return; float diff = {in_0}[global_id] - {in_1}[global_id]; float abs_diff = abs(diff); float delta = uintBitsToFloat({pc_1}); if (abs_diff <= delta) { {out_0}[global_id] = 0.5 * diff * diff; } else { {out_0}[global_id] = delta * (abs_diff - 0.5 * delta); }"
+  },
   "MATRIX_INVERSE": {
     "op_class": "STANDALONE",
     "input_count": 1,

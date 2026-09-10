@@ -76,10 +76,10 @@ public:
         }
 
         float mean_absolute_weight = weight_data.empty() ? 0.0f : weight_sum / static_cast<float>(weight_data.size());
-        Logger::logMessage(std::format("Linear_Layer::Linear_Layer: Layer weights mean_abs = {:.8f}", mean_absolute_weight),
+        Logger::logMessage(Input_Format{"Linear_Layer::Linear_Layer: Layer weights mean_abs = {:.8f}", mean_absolute_weight},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::DENSE_COMPUTE);
 
         weights = Matrix(_input_dimension, _output_dimension, std::move(weight_data), execution_target);
@@ -92,7 +92,7 @@ public:
     {
         if (_input_matrix.getColumns() != input_dimension)
         {
-            Logger::logMessage("Linear_Layer::forward: Input dimension mismatch",
+            Logger::logMessage(Input_Format{"Linear_Layer::forward: Input dimension mismatch"},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -100,13 +100,13 @@ public:
             throw std::invalid_argument("Input dimension mismatch");
         }
 
-        Logger::logMessage(std::format("Linear_Layer::forward: batch_size={}, input_dimension={}, output_dimension={}",
-                                       _input_matrix.getRows(),
-                                       input_dimension,
-                                       output_dimension),
+        Logger::logMessage(Input_Format{"Linear_Layer::forward: batch_size={}, input_dimension={}, output_dimension={}",
+                                        _input_matrix.getRows(),
+                                        input_dimension,
+                                        output_dimension},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::DENSE_COMPUTE | Log_Feature::FORWARD_EVALUATION);
 
         input_matrix = _input_matrix;
@@ -122,7 +122,7 @@ public:
     {
         if (_output_gradient.getColumns() != output_dimension || _output_gradient.getRows() != input_matrix.getRows())
         {
-            Logger::logMessage("Linear_Layer::backward: Gradient output dimension mismatch",
+            Logger::logMessage(Input_Format{"Linear_Layer::backward: Gradient output dimension mismatch"},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -130,12 +130,12 @@ public:
             throw std::invalid_argument("Gradient output dimension mismatch");
         }
 
-        Logger::logMessage(std::format("Linear_Layer::backward: output_gradient rows={}, columns={}",
-                                       _output_gradient.getRows(),
-                                       _output_gradient.getColumns()),
+        Logger::logMessage(Input_Format{"Linear_Layer::backward: output_gradient rows={}, columns={}",
+                                        _output_gradient.getRows(),
+                                        _output_gradient.getColumns()},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::DENSE_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
         input_matrix.linearBackwardWeightBias(_output_gradient, weights_gradient, biases_gradient);
@@ -148,51 +148,53 @@ public:
         return input_gradient;
     }
 
-     Matrix getWeights() const override
+    Matrix getWeights() const override
     {
         return weights;
     }
 
-     Matrix getBiases() const override
+    Matrix getBiases() const override
     {
         return biases;
     }
 
-     Matrix getWeightsGradient() override
+    Matrix getWeightsGradient() override
     {
         return weights_gradient;
     }
 
-     Matrix getBiasesGradient()
+    Matrix getBiasesGradient()
     {
         return biases_gradient;
     }
 
-     Matrix getInput() override
+    Matrix getInput() override
     {
         return input_matrix;
     }
 
-     Matrix getOutput() override
+    Matrix getOutput() override
     {
         return output_matrix;
     }
 
-     std::size_t getInputDimension() const noexcept
+    std::size_t getInputDimension() const noexcept
     {
         return input_dimension;
     }
 
-     std::size_t getOutputDimension() const noexcept
+    std::size_t getOutputDimension() const noexcept
     {
         return output_dimension;
     }
+
+    Execution_Target getExecutionTarget() const override { return execution_target; }
 
     void setWeights(const Matrix &_new_weights)
     {
         if (_new_weights.getRows() != input_dimension || _new_weights.getColumns() != output_dimension)
         {
-            Logger::logMessage("Linear_Layer::setWeights: Dimension size of weight must match",
+            Logger::logMessage(Input_Format{"Linear_Layer::setWeights: Dimension size of weight must match"},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -206,7 +208,7 @@ public:
     {
         if (_new_biases.getRows() != 1 || _new_biases.getColumns() != output_dimension)
         {
-            Logger::logMessage("Linear_Layer::setBiases: Dimension size of bias must match",
+            Logger::logMessage(Input_Format{"Linear_Layer::setBiases: Dimension size of bias must match"},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -220,12 +222,12 @@ public:
     {
     }
 
-     bool hasParameters() const noexcept override
+    bool hasParameters() const noexcept override
     {
         return true;
     }
 
-     Layer_Type getLayerType() const noexcept override
+    Layer_Type getLayerType() const noexcept override
     {
         return Layer_Type::LINEAR;
     }
@@ -280,13 +282,7 @@ public:
             return;
         }
 
-        Logger::logMessage(std::format("Linear_Layer::setExecutionTarget: Changing execution target from {} to {}",
-                                       magic_enum::enum_name(execution_target),
-                                       magic_enum::enum_name(_new_execution_target)),
-                           Log_Level::LOG_WARNING,
-                           true,
-                           0,
-                           Log_Feature::DEVICE_MANAGEMENT);
+        logChangeExecutionTarget(_new_execution_target);
 
         execution_target = _new_execution_target;
         weights.setExecutionTarget(_new_execution_target);

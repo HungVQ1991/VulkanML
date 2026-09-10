@@ -54,7 +54,7 @@ public:
     {
         if (storage.size() != rows * columns)
         {
-            Logger::logMessage("Cpu_Matrix_Impl::Cpu_Matrix_Impl: Host data size mismatch",
+            Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::Cpu_Matrix_Impl: Host data size mismatch"},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -68,7 +68,7 @@ public:
     {
         if (storage.size() != rows * columns)
         {
-            Logger::logMessage("Cpu_Matrix_Impl::Cpu_Matrix_Impl: Host data size mismatch",
+            Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::Cpu_Matrix_Impl: Host data size mismatch"},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -79,42 +79,42 @@ public:
 
     ~Cpu_Matrix_Impl() noexcept override = default;
 
-     std::size_t getRows() const noexcept override
+    std::size_t getRows() const noexcept override
     {
         return rows;
     }
 
-     std::size_t getColumns() const noexcept override
+    std::size_t getColumns() const noexcept override
     {
         return columns;
     }
 
-     std::size_t getCols() const noexcept override
+    std::size_t getCols() const noexcept override
     {
         return columns;
     }
 
-     const std::vector<float> &getData() const noexcept override
+    const std::vector<float> &getData() const noexcept override
     {
         return storage;
     }
 
-     std::vector<float> &getData() noexcept
+    std::vector<float> &getData() noexcept
     {
         return storage;
     }
 
-     Storage_Handle getStorage() const override
+    Storage_Handle getStorage() const override
     {
         return std::cref(storage);
     }
 
-     Mutable_Storage_Handle getStorage() override
+    Mutable_Storage_Handle getStorage() override
     {
         return std::ref(storage);
     }
 
-     bool isEmpty() const noexcept override
+    bool isEmpty() const noexcept override
     {
         return storage.empty();
     }
@@ -151,8 +151,8 @@ public:
             }
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::matmul: output shape=({}x{}), result={}",
-                                       rows, other_columns, formatDataSample(output_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::matmul: output shape=({}x{}), result={}",
+                                        rows, other_columns, formatDataSample(output_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -198,8 +198,8 @@ public:
             validateSameDimensions(_other_implementation);
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::add: output shape=({}x{}), broadcast={}, result={}",
-                                       rows, columns, is_broadcast_mode, formatDataSample(output_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::add: output shape=({}x{}), broadcast={}, result={}",
+                                        rows, columns, is_broadcast_mode, formatDataSample(output_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -238,8 +238,8 @@ public:
             validateSameDimensions(_other_implementation);
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::sub: output shape=({}x{}), broadcast={}, result={}",
-                                       rows, columns, is_broadcast_mode, formatDataSample(output_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::sub: output shape=({}x{}), broadcast={}, result={}",
+                                        rows, columns, is_broadcast_mode, formatDataSample(output_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -256,8 +256,8 @@ public:
             output_cpu.storage[i] = storage[i] * _scalar;
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::mulScalar: scalar={}, elements={}, result={}",
-                                       _scalar, storage.size(), formatDataSample(output_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::mulScalar: scalar={}, elements={}, result={}",
+                                        _scalar, storage.size(), formatDataSample(output_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -268,7 +268,7 @@ public:
     {
         if (std::abs(_scalar) < 1e-8f)
         {
-            Logger::logMessage("Cpu_Matrix_Impl::divScalar: Division by zero",
+            Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::divScalar: Division by zero"},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -284,8 +284,8 @@ public:
             output_cpu.storage[i] = storage[i] * inverse_scalar;
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::divScalar: scalar={}, elements={}, result={}",
-                                       _scalar, storage.size(), formatDataSample(output_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::divScalar: scalar={}, elements={}, result={}",
+                                        _scalar, storage.size(), formatDataSample(output_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -304,8 +304,8 @@ public:
             output_cpu.storage[i] = storage[i] * other_cpu.storage[i];
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::hadamardMul: elements={}, result={}",
-                                       storage.size(), formatDataSample(output_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::hadamardMul: elements={}, result={}",
+                                        storage.size(), formatDataSample(output_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -323,7 +323,7 @@ public:
         {
             if (std::abs(other_cpu.storage[i]) < 1e-8f)
             {
-                Logger::logMessage("Cpu_Matrix_Impl::hadamardDiv: Division by zero",
+                Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::hadamardDiv: Division by zero"},
                                    Log_Level::LOG_ERROR,
                                    true,
                                    0,
@@ -333,8 +333,8 @@ public:
             output_cpu.storage[i] = storage[i] / other_cpu.storage[i];
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::hadamardDiv: elements={}, result={}",
-                                       storage.size(), formatDataSample(output_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::hadamardDiv: elements={}, result={}",
+                                        storage.size(), formatDataSample(output_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -354,8 +354,8 @@ public:
             }
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::transpose: ({}x{}) -> ({}x{}), result={}",
-                                       rows, columns, columns, rows, formatDataSample(output_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::transpose: ({}x{}) -> ({}x{}), result={}",
+                                        rows, columns, columns, rows, formatDataSample(output_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -396,7 +396,7 @@ public:
 
             if (max_pivot_value < 1e-7f)
             {
-                Logger::logMessage("Cpu_Matrix_Impl::inverse: Matrix is singular and cannot be inverted",
+                Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::inverse: Matrix is singular and cannot be inverted"},
                                    Log_Level::LOG_ERROR,
                                    true,
                                    0,
@@ -439,8 +439,8 @@ public:
             }
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::inverse: dimension={}, result={}",
-                                       dimension_size, formatDataSample(output_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::inverse: dimension={}, result={}",
+                                        dimension_size, formatDataSample(output_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -461,7 +461,7 @@ public:
 
         if (norm_value < 1e-8f)
         {
-            Logger::logMessage(std::format("Cpu_Matrix_Impl::normalize: Matrix norm near zero ({:.4e}), skipping normalization", norm_value),
+            Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::normalize: Matrix norm near zero ({:.4e}), skipping normalization", norm_value},
                                Log_Level::LOG_WARNING,
                                true,
                                0,
@@ -475,8 +475,8 @@ public:
             output_cpu.storage[i] = storage[i] / norm_value;
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::normalize: norm={:.4e}, result={}",
-                                       norm_value, formatDataSample(output_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::normalize: norm={:.4e}, result={}",
+                                        norm_value, formatDataSample(output_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -493,8 +493,8 @@ public:
             output_cpu.storage[i] = std::max(0.0f, storage[i]);
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::relu: elements={}, result={}",
-                                       storage.size(), formatDataSample(output_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::relu: elements={}, result={}",
+                                        storage.size(), formatDataSample(output_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -513,8 +513,8 @@ public:
             input_gradient_cpu.storage[i] = (storage[i] > 0.0f) ? grad_cpu.storage[i] : 0.0f;
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::reluBackward: elements={}, gradient_result={}",
-                                       storage.size(), formatDataSample(input_gradient_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::reluBackward: elements={}, gradient_result={}",
+                                        storage.size(), formatDataSample(input_gradient_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -536,8 +536,8 @@ public:
             output_cpu.storage[i] = 0.5f * x_value * (1.0f + tanh_inner);
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::gelu: elements={}, result={}",
-                                       storage.size(), formatDataSample(output_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::gelu: elements={}, result={}",
+                                        storage.size(), formatDataSample(output_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -565,8 +565,8 @@ public:
             input_gradient_cpu.storage[i] = grad_cpu.storage[i] * derivative;
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::geluBackward: elements={}, gradient_result={}",
-                                       storage.size(), formatDataSample(input_gradient_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::geluBackward: elements={}, gradient_result={}",
+                                        storage.size(), formatDataSample(input_gradient_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -598,8 +598,8 @@ public:
             }
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::softmax: shape=({}x{}), result={}",
-                                       rows, columns, formatDataSample(output_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::softmax: shape=({}x{}), result={}",
+                                        rows, columns, formatDataSample(output_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -627,8 +627,8 @@ public:
             }
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::softmaxBackward: shape=({}x{}), gradient_result={}",
-                                       rows, columns, formatDataSample(input_gradient_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::softmaxBackward: shape=({}x{}), gradient_result={}",
+                                        rows, columns, formatDataSample(input_gradient_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -657,8 +657,8 @@ public:
             }
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::sgdUpdate: elements={}, lr={}, max_grad={}, updated_weights={}",
-                                       total_elements, _learning_rate, _max_gradient, formatDataSample(storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::sgdUpdate: elements={}, lr={}, max_grad={}, updated_weights={}",
+                                        total_elements, _learning_rate, _max_gradient, formatDataSample(storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -700,9 +700,9 @@ public:
             storage[i] -= _learning_rate * (corrected_first_moment / (std::sqrt(corrected_second_moment) + _epsilon));
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::adamUpdate: step={}, lr={}, updated_weights={}, first_moment={}, second_moment={}",
-                                       _timestep, _learning_rate, formatDataSample(storage),
-                                       formatDataSample(first_moment_cpu.storage), formatDataSample(second_moment_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::adamUpdate: step={}, lr={}, updated_weights={}, first_moment={}, second_moment={}",
+                                        _timestep, _learning_rate, formatDataSample(storage),
+                                        formatDataSample(first_moment_cpu.storage), formatDataSample(second_moment_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -736,8 +736,8 @@ public:
             }
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::matmulAdd: output shape=({}x{}), result={}",
-                                       output_rows, output_columns, formatDataSample(output_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::matmulAdd: output shape=({}x{}), result={}",
+                                        output_rows, output_columns, formatDataSample(output_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -791,8 +791,8 @@ public:
             }
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::conv2d: output=({}x{}x{}x{}), result={}",
-                                       batch_size, output_height, output_width, _output_channels, formatDataSample(output_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::conv2d: output=({}x{}x{}x{}), result={}",
+                                        batch_size, output_height, output_width, _output_channels, formatDataSample(output_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -847,8 +847,8 @@ public:
             }
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::conv2dBackwardInput: input_gradient=({}x{}x{}x{}), result={}",
-                                       batch_size, _input_height, _input_width, _input_channels, formatDataSample(input_gradient_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::conv2dBackwardInput: input_gradient=({}x{}x{}x{}), result={}",
+                                        batch_size, _input_height, _input_width, _input_channels, formatDataSample(input_gradient_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -909,8 +909,8 @@ public:
             }
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::conv2dBackwardWeight: weight_grad={}, bias_grad={}",
-                                       formatDataSample(weight_gradient_cpu.storage), formatDataSample(bias_gradient_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::conv2dBackwardWeight: weight_grad={}, bias_grad={}",
+                                        formatDataSample(weight_gradient_cpu.storage), formatDataSample(bias_gradient_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -968,9 +968,9 @@ public:
             }
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::maxpool2d: output=({}x{}x{}x{}), result={}, mask={}",
-                                       batch_size, output_height, output_width, _channels,
-                                       formatDataSample(result_cpu.storage), formatDataSample(mask_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::maxpool2d: output=({}x{}x{}x{}), result={}, mask={}",
+                                        batch_size, output_height, output_width, _channels,
+                                        formatDataSample(result_cpu.storage), formatDataSample(mask_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -1027,8 +1027,8 @@ public:
             }
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::maxpool2dBackward: gradient_result={}",
-                                       formatDataSample(input_gradient_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::maxpool2dBackward: gradient_result={}",
+                                        formatDataSample(input_gradient_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -1059,8 +1059,8 @@ public:
             }
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::globalAvgPool2d: result={}",
-                                       formatDataSample(output_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::globalAvgPool2d: result={}",
+                                        formatDataSample(output_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -1090,8 +1090,8 @@ public:
             }
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::globalAvgPool2dBackward: gradient_result={}",
-                                       formatDataSample(input_gradient_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::globalAvgPool2dBackward: gradient_result={}",
+                                        formatDataSample(input_gradient_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -1178,9 +1178,9 @@ public:
             }
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::batchNormForward: is_training={}, output={}, running_mean={}, running_var={}",
-                                       _is_training, formatDataSample(output_cpu.storage),
-                                       formatDataSample(running_mean_cpu.storage), formatDataSample(running_variance_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::batchNormForward: is_training={}, output={}, running_mean={}, running_var={}",
+                                        _is_training, formatDataSample(output_cpu.storage),
+                                        formatDataSample(running_mean_cpu.storage), formatDataSample(running_variance_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -1237,10 +1237,10 @@ public:
             }
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::batchNormBackward: input_grad={}, gamma_grad={}, beta_grad={}",
-                                       formatDataSample(input_gradient_cpu.storage),
-                                       formatDataSample(gamma_gradient_cpu.storage),
-                                       formatDataSample(beta_gradient_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::batchNormBackward: input_grad={}, gamma_grad={}, beta_grad={}",
+                                        formatDataSample(input_gradient_cpu.storage),
+                                        formatDataSample(gamma_gradient_cpu.storage),
+                                        formatDataSample(beta_gradient_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -1275,8 +1275,8 @@ public:
             }
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::linearForward: output shape=({}x{}), result={}",
-                                       batch_size, output_dimension, formatDataSample(output_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::linearForward: output shape=({}x{}), result={}",
+                                        batch_size, output_dimension, formatDataSample(output_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -1306,8 +1306,8 @@ public:
             }
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::linearBackwardInput: gradient_result={}",
-                                       formatDataSample(input_gradient_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::linearBackwardInput: gradient_result={}",
+                                        formatDataSample(input_gradient_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -1343,9 +1343,9 @@ public:
             }
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::linearBackwardWeightBias: weight_grad={}, bias_grad={}",
-                                       formatDataSample(weight_gradient_cpu.storage),
-                                       formatDataSample(bias_gradient_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::linearBackwardWeightBias: weight_grad={}, bias_grad={}",
+                                        formatDataSample(weight_gradient_cpu.storage),
+                                        formatDataSample(bias_gradient_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -1435,9 +1435,9 @@ public:
             }
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::batchNorm2dForward: is_training={}, output={}, running_mean={}, running_var={}",
-                                       _is_training, formatDataSample(output_cpu.storage),
-                                       formatDataSample(running_mean_cpu.storage), formatDataSample(running_variance_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::batchNorm2dForward: is_training={}, output={}, running_mean={}, running_var={}",
+                                        _is_training, formatDataSample(output_cpu.storage),
+                                        formatDataSample(running_mean_cpu.storage), formatDataSample(running_variance_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -1493,10 +1493,10 @@ public:
             }
         }
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::batchNorm2dBackward: input_grad={}, gamma_grad={}, beta_grad={}",
-                                       formatDataSample(input_gradient_cpu.storage),
-                                       formatDataSample(gamma_gradient_cpu.storage),
-                                       formatDataSample(beta_gradient_cpu.storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::batchNorm2dBackward: input_grad={}, gamma_grad={}, beta_grad={}",
+                                        formatDataSample(input_gradient_cpu.storage),
+                                        formatDataSample(gamma_gradient_cpu.storage),
+                                        formatDataSample(beta_gradient_cpu.storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -1518,8 +1518,8 @@ public:
         }
         output_cpu.storage[0] = loss_sum;
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::cceLoss: elements={}, epsilon={}, calculated_loss={:.6f}",
-                                       storage.size(), _epsilon, loss_sum),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::cceLoss: elements={}, epsilon={}, calculated_loss={:.6f}",
+                                        storage.size(), _epsilon, loss_sum},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -1541,8 +1541,8 @@ public:
         }
         output_cpu.storage[0] = loss_sum;
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::mseLoss: elements={}, calculated_loss={:.6f}",
-                                       storage.size(), loss_sum),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::mseLoss: elements={}, calculated_loss={:.6f}",
+                                        storage.size(), loss_sum},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -1563,8 +1563,8 @@ public:
         }
         output_cpu.storage[0] = loss_sum;
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::maeLoss: elements={}, calculated_loss={:.6f}",
-                                       storage.size(), loss_sum),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::maeLoss: elements={}, calculated_loss={:.6f}",
+                                        storage.size(), loss_sum},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -1587,8 +1587,39 @@ public:
         }
         output_cpu.storage[0] = loss_sum;
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::bceLoss: elements={}, epsilon={}, calculated_loss={:.6f}",
-                                       storage.size(), _epsilon, loss_sum),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::bceLoss: elements={}, epsilon={}, calculated_loss={:.6f}",
+                                        storage.size(), _epsilon, loss_sum},
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::LOSS_COMPUTE);
+    }
+
+    void huberLoss(const Impl &_target_implementation, Impl &_output_result, float _delta) const override
+    {
+        validateSameDimensions(_target_implementation);
+        const auto &target_cpu = static_cast<const Cpu_Matrix_Impl &>(_target_implementation);
+        auto &output_cpu = static_cast<Cpu_Matrix_Impl &>(_output_result);
+        output_cpu.reshape(1, 1);
+
+        float loss_sum = 0.0f;
+        for (std::size_t i = 0; i < storage.size(); ++i)
+        {
+            float difference = storage[i] - target_cpu.storage[i];
+            float abs_diff = std::abs(difference);
+            if (abs_diff <= _delta)
+            {
+                loss_sum += 0.5f * difference * difference;
+            }
+            else
+            {
+                loss_sum += _delta * (abs_diff - 0.5f * _delta);
+            }
+        }
+        output_cpu.storage[0] = loss_sum;
+
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::huberLoss: elements={}, delta={}, calculated_loss={:.6f}",
+                                        storage.size(), _delta, loss_sum},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -1599,7 +1630,7 @@ public:
     {
         if (_host_data.size() != rows * columns)
         {
-            Logger::logMessage("Cpu_Matrix_Impl::uploadData: Host data size mismatch",
+            Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::uploadData: Host data size mismatch"},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -1608,8 +1639,8 @@ public:
         }
         storage = _host_data;
 
-        Logger::logMessage(std::format("Cpu_Matrix_Impl::uploadData: uploaded {} elements, sample={}",
-                                       storage.size(), formatDataSample(storage)),
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::uploadData: uploaded {} elements, sample={}",
+                                        storage.size(), formatDataSample(storage)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,

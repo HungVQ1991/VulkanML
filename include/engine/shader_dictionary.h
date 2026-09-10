@@ -138,17 +138,17 @@ public:
         }
     }
 
-    [[nodiscard]] const Snippet_Metadata &getMetadata(Compute_Pipeline _pipeline) const noexcept
+    const Snippet_Metadata &getMetadata(Compute_Pipeline _pipeline) const noexcept
     {
         return metadata_table[static_cast<std::size_t>(_pipeline)];
     }
 
-    [[nodiscard]] const Snippet_Metadata &getSnippetMetadata(Compute_Pipeline _pipeline) const noexcept
+    const Snippet_Metadata &getSnippetMetadata(Compute_Pipeline _pipeline) const noexcept
     {
         return metadata_table[static_cast<std::size_t>(_pipeline)];
     }
 
-    [[nodiscard]] const std::string &getGlslTemplate(Compute_Pipeline _pipeline, bool _use_cooperative_matrix) const noexcept
+    const std::string &getGlslTemplate(Compute_Pipeline _pipeline, bool _use_cooperative_matrix) const noexcept
     {
         const auto &meta = metadata_table[static_cast<std::size_t>(_pipeline)];
         if (_use_cooperative_matrix && meta.is_cooperative_matrix_support && !meta.cooperative_glsl_template.empty())
@@ -158,7 +158,7 @@ public:
         return meta.glsl_template;
     }
 
-    [[nodiscard]] std::uint32_t getSharedMemorySize(Compute_Pipeline _pipeline, bool _use_cooperative_matrix) const noexcept
+    std::uint32_t getSharedMemorySize(Compute_Pipeline _pipeline, bool _use_cooperative_matrix) const noexcept
     {
         const auto &meta = metadata_table[static_cast<std::size_t>(_pipeline)];
         if (_use_cooperative_matrix && meta.is_cooperative_matrix_support)
@@ -168,12 +168,12 @@ public:
         return meta.shared_memory_size;
     }
 
-    [[nodiscard]] const std::array<Snippet_Metadata, static_cast<std::size_t>(Compute_Pipeline::COMPUTE_PIPELINE_END)> &getMetadataTable() const noexcept
+    const std::array<Snippet_Metadata, static_cast<std::size_t>(Compute_Pipeline::COMPUTE_PIPELINE_END)> &getMetadataTable() const noexcept
     {
         return metadata_table;
     }
 
-    [[nodiscard]] bool hasMetadata(Compute_Pipeline _pipeline) const noexcept
+    bool hasMetadata(Compute_Pipeline _pipeline) const noexcept
     {
         std::size_t pipeline_index = static_cast<std::size_t>(_pipeline);
         return pipeline_index < metadata_table.size() && !metadata_table[pipeline_index].glsl_template.empty();

@@ -98,7 +98,7 @@ public:
     {
         if (_input_matrix.getColumns() != input_dimension)
         {
-            Logger::logMessage("Batch_Norm_Layer::forward: Input dimension mismatch",
+            Logger::logMessage(Input_Format{"Batch_Norm_Layer::forward: Input dimension mismatch"},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -106,12 +106,12 @@ public:
             throw std::invalid_argument("Input dimension mismatch");
         }
 
-        Logger::logMessage(std::format("Batch_Norm_Layer::forward: dimension={}, mode={}",
-                                       input_dimension,
-                                       is_training ? "Train" : "Eval"),
+        Logger::logMessage(Input_Format{"Batch_Norm_Layer::forward: dimension={}, mode={}",
+                                        input_dimension,
+                                        is_training ? "Train" : "Eval"},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::NORMALIZATION_COMPUTE | Log_Feature::FORWARD_EVALUATION);
 
         input_matrix = _input_matrix;
@@ -141,7 +141,7 @@ public:
     {
         if (!is_forward_completed)
         {
-            Logger::logMessage("Batch_Norm_Layer::backward: Backward called before forward",
+            Logger::logMessage(Input_Format{"Batch_Norm_Layer::backward: Backward called before forward"},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -149,12 +149,12 @@ public:
             throw std::logic_error("Backward called before forward");
         }
 
-        Logger::logMessage(std::format("Batch_Norm_Layer::backward: output_gradient rows={}, columns={}",
-                                       _output_gradient.getRows(),
-                                       _output_gradient.getColumns()),
+        Logger::logMessage(Input_Format{"Batch_Norm_Layer::backward: output_gradient rows={}, columns={}",
+                                        _output_gradient.getRows(),
+                                        _output_gradient.getColumns()},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::NORMALIZATION_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
         input_matrix.batchNormBackward(
@@ -176,37 +176,39 @@ public:
         is_forward_completed = false;
     }
 
-     Matrix getWeights() const override
+    Matrix getWeights() const override
     {
         return gamma;
     }
 
-     Matrix getBiases() const override
+    Matrix getBiases() const override
     {
         return beta;
     }
 
-     Matrix getWeightsGradient() override
+    Matrix getWeightsGradient() override
     {
         return gamma_gradient;
     }
 
-     Matrix getInput() override
+    Matrix getInput() override
     {
         return input_matrix;
     }
 
-     Matrix getOutput() override
+    Matrix getOutput() override
     {
         return output_matrix;
     }
 
-     bool hasParameters() const noexcept override
+    Execution_Target getExecutionTarget() const override { return execution_target; }
+
+    bool hasParameters() const noexcept override
     {
         return true;
     }
 
-     Layer_Type getLayerType() const noexcept override
+    Layer_Type getLayerType() const noexcept override
     {
         return Layer_Type::BATCH_NORM;
     }
@@ -267,13 +269,7 @@ public:
             return;
         }
 
-        Logger::logMessage(std::format("Batch_Norm_Layer::setExecutionTarget: Changing execution target from {} to {}",
-                                       magic_enum::enum_name(execution_target),
-                                       magic_enum::enum_name(_new_execution_target)),
-                           Log_Level::LOG_WARNING,
-                           true,
-                           0,
-                           Log_Feature::DEVICE_MANAGEMENT);
+        logChangeExecutionTarget(_new_execution_target);
 
         execution_target = _new_execution_target;
         gamma.setExecutionTarget(_new_execution_target);

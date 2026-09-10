@@ -18,6 +18,12 @@
 #include "helper/magic_enum.hpp"
 #include "math/matrix.h"
 
+template<typename T>
+std::string getEnumString(T str)
+{
+    return static_cast<std::string>(magic_enum::enum_name<T>(str));
+}
+
 enum class Layer_Type
 {
     LINEAR,
@@ -116,18 +122,28 @@ public:
                            Log_Feature::LAYER_INSPECTION);
     }
 
+    void logChangeExecutionTarget(Execution_Target new_target)
+    {
+        Logger::logMessage( std::format("ILayer::setExecutionTarget: Change target at layer {} from {} to {}", 
+            getEnumString<Layer_Type>(getLayerType()),
+            getEnumString<Execution_Target>(getExecutionTarget()), 
+            getEnumString<Execution_Target>(new_target)),
+            Log_Level::LOG_DEBUG, true, 0, Log_Feature::DEVICE_MANAGEMENT);
+    }
+
     virtual ~ILayer() noexcept = default;
 
     virtual Matrix forward(const Matrix &_input_matrix) = 0;
     virtual Matrix backward(const Matrix &_output_gradient) = 0;
 
-     virtual Matrix getWeights() const { return Matrix(0, 0); }
-     virtual Matrix getBiases() const { return Matrix(0, 0); }
-     virtual Matrix getWeightsGradient() { return Matrix(0, 0); }
-     virtual Matrix getInput() { return Matrix(0, 0); }
-     virtual Matrix getOutput() { return Matrix(0, 0); }
+    virtual Matrix getWeights() const { return Matrix(0, 0); }
+    virtual Matrix getBiases() const { return Matrix(0, 0); }
+    virtual Matrix getWeightsGradient() { return Matrix(0, 0); }
+    virtual Matrix getInput() { return Matrix(0, 0); }
+    virtual Matrix getOutput() { return Matrix(0, 0); }
+    virtual Execution_Target getExecutionTarget() const = 0;
 
-     virtual bool hasParameters() const { return false; }
+    virtual bool hasParameters() const { return false; }
     virtual void resetGradient() {}
     virtual void resetGradients() { resetGradient(); }
     virtual void setTrainingMode(bool _is_training) {}

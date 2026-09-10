@@ -65,37 +65,37 @@ public:
     Pipeline_Cache_Manager(Pipeline_Cache_Manager &&_other) noexcept = default;
     Pipeline_Cache_Manager &operator=(Pipeline_Cache_Manager &&_other) noexcept = default;
 
-    [[nodiscard]] const Vulkan_Context &getContext() const noexcept
+    const Vulkan_Context &getContext() const noexcept
     {
         return context;
     }
 
-    [[nodiscard]] VkPipelineLayout getPipelineLayout() const noexcept
+    VkPipelineLayout getPipelineLayout() const noexcept
     {
         return pipeline_layout;
     }
 
-    [[nodiscard]] const Shader_Compiler &getShaderCompiler() const noexcept
+    const Shader_Compiler &getShaderCompiler() const noexcept
     {
         return shader_compiler;
     }
 
-    [[nodiscard]] Shader_Compiler &getShaderCompiler() noexcept
+    Shader_Compiler &getShaderCompiler() noexcept
     {
         return shader_compiler;
     }
 
-    [[nodiscard]] VkPipelineCache getPipelineCache() const noexcept
+    VkPipelineCache getPipelineCache() const noexcept
     {
         return pipeline_cache;
     }
 
-    [[nodiscard]] const std::string &getCacheFilePath() const noexcept
+    const std::string &getCacheFilePath() const noexcept
     {
         return cache_file_path;
     }
 
-    [[nodiscard]] const std::unordered_map<std::size_t, VkPipeline> &getCachedPipelines() const noexcept
+    const std::unordered_map<std::size_t, VkPipeline> &getCachedPipelines() const noexcept
     {
         return cached_pipelines;
     }
@@ -105,12 +105,12 @@ public:
         is_frozen.store(_freeze, std::memory_order_release);
     }
 
-    [[nodiscard]] bool isFrozen() const noexcept
+    bool isFrozen() const noexcept
     {
         return is_frozen.load(std::memory_order_relaxed);
     }
 
-    [[nodiscard]] std::size_t getCachedPipelineCount() const noexcept
+    std::size_t getCachedPipelineCount() const noexcept
     {
         if (is_frozen.load(std::memory_order_relaxed))
         {
@@ -120,7 +120,7 @@ public:
         return cached_pipelines.size();
     }
 
-    [[nodiscard]] bool hasPipeline(std::size_t _code_hash) const noexcept
+    bool hasPipeline(std::size_t _code_hash) const noexcept
     {
         if (is_frozen.load(std::memory_order_relaxed))
         {

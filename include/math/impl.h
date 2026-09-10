@@ -163,6 +163,7 @@ public:
     virtual void mseLoss(const Impl &_target_implementation, Impl &_output_result) const = 0;
     virtual void maeLoss(const Impl &_target_implementation, Impl &_output_result) const = 0;
     virtual void bceLoss(const Impl &_target_implementation, Impl &_output_result, float _epsilon) const = 0;
+    virtual void huberLoss(const Impl &_target_implementation, Impl &_output_result, float _delta) const = 0;
 
-     virtual bool isEmpty() const noexcept = 0;
+    virtual bool isEmpty() const noexcept = 0;
 };

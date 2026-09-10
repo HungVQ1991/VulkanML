@@ -35,12 +35,12 @@ public:
 
     Matrix forward(const Matrix &_input_matrix) override
     {
-        Logger::logMessage(std::format("Relu_Layer::forward: rows={}, columns={}",
-                                       _input_matrix.getRows(),
-                                       _input_matrix.getColumns()),
+        Logger::logMessage(Input_Format{"Relu_Layer::forward: rows={}, columns={}",
+                                        _input_matrix.getRows(),
+                                        _input_matrix.getColumns()},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::ACTIVATION_COMPUTE | Log_Feature::FORWARD_EVALUATION);
 
         input_matrix = _input_matrix;
@@ -53,7 +53,7 @@ public:
     {
         if (!is_forward_completed)
         {
-            Logger::logMessage("Relu_Layer::backward: Relu backward called before forward",
+            Logger::logMessage(Input_Format{"Relu_Layer::backward: Relu backward called before forward"},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -63,7 +63,7 @@ public:
 
         if (_output_gradient.getRows() != output_matrix.getRows() || _output_gradient.getColumns() != output_matrix.getColumns())
         {
-            Logger::logMessage("Relu_Layer::backward: Relu gradient dimensions must match output dimensions",
+            Logger::logMessage(Input_Format{"Relu_Layer::backward: Relu gradient dimensions must match output dimensions"},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -71,12 +71,12 @@ public:
             throw std::invalid_argument("Relu gradient dimensions must match output dimensions");
         }
 
-        Logger::logMessage(std::format("Relu_Layer::backward: output_gradient rows={}, columns={}",
-                                       _output_gradient.getRows(),
-                                       _output_gradient.getColumns()),
+        Logger::logMessage(Input_Format{"Relu_Layer::backward: output_gradient rows={}, columns={}",
+                                        _output_gradient.getRows(),
+                                        _output_gradient.getColumns()},
                            Log_Level::LOG_DEBUG,
                            true,
-                           0,
+                           1,
                            Log_Feature::ACTIVATION_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
         output_matrix.reluBackward(_output_gradient, input_gradient);
@@ -88,25 +88,27 @@ public:
         is_forward_completed = false;
     }
 
-     bool hasParameters() const noexcept override
+    bool hasParameters() const noexcept override
     {
         return false;
     }
 
-     Layer_Type getLayerType() const noexcept override
+    Layer_Type getLayerType() const noexcept override
     {
         return Layer_Type::RELU;
     }
 
-     Matrix getInput() override
+    Matrix getInput() override
     {
         return input_matrix;
     }
 
-     Matrix getOutput() override
+    Matrix getOutput() override
     {
         return output_matrix;
     }
+
+    Execution_Target getExecutionTarget() const override { return execution_target; }
 
     void saveConfiguration(std::ofstream &_output_file_stream) const override {}
     void saveInference(std::ofstream &_output_file_stream) const override {}
@@ -121,13 +123,7 @@ public:
             return;
         }
 
-        Logger::logMessage(std::format("Relu_Layer::setExecutionTarget: Changing execution target from {} to {}",
-                                       magic_enum::enum_name(execution_target),
-                                       magic_enum::enum_name(_new_execution_target)),
-                           Log_Level::LOG_WARNING,
-                           true,
-                           0,
-                           Log_Feature::DEVICE_MANAGEMENT);
+        logChangeExecutionTarget(_new_execution_target);
 
         execution_target = _new_execution_target;
         input_matrix.setExecutionTarget(_new_execution_target);

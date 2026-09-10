@@ -15,7 +15,9 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #ifndef ENABLE_LOGGING
@@ -86,6 +88,39 @@ constexpr Log_Feature operator~(Log_Feature feature) noexcept
 {
     return static_cast<Log_Feature>(~static_cast<std::uint64_t>(feature));
 }
+
+template <typename... Args>
+struct Input_Format
+{
+    std::string_view format_string;
+    std::tuple<Args...> arguments;
+
+    constexpr Input_Format(std::format_string<Args...> _fmt, Args... _args)
+        : format_string(_fmt.get()), arguments(std::move(_args)...)
+    {
+    }
+
+    std::string toString() const
+    {
+        if constexpr (sizeof...(Args) == 0)
+        {
+            return std::string(format_string);
+        }
+        else
+        {
+            return std::apply([this](const auto &...unpacked_args)
+                              { return std::vformat(format_string, std::make_format_args(unpacked_args...)); }, arguments);
+        }
+    }
+
+    operator std::string() const
+    {
+        return toString();
+    }
+};
+
+template <typename... Args>
+Input_Format(std::format_string<Args...>, Args...) -> Input_Format<Args...>;
 
 struct Log_Record
 {
@@ -344,7 +379,7 @@ public:
         setFileLogging(_enable);
     }
 
-    [[nodiscard]] static bool isFileLoggingEnabled() noexcept
+     static bool isFileLoggingEnabled() noexcept
     {
         return getInstance().is_file_logging_enabled.load(std::memory_order_relaxed);
     }
@@ -359,7 +394,7 @@ public:
         setForceAllConsoleOutput(_enable);
     }
 
-    [[nodiscard]] static bool isForceAllConsoleOutputEnabled() noexcept
+     static bool isForceAllConsoleOutputEnabled() noexcept
     {
         return getInstance().is_force_all_console_enabled.load(std::memory_order_relaxed);
     }
@@ -393,6 +428,87 @@ public:
     static void setConsoleOutput(bool _enable) noexcept
     {
         getInstance().is_console_enabled.store(_enable, std::memory_order_relaxed);
+    }
+
+    template <typename... Args>
+    static bool logMessage(
+        const Input_Format<Args...> &_format,
+        Log_Level _level = Log_Level::LOG_INFO,
+        bool _print_to_console = false,
+        std::size_t _repetition_count = 0,
+        Log_Feature _feature = Log_Feature::NONE,
+        const std::source_location _location = std::source_location::current())
+    {
+#if !ENABLE_LOGGING
+        return false;
+#endif
+
+        Logger &instance = getInstance();
+
+        if (_level == Log_Level::LOG_DEBUG)
+        {
+            std::uint64_t current_features = instance.active_features.load(std::memory_order_relaxed);
+            if (_feature != Log_Feature::NONE && ((current_features & static_cast<std::uint64_t>(_feature)) == 0))
+            {
+                return false;
+            }
+        }
+
+        std::lock_guard<std::mutex> lock(instance.logger_mutex);
+
+        if (_repetition_count > 0)
+        {
+            auto &line_map = instance.call_site_counters[_location.file_name()];
+            std::size_t &current_count = line_map[_location.line()];
+            if (current_count >= _repetition_count)
+            {
+                return false;
+            }
+            current_count++;
+        }
+
+        std::string message = _format.toString();
+
+        Log_Record record{
+            .timestamp = timestamp(),
+            .level = _level,
+            .feature = _feature,
+            .message = message,
+            .file = _location.file_name(),
+            .line = _location.line()};
+
+        if (instance.ring_buffer.size() >= MAX_RING_BUFFER_ENTRIES)
+        {
+            instance.ring_buffer.pop_front();
+        }
+        instance.ring_buffer.push_back(record);
+
+        std::string feat_str = featureToString(_feature);
+
+        if (instance.is_file_logging_enabled.load(std::memory_order_relaxed) && instance.log_file_stream.is_open())
+        {
+            instance.log_file_stream << std::format("[{}] [{:<5}] [{:<18}] {}\n",
+                                                    record.timestamp,
+                                                    levelToString(_level),
+                                                    feat_str,
+                                                    message);
+            instance.log_file_stream.flush();
+        }
+
+        bool force_console = instance.is_force_all_console_enabled.load(std::memory_order_relaxed);
+        bool console_enabled = instance.is_console_enabled.load(std::memory_order_relaxed);
+        bool should_print_to_console = force_console || _print_to_console || _level == Log_Level::LOG_ERROR;
+
+        if (should_print_to_console && (console_enabled || _level == Log_Level::LOG_ERROR || force_console))
+        {
+            std::cout << std::format("{}[{}] [{:<5}] [{:<18}] {}\033[0m\n",
+                                     levelToAnsiColor(_level),
+                                     record.timestamp,
+                                     levelToString(_level),
+                                     feat_str,
+                                     message);
+        }
+        return true;
     }
 
     static bool logMessage(
@@ -492,10 +608,15 @@ public:
         _output_stream << "=== END OF DUMP ===\n\n";
     }
 
-    static void clearCallSiteCounters()
+    static void resetLogCounters()
     {
         Logger &instance = getInstance();
         std::lock_guard<std::mutex> lock(instance.logger_mutex);
         instance.call_site_counters.clear();
+    }
+
+    static void resetSpecificLog( )
+    {
+
     }
 };
