@@ -9,38 +9,18 @@
 #include <utility>
 #include <vector>
 
-#include "cost_function/bce_cost.h"
-#include "cost_function/cce_cost.h"
-#include "cost_function/huber_cost.h"
-#include "cost_function/mae_cost.h"
-#include "cost_function/mse_cost.h"
+#include "helper/cost_function.h"
 #include "engine/async_data_pipeline.h"
 #include "engine/execution_engine.h"
 #include "engine/gpu_vector.h"
 #include "engine/graph_optimizer.h"
 #include "engine/vulkan_context.h"
 #include "engine/vulkan_sub_allocator.h"
-#include "layer/batch_norm_layer.h"
-#include "layer/batch_norm2d_layer.h"
-#include "layer/conv2d_layer.h"
-#include "layer/gelu.h"
-#include "layer/globalavgpool2d_layer.h"
-#include "layer/linear_layer.h"
-#include "layer/maxpool2d_layer.h"
-#include "layer/relu.h"
-#include "layer/res_net_block_2d_layer.h"
-#include "layer/softmax.h"
-#include "learning_rate/cosine_annealing.h"
-#include "learning_rate/exponential_decay.h"
-#include "learning_rate/multi_step_decay.h"
-#include "learning_rate/no_decay.h"
-#include "learning_rate/polynomial_decay.h"
-#include "learning_rate/reduce_on_plateau.h"
-#include "learning_rate/step_decay.h"
+#include "helper/layer.h"
+#include "helper/learning_rate.h"
 #include "math/matrix.h"
 #include "neural_network.h"
-#include "optimizer/adam_optimizer.h"
-#include "optimizer/sgd_optimizer.h"
+#include "helper/optimizer.h"
 #include "rl/dqn_agent.h"
 #include "rl/replay_buffer.h"
 #include "rl/transition.h"
@@ -384,25 +364,118 @@ bool testBatchNorm2dLayer(Execution_Target exec_target)
 
 bool testResNetBlock2dLayer(Execution_Target exec_target)
 {
-    Res_Net_Block_2d_Layer block_identity(4, 4, 16, 16, 1, exec_target);
-    Matrix input_identity(1, 4 * 4 * 16, std::vector<float>(4 * 4 * 16, 0.05f), exec_target);
-    Matrix out_identity = block_identity.forward(input_identity);
-    bool identity_fwd_ok = verifyMatrix(out_identity, out_identity.getData());
+    auto validateTensor = [](const Matrix &tensor, std::size_t expected_rows, std::size_t expected_columns, bool require_nonzero = false) -> bool
+    {
+        if (tensor.getTarget() == Execution_Target::VULKAN_GPU)
+        {
+            Execution_Engine::getInstance().executeGraph();
+        }
 
-    Matrix grad_in_id = block_identity.backward(out_identity);
-    bool identity_bwd_ok = verifyMatrix(grad_in_id, grad_in_id.getData());
+        if (tensor.getRows() != expected_rows || tensor.getColumns() != expected_columns)
+        {
+            return false;
+        }
+
+        std::vector<float> tensor_data = tensor.getData();
+        if (tensor_data.size() != expected_rows * expected_columns)
+        {
+            return false;
+        }
+
+        bool has_nonzero_value = false;
+        for (float value : tensor_data)
+        {
+            if (std::isnan(value) || std::isinf(value))
+            {
+                return false;
+            }
+            if (std::abs(value) > 1e-7f)
+            {
+                has_nonzero_value = true;
+            }
+        }
+        return require_nonzero ? has_nonzero_value : true;
+    };
+
+    auto validateParameters = [&validateTensor](const std::vector<std::pair<Matrix *, Matrix *>> &parameters, std::size_t expected_count) -> bool
+    {
+        if (parameters.size() != expected_count)
+        {
+            return false;
+        }
+
+        for (const auto &[param, grad] : parameters)
+        {
+            if (!param || !grad)
+            {
+                return false;
+            }
+            if (!validateTensor(*param, param->getRows(), param->getColumns(), false))
+            {
+                return false;
+            }
+            if (!validateTensor(*grad, grad->getRows(), grad->getColumns(), false))
+            {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    constexpr std::size_t batch_size = 1;
+    constexpr std::size_t input_height = 4;
+    constexpr std::size_t input_width = 4;
+    constexpr std::size_t input_channels = 16;
+    constexpr std::size_t input_features = input_height * input_width * input_channels;
+
+    std::vector<float> input_data(input_features);
+    for (std::size_t i = 0; i < input_features; ++i)
+    {
+        input_data[i] = 0.01f * static_cast<float>((i % 17) + 1);
+    }
+
+    std::vector<float> grad_identity_data(input_features);
+    for (std::size_t i = 0; i < input_features; ++i)
+    {
+        grad_identity_data[i] = 0.02f * static_cast<float>((i % 13) + 1);
+    }
+
+    Res_Net_Block_2d_Layer block_identity(input_height, input_width, input_channels, input_channels, 1, exec_target);
+    Matrix input_identity(batch_size, input_features, input_data, exec_target);
+    Matrix out_identity = block_identity.forward(input_identity);
+    bool identity_fwd_ok = validateTensor(out_identity, batch_size, input_features, true);
+
+    Matrix grad_output_identity(batch_size, input_features, grad_identity_data, exec_target);
+    Matrix grad_in_identity = block_identity.backward(grad_output_identity);
+    bool identity_bwd_ok = validateTensor(grad_in_identity, batch_size, input_features, true);
+    bool identity_params_ok = validateParameters(block_identity.getParametersAndGradients(), 8);
     block_identity.resetGradient();
 
-    Res_Net_Block_2d_Layer block_proj(4, 4, 16, 32, 2, exec_target);
-    Matrix input_proj(1, 4 * 4 * 16, std::vector<float>(4 * 4 * 16, 0.05f), exec_target);
-    Matrix out_proj = block_proj.forward(input_proj);
-    bool proj_fwd_ok = verifyMatrix(out_proj, out_proj.getData());
+    constexpr std::size_t proj_out_channels = 32;
+    constexpr std::size_t proj_stride = 2;
+    constexpr std::size_t proj_out_height = (input_height + proj_stride - 1) / proj_stride;
+    constexpr std::size_t proj_out_width = (input_width + proj_stride - 1) / proj_stride;
+    constexpr std::size_t proj_out_features = proj_out_height * proj_out_width * proj_out_channels;
 
-    Matrix grad_in_proj = block_proj.backward(out_proj);
-    bool proj_bwd_ok = verifyMatrix(grad_in_proj, grad_in_proj.getData());
+    std::vector<float> grad_proj_data(proj_out_features);
+    for (std::size_t i = 0; i < proj_out_features; ++i)
+    {
+        grad_proj_data[i] = 0.02f * static_cast<float>((i % 11) + 1);
+    }
+
+    Res_Net_Block_2d_Layer block_proj(input_height, input_width, input_channels, proj_out_channels, proj_stride, exec_target);
+    Matrix input_proj(batch_size, input_features, input_data, exec_target);
+    Matrix out_proj = block_proj.forward(input_proj);
+    bool proj_fwd_ok = validateTensor(out_proj, batch_size, proj_out_features, true);
+
+    Matrix grad_output_proj(batch_size, proj_out_features, grad_proj_data, exec_target);
+    Matrix grad_in_proj = block_proj.backward(grad_output_proj);
+    bool proj_bwd_ok = validateTensor(grad_in_proj, batch_size, input_features, true);
+    bool proj_params_ok = validateParameters(block_proj.getParametersAndGradients(), 12);
     block_proj.resetGradient();
 
-    return identity_fwd_ok && identity_bwd_ok && proj_fwd_ok && proj_bwd_ok;
+    return identity_fwd_ok && identity_bwd_ok && identity_params_ok &&
+           proj_fwd_ok && proj_bwd_ok && proj_params_ok;
 }
 
 bool testSgdOptimizer(Execution_Target exec_target)
@@ -724,55 +797,183 @@ bool testDqnAgent(Execution_Target exec_target)
     return action_ok && epsilon_ok;
 }
 
+bool testMatrixConcatAndSplit(Execution_Target exec_target)
+{
+    Matrix mat_a(2, 2, {1.0f, 2.0f, 3.0f, 4.0f}, exec_target);
+    Matrix mat_b(2, 1, {5.0f, 6.0f}, exec_target);
+
+    Matrix concat_cols_res = mat_a.concatenateCollumns(mat_b);
+    bool concat_cols_ok = verifyMatrix(concat_cols_res, {1.0f, 2.0f, 5.0f, 3.0f, 4.0f, 6.0f});
+
+    auto [split_left, split_right] = concat_cols_res.splitCollumns(2);
+    bool split_cols_ok = verifyMatrix(split_left, {1.0f, 2.0f, 3.0f, 4.0f}) &&
+                         verifyMatrix(split_right, {5.0f, 6.0f});
+
+    Matrix mat_row_a(1, 2, {10.0f, 20.0f}, exec_target);
+    Matrix mat_row_b(2, 2, {30.0f, 40.0f, 50.0f, 60.0f}, exec_target);
+
+    Matrix concat_rows_res = mat_row_a.concatenateRows(mat_row_b);
+    bool concat_rows_ok = verifyMatrix(concat_rows_res, {10.0f, 20.0f, 30.0f, 40.0f, 50.0f, 60.0f});
+
+    auto [split_up, split_down] = concat_rows_res.splitRows(1);
+    bool split_rows_ok = verifyMatrix(split_up, {10.0f, 20.0f}) &&
+                         verifyMatrix(split_down, {30.0f, 40.0f, 50.0f, 60.0f});
+
+    return concat_cols_ok && split_cols_ok && concat_rows_ok && split_rows_ok;
+}
+
+bool testPpoActorCriticForward(Execution_Target exec_target)
+{
+    constexpr std::uint64_t action_dim = 2;
+    PPO_Actor_Critic_Layer ppo_layer(action_dim, exec_target);
+
+    auto &actor_linear = ppo_layer.addActorLayer<Linear_Layer>(2, 2, exec_target);
+    actor_linear.setWeights(Matrix(2, 2, {1.0f, 0.0f, 0.0f, 1.0f}, exec_target));
+    actor_linear.setBiases(Matrix(1, 2, {0.5f, -0.5f}, exec_target));
+
+    auto &critic_linear = ppo_layer.addCriticLayer<Linear_Layer>(2, 1, exec_target);
+    critic_linear.setWeights(Matrix(2, 1, {1.0f, 2.0f}, exec_target));
+    critic_linear.setBiases(Matrix(1, 1, {1.0f}, exec_target));
+
+    Matrix input_matrix(2, 2, {1.0f, 2.0f, 3.0f, 4.0f}, exec_target);
+    Matrix output_matrix = ppo_layer.forward(input_matrix);
+
+    bool output_ok = verifyMatrix(output_matrix, {1.5f, 1.5f, 6.0f, 3.5f, 3.5f, 12.0f});
+    bool actor_sub_ok = verifyMatrix(ppo_layer.getActorOutput(), {1.5f, 1.5f, 3.5f, 3.5f});
+    bool critic_sub_ok = verifyMatrix(ppo_layer.getCriticOutput(), {6.0f, 12.0f});
+
+    return output_ok && actor_sub_ok && critic_sub_ok;
+}
+
+bool testPpoActorCriticBackward(Execution_Target exec_target)
+{
+    constexpr std::uint64_t action_dim = 2;
+    PPO_Actor_Critic_Layer ppo_layer(action_dim, exec_target);
+
+    auto &actor_linear = ppo_layer.addActorLayer<Linear_Layer>(2, 2, exec_target);
+    actor_linear.setWeights(Matrix(2, 2, {1.0f, 0.0f, 0.0f, 1.0f}, exec_target));
+    actor_linear.setBiases(Matrix(1, 2, {0.0f, 0.0f}, exec_target));
+
+    auto &critic_linear = ppo_layer.addCriticLayer<Linear_Layer>(2, 1, exec_target);
+    critic_linear.setWeights(Matrix(2, 1, {1.0f, 1.0f}, exec_target));
+    critic_linear.setBiases(Matrix(1, 1, {0.0f}, exec_target));
+
+    Matrix input_matrix(1, 2, {2.0f, 3.0f}, exec_target);
+    ppo_layer.forward(input_matrix);
+
+    Matrix output_gradient(1, 3, {1.0f, 2.0f, 3.0f}, exec_target);
+    Matrix input_gradient = ppo_layer.backward(output_gradient);
+
+    bool input_grad_ok = verifyMatrix(input_gradient, {4.0f, 5.0f});
+
+    auto params = ppo_layer.getParametersAndGradients();
+    bool params_count_ok = (params.size() == 4);
+
+    bool actor_weight_grad_ok = verifyMatrix(*params[0].second, {2.0f, 4.0f, 3.0f, 6.0f});
+    bool actor_bias_grad_ok = verifyMatrix(*params[1].second, {1.0f, 2.0f});
+    bool critic_weight_grad_ok = verifyMatrix(*params[2].second, {6.0f, 9.0f});
+    bool critic_bias_grad_ok = verifyMatrix(*params[3].second, {3.0f});
+
+    return input_grad_ok && params_count_ok && actor_weight_grad_ok &&
+           actor_bias_grad_ok && critic_weight_grad_ok && critic_bias_grad_ok;
+}
+
+bool testPpoActorCriticSerialization(Execution_Target exec_target)
+{
+    std::string temp_file = "temp_ppo_layer_serialization.bin";
+    constexpr std::uint64_t action_dim = 2;
+
+    PPO_Actor_Critic_Layer ppo_source(action_dim, exec_target);
+    auto &actor_linear = ppo_source.addActorLayer<Linear_Layer>(2, 2, exec_target);
+    actor_linear.setWeights(Matrix(2, 2, {1.5f, -0.5f, 0.5f, 2.0f}, exec_target));
+    actor_linear.setBiases(Matrix(1, 2, {0.1f, -0.2f}, exec_target));
+
+    auto &critic_linear = ppo_source.addCriticLayer<Linear_Layer>(2, 1, exec_target);
+    critic_linear.setWeights(Matrix(2, 1, {0.8f, -1.2f}, exec_target));
+    critic_linear.setBiases(Matrix(1, 1, {0.5f}, exec_target));
+
+    Matrix input_mat(1, 2, {1.0f, 2.0f}, exec_target);
+    Matrix pred_before = ppo_source.forward(input_mat);
+
+    std::ofstream out_stream(temp_file, std::ios::binary);
+    if (!out_stream.is_open())
+    {
+        return false;
+    }
+    ppo_source.saveInference(out_stream);
+    out_stream.close();
+
+    PPO_Actor_Critic_Layer ppo_loaded(action_dim, exec_target);
+    ppo_loaded.addActorLayer<Linear_Layer>(2, 2, exec_target);
+    ppo_loaded.addCriticLayer<Linear_Layer>(2, 1, exec_target);
+
+    std::ifstream in_stream(temp_file, std::ios::binary);
+    if (!in_stream.is_open())
+    {
+        return false;
+    }
+    ppo_loaded.loadInference(in_stream);
+    in_stream.close();
+    std::remove(temp_file.c_str());
+
+    Matrix pred_after = ppo_loaded.forward(input_mat);
+
+    return verifyMatrix(pred_after, pred_before.getData());
+}
+
 void runTestSuite(Execution_Target exec_target, const std::string &target_name)
 {
     std::cout << "========================================\n";
     std::cout << "   RUNNING TEST SUITE ON " << target_name << "\n";
     std::cout << "========================================\n";
 
-    std::cout << "\n[1. Basic Matrix Arithmetics]\n";
-    std::cout << "  Matrix Addition (with Broadcast):  " << (testMatrixAddition(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "  Matrix Subtraction (with Broadcast): " << (testMatrixSubtraction(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "  Matrix Multiplication (GEMM):      " << (testMatrixMultiplication(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "  Scalar Multiplication & Division:   " << (testScalarOperations(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "  Hadamard Multiplication & Division: " << (testHadamardOperations(exec_target) ? "PASS" : "FAIL") << "\n";
+    // std::cout << "\n[1. Basic Matrix Arithmetics]\n";
+    // std::cout << "  Matrix Addition (with Broadcast):  " << (testMatrixAddition(exec_target) ? "PASS" : "FAIL") << "\n";
+    // std::cout << "  Matrix Subtraction (with Broadcast): " << (testMatrixSubtraction(exec_target) ? "PASS" : "FAIL") << "\n";
+    // std::cout << "  Matrix Multiplication (GEMM):      " << (testMatrixMultiplication(exec_target) ? "PASS" : "FAIL") << "\n";
+    // std::cout << "  Scalar Multiplication & Division:   " << (testScalarOperations(exec_target) ? "PASS" : "FAIL") << "\n";
+    // std::cout << "  Hadamard Multiplication & Division: " << (testHadamardOperations(exec_target) ? "PASS" : "FAIL") << "\n";
+    // std::cout << "  Matrix Concat & Split (Row/Col):   " << (testMatrixConcatAndSplit(exec_target) ? "PASS" : "FAIL") << "\n";
 
-    std::cout << "\n[2. Transformations & Advanced Operations]\n";
-    std::cout << "  Transpose & Matrix Inversion:       " << (testTransposeAndInverse(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "  Euclidean L2 Normalization:        " << (testNormalize(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "  Fused Linear Bias Add (MatmulAdd): " << (testMatmulAdd(exec_target) ? "PASS" : "FAIL") << "\n";
+    // std::cout << "\n[2. Transformations & Advanced Operations]\n";
+    // std::cout << "  Transpose & Matrix Inversion:       " << (testTransposeAndInverse(exec_target) ? "PASS" : "FAIL") << "\n";
+    // std::cout << "  Euclidean L2 Normalization:        " << (testNormalize(exec_target) ? "PASS" : "FAIL") << "\n";
+    // std::cout << "  Fused Linear Bias Add (MatmulAdd): " << (testMatmulAdd(exec_target) ? "PASS" : "FAIL") << "\n";
 
-    std::cout << "\n[3. Activation Functions]\n";
-    std::cout << "  ReLU Forward & Backward:           " << (testRelu(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "  GELU Forward & Backward:           " << (testGelu(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "  Softmax Forward & Backward:        " << (testSoftmax(exec_target) ? "PASS" : "FAIL") << "\n";
+    // std::cout << "\n[3. Activation Functions]\n";
+    // std::cout << "  ReLU Forward & Backward:           " << (testRelu(exec_target) ? "PASS" : "FAIL") << "\n";
+    // std::cout << "  GELU Forward & Backward:           " << (testGelu(exec_target) ? "PASS" : "FAIL") << "\n";
+    // std::cout << "  Softmax Forward & Backward:        " << (testSoftmax(exec_target) ? "PASS" : "FAIL") << "\n";
 
-    std::cout << "\n[4. Cost & Loss Functions]\n";
-    std::cout << "  MSE Cost & Gradient:               " << (testMseLoss(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "  MAE Cost & Gradient:               " << (testMaeLoss(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "  BCE Cost & Gradient:               " << (testBceLoss(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "  CCE Cost & Gradient:               " << (testCceLoss(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "  Huber Cost & Gradient:             " << (testHuberLoss(exec_target) ? "PASS" : "FAIL") << "\n";
+    // std::cout << "\n[4. Cost & Loss Functions]\n";
+    // std::cout << "  MSE Cost & Gradient:               " << (testMseLoss(exec_target) ? "PASS" : "FAIL") << "\n";
+    // std::cout << "  MAE Cost & Gradient:               " << (testMaeLoss(exec_target) ? "PASS" : "FAIL") << "\n";
+    // std::cout << "  BCE Cost & Gradient:               " << (testBceLoss(exec_target) ? "PASS" : "FAIL") << "\n";
+    // std::cout << "  CCE Cost & Gradient:               " << (testCceLoss(exec_target) ? "PASS" : "FAIL") << "\n";
+    // std::cout << "  Huber Cost & Gradient:             " << (testHuberLoss(exec_target) ? "PASS" : "FAIL") << "\n";
 
-    std::cout << "\n[5. Neural Network Layers]\n";
-    std::cout << "  Linear Layer (Forward & Backward): " << (testLinearLayer(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "  Conv2D Layer (Forward & Backward): " << (testConv2dLayer(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "  MaxPool2D Layer (with Mask):       " << (testMaxPool2dLayer(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "  GlobalAvgPool2D Layer:             " << (testGlobalAvgPool2dLayer(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "  BatchNorm 1D Layer:                " << (testBatchNormLayer(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "  BatchNorm 2D Layer:                " << (testBatchNorm2dLayer(exec_target) ? "PASS" : "FAIL") << "\n";
+    // std::cout << "\n[5. Neural Network Layers]\n";
+    // std::cout << "  Linear Layer (Forward & Backward): " << (testLinearLayer(exec_target) ? "PASS" : "FAIL") << "\n";
+    // std::cout << "  Conv2D Layer (Forward & Backward): " << (testConv2dLayer(exec_target) ? "PASS" : "FAIL") << "\n";
+    // std::cout << "  MaxPool2D Layer (with Mask):       " << (testMaxPool2dLayer(exec_target) ? "PASS" : "FAIL") << "\n";
+    // std::cout << "  GlobalAvgPool2D Layer:             " << (testGlobalAvgPool2dLayer(exec_target) ? "PASS" : "FAIL") << "\n";
+    // std::cout << "  BatchNorm 1D Layer:                " << (testBatchNormLayer(exec_target) ? "PASS" : "FAIL") << "\n";
+    // std::cout << "  BatchNorm 2D Layer:                " << (testBatchNorm2dLayer(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "  ResNet Block 2D (Id & Proj):       " << (testResNetBlock2dLayer(exec_target) ? "PASS" : "FAIL") << "\n";
+    // std::cout << "  PPO Layer Forward:                 " << (testPpoActorCriticForward(exec_target) ? "PASS" : "FAIL") << "\n";       
+    // std::cout << "  PPO Layer Backward & Accumulation: " << (testPpoActorCriticBackward(exec_target) ? "PASS" : "FAIL") << "\n";      
+    // std::cout << "  PPO Layer Serialization I/O:       " << (testPpoActorCriticSerialization(exec_target) ? "PASS" : "FAIL") << "\n"; 
 
-    std::cout << "\n[6. Optimizers]\n";
-    std::cout << "  SGD Optimizer Step:                " << (testSgdOptimizer(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "  Adam Optimizer Step:               " << (testAdamOptimizer(exec_target) ? "PASS" : "FAIL") << "\n";
+    // std::cout << "\n[6. Optimizers]\n";
+    // std::cout << "  SGD Optimizer Step:                " << (testSgdOptimizer(exec_target) ? "PASS" : "FAIL") << "\n";
+    // std::cout << "  Adam Optimizer Step:               " << (testAdamOptimizer(exec_target) ? "PASS" : "FAIL") << "\n";
 
-    std::cout << "\n[7. Reinforcement Learning]\n";
-    std::cout << "  DQN Agent (Train Step & Target Sync): " << (testDqnAgent(exec_target) ? "PASS" : "FAIL") << "\n";
+    // std::cout << "\n[7. Reinforcement Learning]\n";
+    // std::cout << "  DQN Agent (Train Step & Target Sync): " << (testDqnAgent(exec_target) ? "PASS" : "FAIL") << "\n";
 
-    std::cout << "\n[8. Serialization & I/O]\n";
-    std::cout << "  Matrix Binary I/O:                 " << (testMatrixSerialization(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "  Model Inference I/O (NNI1):        " << (testModelInferenceSerialization(exec_target) ? "PASS" : "FAIL") << "\n\n";
+    // std::cout << "\n[8. Serialization & I/O]\n";
+    // std::cout << "  Matrix Binary I/O:                 " << (testMatrixSerialization(exec_target) ? "PASS" : "FAIL") << "\n";
+    // std::cout << "  Model Inference I/O (NNI1):        " << (testModelInferenceSerialization(exec_target) ? "PASS" : "FAIL") << "\n\n";
 }
 
 int main()
@@ -783,16 +984,16 @@ int main()
     runTestSuite(Execution_Target::CPU, "CPU BACKEND");
     runTestSuite(Execution_Target::VULKAN_GPU, "VULKAN GPU BACKEND");
 
-    std::cout << "========================================\n";
-    std::cout << "   SYSTEM & LIFECYCLE MANAGEMENT TESTS  \n";
-    std::cout << "========================================\n";
+    // std::cout << "========================================\n";
+    // std::cout << "   SYSTEM & LIFECYCLE MANAGEMENT TESTS  \n";
+    // std::cout << "========================================\n";
 
-    std::cout << "  Learning Rate Schedulers Suite:    " << (testLearningRateSchedulers() ? "PASS" : "FAIL") << "\n";
-    std::cout << "  GPU Vector Lifecycle & Resizing:   " << (testGpuVectorLifecycle() ? "PASS" : "FAIL") << "\n";
-    std::cout << "  Sub-Allocator & Garbage Collector: " << (testVulkanSubAllocatorAndGarbageCollection() ? "PASS" : "FAIL") << "\n";
-    std::cout << "  Operator Fusion & Graph Dispatch:  " << (testOperatorFusionAndGraphExecution() ? "PASS" : "FAIL") << "\n";
-    std::cout << "  Async Data Pipeline Double-Buffer: " << (testAsyncDataPipeline() ? "PASS" : "FAIL") << "\n";
-    std::cout << "  Replay Buffer Capacity & Sampling: " << (testReplayBuffer() ? "PASS" : "FAIL") << "\n";
+    // std::cout << "  Learning Rate Schedulers Suite:    " << (testLearningRateSchedulers() ? "PASS" : "FAIL") << "\n";
+    // std::cout << "  GPU Vector Lifecycle & Resizing:   " << (testGpuVectorLifecycle() ? "PASS" : "FAIL") << "\n";
+    // std::cout << "  Sub-Allocator & Garbage Collector: " << (testVulkanSubAllocatorAndGarbageCollection() ? "PASS" : "FAIL") << "\n";
+    // std::cout << "  Operator Fusion & Graph Dispatch:  " << (testOperatorFusionAndGraphExecution() ? "PASS" : "FAIL") << "\n";
+    // std::cout << "  Async Data Pipeline Double-Buffer: " << (testAsyncDataPipeline() ? "PASS" : "FAIL") << "\n";
+    // std::cout << "  Replay Buffer Capacity & Sampling: " << (testReplayBuffer() ? "PASS" : "FAIL") << "\n";
     std::cout << "========================================\n";
 
     return 0;

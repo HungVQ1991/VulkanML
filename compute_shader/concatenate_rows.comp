@@ -1,0 +1,38 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer MatrixA {
+    float data_a[];
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer MatrixB {
+    float data_b[];
+};
+
+layout(std430, set = 0, binding = 2) writeonly buffer MatrixOut {
+    float data_out[];
+};
+
+layout(push_constant) uniform Uniform_Params {
+    uint rows_a;
+    uint rows_b;
+    uint columns;
+} params;
+
+void main() {
+    uint col = gl_GlobalInvocationID.x;
+    uint row = gl_GlobalInvocationID.y;
+    uint total_rows = params.rows_a + params.rows_b;
+
+    if (row >= total_rows || col >= params.columns) {
+        return;
+    }
+
+    uint out_index = row * params.columns + col;
+    if (row < params.rows_a) {
+        data_out[out_index] = data_a[row * params.columns + col];
+    } else {
+        data_out[out_index] = data_b[(row - params.rows_a) * params.columns + col];
+    }
+}

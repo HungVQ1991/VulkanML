@@ -37,6 +37,7 @@ enum class Layer_Type
     SOFTMAX,
     RES_NET_BLOCK_2D,
     RES_NET_20,
+    PPO_ACTOR_CRITIC,
     LAYER_TYPE_END
 };
 
@@ -151,7 +152,7 @@ public:
     virtual std::vector<std::pair<Matrix *, Matrix *>> getParametersAndGradients() { return {}; }
     virtual std::vector<std::pair<Matrix *, Matrix *>> getParamsAndGrads() { return getParametersAndGradients(); }
 
-     virtual Layer_Type getLayerType() const = 0;
+    virtual Layer_Type getLayerType() const = 0;
 
     virtual void saveConfiguration(std::ofstream &_output_file_stream) const = 0;
     virtual void saveConfig(std::ofstream &_output_file_stream) const { saveConfiguration(_output_file_stream); }

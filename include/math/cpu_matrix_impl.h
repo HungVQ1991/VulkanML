@@ -1626,6 +1626,137 @@ public:
                            Log_Feature::LOSS_COMPUTE);
     }
 
+    void concatenateCollumns(const Impl &_other_impl, Impl &_output_result) const override
+    {
+        const auto &other_cpu = static_cast<const Cpu_Matrix_Impl &>(_other_impl);
+        auto &output_cpu = static_cast<Cpu_Matrix_Impl &>(_output_result);
+
+        if (rows != other_cpu.rows)
+        {
+            Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::concatenateCollumns: Row count mismatch (this={}, other={})", rows, other_cpu.rows},
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::TENSOR_INSPECTION);
+            throw std::invalid_argument("Row count mismatch in concatenateCollumns");
+        }
+
+        std::size_t other_columns = other_cpu.columns;
+        std::size_t total_columns = columns + other_columns;
+        output_cpu.reshape(rows, total_columns);
+
+        for (std::size_t r = 0; r < rows; ++r)
+        {
+            std::copy_n(storage.data() + r * columns, columns, output_cpu.storage.data() + r * total_columns);
+            std::copy_n(other_cpu.storage.data() + r * other_columns, other_columns, output_cpu.storage.data() + r * total_columns + columns);
+        }
+
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::concatenateCollumns: output shape=({}x{}), result={}",
+                                        rows, total_columns, formatDataSample(output_cpu.storage)},
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::TENSOR_INSPECTION);
+    }
+
+    void concatenateRows(const Impl &_other_impl, Impl &_output_result) const override
+    {
+        const auto &other_cpu = static_cast<const Cpu_Matrix_Impl &>(_other_impl);
+        auto &output_cpu = static_cast<Cpu_Matrix_Impl &>(_output_result);
+
+        if (columns != other_cpu.columns)
+        {
+            Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::concatenateRows: Column count mismatch (this={}, other={})", columns, other_cpu.columns},
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::TENSOR_INSPECTION);
+            throw std::invalid_argument("Column count mismatch in concatenateRows");
+        }
+
+        std::size_t other_rows = other_cpu.rows;
+        std::size_t total_rows = rows + other_rows;
+        output_cpu.reshape(total_rows, columns);
+
+        std::copy(storage.begin(), storage.end(), output_cpu.storage.begin());
+        std::copy(other_cpu.storage.begin(), other_cpu.storage.end(), output_cpu.storage.begin() + storage.size());
+
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::concatenateRows: output shape=({}x{}), result={}",
+                                        total_rows, columns, formatDataSample(output_cpu.storage)},
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::TENSOR_INSPECTION);
+    }
+
+    void splitCollumns(std::size_t _split_index, Impl &_result_left, Impl &_result_right) const override
+    {
+        if (_split_index == 0 || _split_index >= columns)
+        {
+            Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::splitCollumns: Split index out of range (index={}, columns={})", _split_index, columns},
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::TENSOR_INSPECTION);
+            throw std::out_of_range("Split index out of range in splitCollumns");
+        }
+
+        auto &left_cpu = static_cast<Cpu_Matrix_Impl &>(_result_left);
+        auto &right_cpu = static_cast<Cpu_Matrix_Impl &>(_result_right);
+
+        std::size_t left_columns = _split_index;
+        std::size_t right_columns = columns - _split_index;
+
+        left_cpu.reshape(rows, left_columns);
+        right_cpu.reshape(rows, right_columns);
+
+        for (std::size_t r = 0; r < rows; ++r)
+        {
+            std::copy_n(storage.data() + r * columns, left_columns, left_cpu.storage.data() + r * left_columns);
+            std::copy_n(storage.data() + r * columns + left_columns, right_columns, right_cpu.storage.data() + r * right_columns);
+        }
+
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::splitCollumns: split at {}, left=({}x{}), right=({}x{})",
+                                        _split_index, rows, left_columns, rows, right_columns},
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::TENSOR_INSPECTION);
+    }
+
+    void splitRows(std::size_t _split_index, Impl &_result_up, Impl &_result_down) const override
+    {
+        if (_split_index == 0 || _split_index >= rows)
+        {
+            Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::splitRows: Split index out of range (index={}, rows={})", _split_index, rows},
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::TENSOR_INSPECTION);
+            throw std::out_of_range("Split index out of range in splitRows");
+        }
+
+        auto &up_cpu = static_cast<Cpu_Matrix_Impl &>(_result_up);
+        auto &down_cpu = static_cast<Cpu_Matrix_Impl &>(_result_down);
+
+        std::size_t up_rows = _split_index;
+        std::size_t down_rows = rows - _split_index;
+
+        up_cpu.reshape(up_rows, columns);
+        down_cpu.reshape(down_rows, columns);
+
+        std::size_t up_elements = up_rows * columns;
+        std::copy_n(storage.data(), up_elements, up_cpu.storage.data());
+        std::copy_n(storage.data() + up_elements, down_rows * columns, down_cpu.storage.data());
+
+        Logger::logMessage(Input_Format{"Cpu_Matrix_Impl::splitRows: split at {}, up=({}x{}), down=({}x{})",
+                                        _split_index, up_rows, columns, down_rows, columns},
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::TENSOR_INSPECTION);
+    }
+
     void uploadData(const std::vector<float> &_host_data) override
     {
         if (_host_data.size() != rows * columns)

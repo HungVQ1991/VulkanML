@@ -332,5 +332,39 @@
     "output_count": 1,
     "supports_cooperative_matrix": false,
     "code": "if (global_id >= {pc_0}) return; float mean = uintBitsToFloat({pc_1}); float std = uintBitsToFloat({pc_2}); float eps = uintBitsToFloat({pc_3}); {out_0}[global_id] = ({in_0}[global_id] - mean) / (std + eps);"
+  },
+  "CONCATENATE_COLUMNS": {
+    "op_class": "MATRIX_2D",
+    "input_count": 2,
+    "output_count": 1,
+    "supports_cooperative_matrix": false,
+    "index_expr": "r * ({pc_1} + {pc_2}) + c",
+    "code": "uint r = gl_GlobalInvocationID.y; uint c = gl_GlobalInvocationID.x; uint total_cols = {pc_1} + {pc_2}; if (r >= {pc_0} || c >= total_cols) return; uint out_idx = r * total_cols + c; if (c < {pc_1}) { {out_0}[out_idx] = {in_0}[r * {pc_1} + c]; } else { {out_0}[out_idx] = {in_1}[r * {pc_2} + (c - {pc_1})]; }"
+  },
+  "CONCATENATE_ROWS": {
+    "op_class": "MATRIX_2D",
+    "input_count": 2,
+    "output_count": 1,
+    "supports_cooperative_matrix": false,
+    "index_expr": "r * {pc_2} + c",
+    "code": "uint r = gl_GlobalInvocationID.y; uint c = gl_GlobalInvocationID.x; uint total_rows = {pc_0} + {pc_1}; if (r >= total_rows || c >= {pc_2}) return; uint out_idx = r * {pc_2} + c; if (r < {pc_0}) { {out_0}[out_idx] = {in_0}[r * {pc_2} + c]; } else { {out_0}[out_idx] = {in_1}[(r - {pc_0}) * {pc_2} + c]; }"
+  },
+  "SPLIT_COLUMNS": {
+    "op_class": "MATRIX_2D",
+    "input_count": 1,
+    "output_count": 2,
+    "supports_cooperative_matrix": false,
+    "persistent_outputs": [0, 1],
+    "index_expr": "r * ({pc_1} + {pc_2}) + c",
+    "code": "uint r = gl_GlobalInvocationID.y; uint c = gl_GlobalInvocationID.x; uint total_cols = {pc_1} + {pc_2}; if (r >= {pc_0} || c >= total_cols) return; uint in_idx = r * total_cols + c; if (c < {pc_1}) { {out_0}[r * {pc_1} + c] = {in_0}[in_idx]; } else { {out_1}[r * {pc_2} + (c - {pc_1})] = {in_0}[in_idx]; }"
+  },
+  "SPLIT_ROWS": {
+    "op_class": "MATRIX_2D",
+    "input_count": 1,
+    "output_count": 2,
+    "supports_cooperative_matrix": false,
+    "persistent_outputs": [0, 1],
+    "index_expr": "r * {pc_2} + c",
+    "code": "uint r = gl_GlobalInvocationID.y; uint c = gl_GlobalInvocationID.x; uint total_rows = {pc_0} + {pc_1}; if (r >= total_rows || c >= {pc_2}) return; uint in_idx = r * {pc_2} + c; if (r < {pc_0}) { {out_0}[r * {pc_2} + c] = {in_0}[in_idx]; } else { {out_1}[(r - {pc_0}) * {pc_2} + c] = {in_0}[in_idx]; }"
   }
 }

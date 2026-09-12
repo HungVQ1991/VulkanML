@@ -424,20 +424,20 @@ int main()
     neural_network.setCostFunction<Cce_Cost>();
 
     neural_network.addLayer<Conv2d_Layer>(28, 28, 1, 16, 3, 1, 1);
-    neural_network.addLayer<Batch_Norm_2d_Layer>(28, 28, 16);
+    neural_network.addLayer<Batch_Norm_2d_Layer>(28, 28, 16, 1e-5f, 0.1f);
     neural_network.addLayer<Gelu_Layer>();
     neural_network.addLayer<Max_Pool_2d_Layer>(28, 28, 16, 2, 2, 0);
 
     neural_network.addLayer<Conv2d_Layer>(14, 14, 16, 32, 3, 1, 1);
-    neural_network.addLayer<Batch_Norm_2d_Layer>(14, 14, 32);
+    neural_network.addLayer<Batch_Norm_2d_Layer>(14, 14, 32, 1e-5f, 0.1f);
     neural_network.addLayer<Gelu_Layer>();
     neural_network.addLayer<Max_Pool_2d_Layer>(14, 14, 32, 2, 2, 0);
 
     neural_network.addLayer<Linear_Layer>(7 * 7 * 32, 128);
-    neural_network.addLayer<Batch_Norm_Layer>(128);
+    neural_network.addLayer<Batch_Norm_Layer>(128, 1e-5f, 0.1f);
     neural_network.addLayer<Gelu_Layer>();
 
-    neural_network.addLayer<Linear_Layer>(128, OUTPUT_DIMENSION);
+    neural_network.addLayer<Linear_Layer>(128, 10);
     neural_network.addLayer<Softmax_Layer>(true);
 
     Logger::logMessage("Starting training benchmark with Data Augmentation...", Log_Level::LOG_INFO, true, 0, Log_Feature::TRAINING);

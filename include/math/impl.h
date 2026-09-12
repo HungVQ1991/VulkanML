@@ -158,12 +158,17 @@ public:
         const Impl &_gamma, const Impl &_batch_variance, const Impl &_normalized_input,
         Impl &_gamma_gradient, Impl &_beta_gradient, Impl &_input_gradient,
         std::uint32_t _input_height, std::uint32_t _input_width, std::uint32_t _input_channels, float _epsilon) const = 0;
-
+    
     virtual void cceLoss(const Impl &_target_implementation, Impl &_output_result, float _epsilon) const = 0;
     virtual void mseLoss(const Impl &_target_implementation, Impl &_output_result) const = 0;
     virtual void maeLoss(const Impl &_target_implementation, Impl &_output_result) const = 0;
     virtual void bceLoss(const Impl &_target_implementation, Impl &_output_result, float _epsilon) const = 0;
     virtual void huberLoss(const Impl &_target_implementation, Impl &_output_result, float _delta) const = 0;
+
+    virtual void concatenateCollumns(const Impl &_other_impl, Impl &_output_result) const = 0;
+    virtual void concatenateRows(const Impl &_other_impl, Impl &_output_result) const = 0;
+    virtual void splitCollumns(size_t spilt_index, Impl &result_left, Impl &result_right) const = 0;
+    virtual void splitRows(size_t split_index, Impl &result_up, Impl &result_down) const = 0;
 
     virtual bool isEmpty() const noexcept = 0;
 };

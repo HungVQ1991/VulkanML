@@ -12,3 +12,4 @@
 #include "layer/ilayer.h"
 #include "layer/res_net_20_layer.h"
 #include "layer/res_net_block_2d_layer.h"
+#include "layer/ppo_actor_critic_layer.h"

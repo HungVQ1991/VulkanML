@@ -18,3 +18,4 @@ temp/
 include/c_api.cpp
 include/rl/
 *.bin
+train_emnist.cpp

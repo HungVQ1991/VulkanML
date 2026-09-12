@@ -110,32 +110,32 @@ public:
         initializeShape(_rows, _columns);
     }
 
-     std::size_t getRows() const noexcept
+    std::size_t getRows() const noexcept
     {
         return implementation->getRows();
     }
 
-     std::size_t getColumns() const noexcept
+    std::size_t getColumns() const noexcept
     {
         return implementation->getColumns();
     }
 
-     std::size_t getCols() const noexcept
+    std::size_t getCols() const noexcept
     {
         return implementation->getColumns();
     }
 
-     Execution_Target getExecutionTarget() const noexcept
+    Execution_Target getExecutionTarget() const noexcept
     {
         return execution_target;
     }
 
-     Execution_Target getTarget() const noexcept
+    Execution_Target getTarget() const noexcept
     {
         return execution_target;
     }
 
-     std::shared_ptr<Impl> getImplementation() const noexcept
+    std::shared_ptr<Impl> getImplementation() const noexcept
     {
         return implementation;
     }
@@ -156,18 +156,18 @@ public:
         }
     }
 
-     std::vector<float> getData() const
+    std::vector<float> getData() const
     {
         return implementation->getData();
     }
 
-     Storage_Handle getStorage() const
+    Storage_Handle getStorage() const
     {
         const Impl &const_implementation = *implementation;
         return const_implementation.getStorage();
     }
 
-     Mutable_Storage_Handle getStorage()
+    Mutable_Storage_Handle getStorage()
     {
         return implementation->getStorage();
     }
@@ -177,7 +177,7 @@ public:
         implementation->uploadData(_host_data);
     }
 
-     bool isEmpty() const noexcept
+    bool isEmpty() const noexcept
     {
         return implementation->isEmpty();
     }
@@ -569,133 +569,183 @@ public:
         implementation->huberLoss(*_target_matrix.implementation, *_output_result.implementation, _delta);
     }
 
-     Matrix operator*(const Matrix &_other) const
+    Matrix operator*(const Matrix &_other) const
     {
         Matrix result(execution_target);
         matmul(_other, result);
         return result;
     }
 
-     Matrix operator/(const Matrix &_other) const
+    Matrix operator/(const Matrix &_other) const
     {
         Matrix result(execution_target);
         matdiv(_other, result);
         return result;
     }
 
-     Matrix operator+(const Matrix &_other) const
+    Matrix operator+(const Matrix &_other) const
     {
         Matrix result(execution_target);
         add(_other, result);
         return result;
     }
 
-     Matrix operator-(const Matrix &_other) const
+    Matrix operator-(const Matrix &_other) const
     {
         Matrix result(execution_target);
         sub(_other, result);
         return result;
     }
 
-     Matrix operator*(float _scalar) const
+    Matrix operator*(float _scalar) const
     {
         Matrix result(execution_target);
         mulScalar(_scalar, result);
         return result;
     }
 
-     Matrix operator/(float _scalar) const
+    Matrix operator/(float _scalar) const
     {
         Matrix result(execution_target);
         divScalar(_scalar, result);
         return result;
     }
 
-     Matrix hadamardMul(const Matrix &_other) const
+    Matrix hadamardMul(const Matrix &_other) const
     {
         Matrix result(execution_target);
         hadamardMul(_other, result);
         return result;
     }
 
-     Matrix hadamardDiv(const Matrix &_other) const
+    Matrix hadamardDiv(const Matrix &_other) const
     {
         Matrix result(execution_target);
         hadamardDiv(_other, result);
         return result;
     }
 
-     Matrix transpose() const
+    Matrix transpose() const
     {
         Matrix result(execution_target);
         transpose(result);
         return result;
     }
 
-     Matrix inverse() const
+    Matrix inverse() const
     {
         Matrix result(execution_target);
         inverse(result);
         return result;
     }
 
-     Matrix normalize() const
+    Matrix normalize() const
     {
         Matrix result(execution_target);
         normalize(result);
         return result;
     }
 
-     Matrix relu() const
+    Matrix relu() const
     {
         Matrix result(execution_target);
         relu(result);
         return result;
     }
 
-     Matrix reluBackward(const Matrix &_output_gradient) const
+    Matrix reluBackward(const Matrix &_output_gradient) const
     {
         Matrix result(execution_target);
         reluBackward(_output_gradient, result);
         return result;
     }
 
-     Matrix gelu() const
+    Matrix gelu() const
     {
         Matrix result(execution_target);
         gelu(result);
         return result;
     }
 
-     Matrix geluBackward(const Matrix &_output_gradient) const
+    Matrix geluBackward(const Matrix &_output_gradient) const
     {
         Matrix result(execution_target);
         geluBackward(_output_gradient, result);
         return result;
     }
 
-     Matrix softmax() const
+    Matrix softmax() const
     {
         Matrix result(execution_target);
         softmax(result);
         return result;
     }
 
-     Matrix softmaxBackward(const Matrix &_output_gradient) const
+    Matrix softmaxBackward(const Matrix &_output_gradient) const
     {
         Matrix result(execution_target);
         softmaxBackward(_output_gradient, result);
         return result;
     }
 
-     Matrix matmulAdd(const Matrix &_other, const Matrix &_biases) const
+    Matrix matmulAdd(const Matrix &_other, const Matrix &_biases) const
     {
         Matrix result(execution_target);
         matmulAdd(_other, _biases, result);
         return result;
     }
 
-     float getScalar() const
+    void concatenateCollumns(const Matrix &_other, Matrix &_output_result) const
+    {
+        implementation->concatenateCollumns(*_other.implementation, *_output_result.implementation);
+    }
+
+    Matrix concatenateCollumns(const Matrix &_other) const
+    {
+        Matrix result(execution_target);
+        concatenateCollumns(_other, result);
+        return result;
+    }
+
+    void concatenateRows(const Matrix &_other, Matrix &_output_result) const
+    {
+        implementation->concatenateRows(*_other.implementation, *_output_result.implementation);
+    }
+
+    Matrix concatenateRows(const Matrix &_other) const
+    {
+        Matrix result(execution_target);
+        concatenateRows(_other, result);
+        return result;
+    }
+
+    void splitCollumns(std::size_t _split_index, Matrix &_result_left, Matrix &_result_right) const
+    {
+        implementation->splitCollumns(_split_index, *_result_left.implementation, *_result_right.implementation);
+    }
+
+    std::pair<Matrix, Matrix> splitCollumns(std::size_t _split_index) const
+    {
+        Matrix result_left(execution_target);
+        Matrix result_right(execution_target);
+        splitCollumns(_split_index, result_left, result_right);
+        return {std::move(result_left), std::move(result_right)};
+    }
+
+    void splitRows(std::size_t _split_index, Matrix &_result_up, Matrix &_result_down) const
+    {
+        implementation->splitRows(_split_index, *_result_up.implementation, *_result_down.implementation);
+    }
+
+    std::pair<Matrix, Matrix> splitRows(std::size_t _split_index) const
+    {
+        Matrix result_up(execution_target);
+        Matrix result_down(execution_target);
+        splitRows(_split_index, result_up, result_down);
+        return {std::move(result_up), std::move(result_down)};
+    }
+
+    float getScalar() const
     {
         const auto host_data = getData();
         float sum_value = 0.0f;
@@ -731,7 +781,7 @@ public:
         }
     }
 
-    void saveMatrix(std::ofstream &_output_file_stream) const   
+    void saveMatrix(std::ofstream &_output_file_stream) const
     {
         if (!_output_file_stream.is_open())
         {
@@ -750,7 +800,7 @@ public:
         _output_file_stream.write(reinterpret_cast<const char *>(host_data.data()), static_cast<std::streamsize>(host_data.size() * sizeof(float)));
     }
 
-     static Matrix loadMatrix(std::ifstream &_input_file_stream, Execution_Target _execution_target = Execution_Target::CPU)
+    static Matrix loadMatrix(std::ifstream &_input_file_stream, Execution_Target _execution_target = Execution_Target::CPU)
     {
         if (!_input_file_stream.is_open())
         {

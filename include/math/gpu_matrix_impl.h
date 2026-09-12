@@ -1554,6 +1554,172 @@ public:
         pushToGraph(Compute_Pipeline::HUBER_LOSS, {storage, target_gpu.storage, output_gpu.storage}, constants, workgroup_count_x, 1, 1);
     }
 
+    void concatenateCollumns(const Impl &_other_impl, Impl &_output_result) const override
+    {
+        const auto &other_gpu = castToGpuMatrix(_other_impl, "Gpu_Matrix_Impl::concatenateCollumns: Invalid other matrix");
+        auto &output_gpu = castToGpuMatrix(_output_result, "Gpu_Matrix_Impl::concatenateCollumns: Invalid output matrix");
+
+        if (rows != other_gpu.rows)
+        {
+            Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::concatenateCollumns: Row count mismatch (this={}, other={})", rows, other_gpu.rows},
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::TENSOR_INSPECTION);
+            throw std::invalid_argument("Row count mismatch in concatenateCollumns");
+        }
+
+        std::uint32_t cols_a = static_cast<std::uint32_t>(columns);
+        std::uint32_t cols_b = static_cast<std::uint32_t>(other_gpu.columns);
+        std::uint32_t total_cols = cols_a + cols_b;
+        output_gpu.reshape(rows, total_cols);
+
+        struct Concat_Columns_Push_Constants
+        {
+            std::uint32_t rows;
+            std::uint32_t columns_a;
+            std::uint32_t columns_b;
+        } constants{static_cast<std::uint32_t>(rows), cols_a, cols_b};
+
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::concatenateCollumns: rows={}, cols_a={}, cols_b={}",
+                                        constants.rows, constants.columns_a, constants.columns_b},
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           1,
+                           Log_Feature::DENSE_COMPUTE);
+
+        pushToGraph(Compute_Pipeline::CONCATENATE_COLUMNS,
+                    {storage, other_gpu.storage, output_gpu.storage},
+                    constants,
+                    (total_cols + 15) / 16,
+                    (constants.rows + 15) / 16);
+    }
+
+    void concatenateRows(const Impl &_other_impl, Impl &_output_result) const override
+    {
+        const auto &other_gpu = castToGpuMatrix(_other_impl, "Gpu_Matrix_Impl::concatenateRows: Invalid other matrix");
+        auto &output_gpu = castToGpuMatrix(_output_result, "Gpu_Matrix_Impl::concatenateRows: Invalid output matrix");
+
+        if (columns != other_gpu.columns)
+        {
+            Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::concatenateRows: Column count mismatch (this={}, other={})", columns, other_gpu.columns},
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::TENSOR_INSPECTION);
+            throw std::invalid_argument("Column count mismatch in concatenateRows");
+        }
+
+        std::uint32_t rows_a = static_cast<std::uint32_t>(rows);
+        std::uint32_t rows_b = static_cast<std::uint32_t>(other_gpu.rows);
+        std::uint32_t total_rows = rows_a + rows_b;
+        output_gpu.reshape(total_rows, columns);
+
+        struct Concat_Rows_Push_Constants
+        {
+            std::uint32_t rows_a;
+            std::uint32_t rows_b;
+            std::uint32_t columns;
+        } constants{rows_a, rows_b, static_cast<std::uint32_t>(columns)};
+
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::concatenateRows: rows_a={}, rows_b={}, columns={}",
+                                        constants.rows_a, constants.rows_b, constants.columns},
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           1,
+                           Log_Feature::DENSE_COMPUTE);
+
+        pushToGraph(Compute_Pipeline::CONCATENATE_ROWS,
+                    {storage, other_gpu.storage, output_gpu.storage},
+                    constants,
+                    (constants.columns + 15) / 16,
+                    (total_rows + 15) / 16);
+    }
+
+    void splitCollumns(std::size_t _split_index, Impl &_result_left, Impl &_result_right) const override
+    {
+        if (_split_index == 0 || _split_index >= columns)
+        {
+            Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::splitCollumns: Split index out of range (index={}, columns={})", _split_index, columns},
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::TENSOR_INSPECTION);
+            throw std::out_of_range("Split index out of range in splitCollumns");
+        }
+
+        auto &left_gpu = castToGpuMatrix(_result_left, "Gpu_Matrix_Impl::splitCollumns: Invalid left output matrix");
+        auto &right_gpu = castToGpuMatrix(_result_right, "Gpu_Matrix_Impl::splitCollumns: Invalid right output matrix");
+
+        std::uint32_t cols_left = static_cast<std::uint32_t>(_split_index);
+        std::uint32_t cols_right = static_cast<std::uint32_t>(columns - _split_index);
+
+        left_gpu.reshape(rows, cols_left);
+        right_gpu.reshape(rows, cols_right);
+
+        struct Split_Columns_Push_Constants
+        {
+            std::uint32_t rows;
+            std::uint32_t columns_left;
+            std::uint32_t columns_right;
+        } constants{static_cast<std::uint32_t>(rows), cols_left, cols_right};
+
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::splitCollumns: rows={}, cols_left={}, cols_right={}",
+                                        constants.rows, constants.columns_left, constants.columns_right},
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           1,
+                           Log_Feature::DENSE_COMPUTE);
+
+        pushToGraph(Compute_Pipeline::SPLIT_COLUMNS,
+                    {storage, left_gpu.storage, right_gpu.storage},
+                    constants,
+                    (static_cast<std::uint32_t>(columns) + 15) / 16,
+                    (constants.rows + 15) / 16);
+    }
+
+    void splitRows(std::size_t _split_index, Impl &_result_up, Impl &_result_down) const override
+    {
+        if (_split_index == 0 || _split_index >= rows)
+        {
+            Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::splitRows: Split index out of range (index={}, rows={})", _split_index, rows},
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::TENSOR_INSPECTION);
+            throw std::out_of_range("Split index out of range in splitRows");
+        }
+
+        auto &up_gpu = castToGpuMatrix(_result_up, "Gpu_Matrix_Impl::splitRows: Invalid up output matrix");
+        auto &down_gpu = castToGpuMatrix(_result_down, "Gpu_Matrix_Impl::splitRows: Invalid down output matrix");
+
+        std::uint32_t rows_up = static_cast<std::uint32_t>(_split_index);
+        std::uint32_t rows_down = static_cast<std::uint32_t>(rows - _split_index);
+
+        up_gpu.reshape(rows_up, columns);
+        down_gpu.reshape(rows_down, columns);
+
+        struct Split_Rows_Push_Constants
+        {
+            std::uint32_t rows_up;
+            std::uint32_t rows_down;
+            std::uint32_t columns;
+        } constants{rows_up, rows_down, static_cast<std::uint32_t>(columns)};
+
+        Logger::logMessage(Input_Format{"Gpu_Matrix_Impl::splitRows: rows_up={}, rows_down={}, columns={}",
+                                        constants.rows_up, constants.rows_down, constants.columns},
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           1,
+                           Log_Feature::DENSE_COMPUTE);
+
+        pushToGraph(Compute_Pipeline::SPLIT_ROWS,
+                    {storage, up_gpu.storage, down_gpu.storage},
+                    constants,
+                    (constants.columns + 15) / 16,
+                    (static_cast<std::uint32_t>(rows) + 15) / 16);
+    }
+
     void uploadData(const std::vector<float> &_host_data) override
     {
         if (_host_data.size() != rows * columns)
