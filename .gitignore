@@ -19,3 +19,11 @@ include/c_api.cpp
 include/rl/
 *.bin
 train_emnist.cpp
+MUJOCO_LOG.TXT
+mujoco.dll
+mujoco/
+train_humanoid.cpp
+verify_humanoid.cpp
+assets/
+train_mujoco.cpp
+include/environment/

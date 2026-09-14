@@ -8,7 +8,7 @@
 #include "engine/execution_engine.h"
 #include "helper/logger.h"
 #include "learning_rate/ilearning_rate.h"
-#include "math/matrix.h"
+#include "math/tensor.h"
 
 enum class Optimizer_Type : std::uint32_t
 {

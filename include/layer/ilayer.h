@@ -16,7 +16,7 @@
 #include "engine/gpu_vector.h"
 #include "helper/logger.h"
 #include "helper/magic_enum.hpp"
-#include "math/matrix.h"
+#include "math/tensor.h"
 
 template<typename T>
 std::string getEnumString(T str)

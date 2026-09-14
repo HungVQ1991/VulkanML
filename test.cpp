@@ -18,7 +18,7 @@
 #include "engine/vulkan_sub_allocator.h"
 #include "helper/layer.h"
 #include "helper/learning_rate.h"
-#include "math/matrix.h"
+#include "math/tensor.h"
 #include "neural_network.h"
 #include "helper/optimizer.h"
 #include "rl/dqn_agent.h"
@@ -923,77 +923,70 @@ bool testPpoActorCriticSerialization(Execution_Target exec_target)
 
 void runTestSuite(Execution_Target exec_target, const std::string &target_name)
 {
-    std::cout << "========================================\n";
     std::cout << "   RUNNING TEST SUITE ON " << target_name << "\n";
-    std::cout << "========================================\n";
 
-    // std::cout << "\n[1. Basic Matrix Arithmetics]\n";
-    // std::cout << "  Matrix Addition (with Broadcast):  " << (testMatrixAddition(exec_target) ? "PASS" : "FAIL") << "\n";
-    // std::cout << "  Matrix Subtraction (with Broadcast): " << (testMatrixSubtraction(exec_target) ? "PASS" : "FAIL") << "\n";
-    // std::cout << "  Matrix Multiplication (GEMM):      " << (testMatrixMultiplication(exec_target) ? "PASS" : "FAIL") << "\n";
-    // std::cout << "  Scalar Multiplication & Division:   " << (testScalarOperations(exec_target) ? "PASS" : "FAIL") << "\n";
-    // std::cout << "  Hadamard Multiplication & Division: " << (testHadamardOperations(exec_target) ? "PASS" : "FAIL") << "\n";
-    // std::cout << "  Matrix Concat & Split (Row/Col):   " << (testMatrixConcatAndSplit(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "\n[1. Basic Matrix Arithmetics]\n";
+    std::cout << "  Matrix Addition (with Broadcast):  " << (testMatrixAddition(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Matrix Subtraction (with Broadcast): " << (testMatrixSubtraction(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Matrix Multiplication (GEMM):      " << (testMatrixMultiplication(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Scalar Multiplication & Division:   " << (testScalarOperations(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Hadamard Multiplication & Division: " << (testHadamardOperations(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Matrix Concat & Split (Row/Col):   " << (testMatrixConcatAndSplit(exec_target) ? "PASS" : "FAIL") << "\n";
 
-    // std::cout << "\n[2. Transformations & Advanced Operations]\n";
-    // std::cout << "  Transpose & Matrix Inversion:       " << (testTransposeAndInverse(exec_target) ? "PASS" : "FAIL") << "\n";
-    // std::cout << "  Euclidean L2 Normalization:        " << (testNormalize(exec_target) ? "PASS" : "FAIL") << "\n";
-    // std::cout << "  Fused Linear Bias Add (MatmulAdd): " << (testMatmulAdd(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "\n[2. Transformations & Advanced Operations]\n";
+    std::cout << "  Transpose & Matrix Inversion:       " << (testTransposeAndInverse(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Euclidean L2 Normalization:        " << (testNormalize(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Fused Linear Bias Add (MatmulAdd): " << (testMatmulAdd(exec_target) ? "PASS" : "FAIL") << "\n";
 
-    // std::cout << "\n[3. Activation Functions]\n";
-    // std::cout << "  ReLU Forward & Backward:           " << (testRelu(exec_target) ? "PASS" : "FAIL") << "\n";
-    // std::cout << "  GELU Forward & Backward:           " << (testGelu(exec_target) ? "PASS" : "FAIL") << "\n";
-    // std::cout << "  Softmax Forward & Backward:        " << (testSoftmax(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "\n[3. Activation Functions]\n";
+    std::cout << "  ReLU Forward & Backward:           " << (testRelu(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  GELU Forward & Backward:           " << (testGelu(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Softmax Forward & Backward:        " << (testSoftmax(exec_target) ? "PASS" : "FAIL") << "\n";
 
-    // std::cout << "\n[4. Cost & Loss Functions]\n";
-    // std::cout << "  MSE Cost & Gradient:               " << (testMseLoss(exec_target) ? "PASS" : "FAIL") << "\n";
-    // std::cout << "  MAE Cost & Gradient:               " << (testMaeLoss(exec_target) ? "PASS" : "FAIL") << "\n";
-    // std::cout << "  BCE Cost & Gradient:               " << (testBceLoss(exec_target) ? "PASS" : "FAIL") << "\n";
-    // std::cout << "  CCE Cost & Gradient:               " << (testCceLoss(exec_target) ? "PASS" : "FAIL") << "\n";
-    // std::cout << "  Huber Cost & Gradient:             " << (testHuberLoss(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "\n[4. Cost & Loss Functions]\n";
+    std::cout << "  MSE Cost & Gradient:               " << (testMseLoss(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  MAE Cost & Gradient:               " << (testMaeLoss(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  BCE Cost & Gradient:               " << (testBceLoss(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  CCE Cost & Gradient:               " << (testCceLoss(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Huber Cost & Gradient:             " << (testHuberLoss(exec_target) ? "PASS" : "FAIL") << "\n";
 
-    // std::cout << "\n[5. Neural Network Layers]\n";
-    // std::cout << "  Linear Layer (Forward & Backward): " << (testLinearLayer(exec_target) ? "PASS" : "FAIL") << "\n";
-    // std::cout << "  Conv2D Layer (Forward & Backward): " << (testConv2dLayer(exec_target) ? "PASS" : "FAIL") << "\n";
-    // std::cout << "  MaxPool2D Layer (with Mask):       " << (testMaxPool2dLayer(exec_target) ? "PASS" : "FAIL") << "\n";
-    // std::cout << "  GlobalAvgPool2D Layer:             " << (testGlobalAvgPool2dLayer(exec_target) ? "PASS" : "FAIL") << "\n";
-    // std::cout << "  BatchNorm 1D Layer:                " << (testBatchNormLayer(exec_target) ? "PASS" : "FAIL") << "\n";
-    // std::cout << "  BatchNorm 2D Layer:                " << (testBatchNorm2dLayer(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "\n[5. Neural Network Layers]\n";
+    std::cout << "  Linear Layer (Forward & Backward): " << (testLinearLayer(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Conv2D Layer (Forward & Backward): " << (testConv2dLayer(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  MaxPool2D Layer (with Mask):       " << (testMaxPool2dLayer(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  GlobalAvgPool2D Layer:             " << (testGlobalAvgPool2dLayer(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  BatchNorm 1D Layer:                " << (testBatchNormLayer(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  BatchNorm 2D Layer:                " << (testBatchNorm2dLayer(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "  ResNet Block 2D (Id & Proj):       " << (testResNetBlock2dLayer(exec_target) ? "PASS" : "FAIL") << "\n";
-    // std::cout << "  PPO Layer Forward:                 " << (testPpoActorCriticForward(exec_target) ? "PASS" : "FAIL") << "\n";       
-    // std::cout << "  PPO Layer Backward & Accumulation: " << (testPpoActorCriticBackward(exec_target) ? "PASS" : "FAIL") << "\n";      
-    // std::cout << "  PPO Layer Serialization I/O:       " << (testPpoActorCriticSerialization(exec_target) ? "PASS" : "FAIL") << "\n"; 
+    std::cout << "  PPO Layer Forward:                 " << (testPpoActorCriticForward(exec_target) ? "PASS" : "FAIL") << "\n";       
+    std::cout << "  PPO Layer Backward & Accumulation: " << (testPpoActorCriticBackward(exec_target) ? "PASS" : "FAIL") << "\n";      
+    std::cout << "  PPO Layer Serialization I/O:       " << (testPpoActorCriticSerialization(exec_target) ? "PASS" : "FAIL") << "\n"; 
 
-    // std::cout << "\n[6. Optimizers]\n";
-    // std::cout << "  SGD Optimizer Step:                " << (testSgdOptimizer(exec_target) ? "PASS" : "FAIL") << "\n";
-    // std::cout << "  Adam Optimizer Step:               " << (testAdamOptimizer(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "\n[6. Optimizers]\n";
+    std::cout << "  SGD Optimizer Step:                " << (testSgdOptimizer(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Adam Optimizer Step:               " << (testAdamOptimizer(exec_target) ? "PASS" : "FAIL") << "\n";
 
-    // std::cout << "\n[7. Reinforcement Learning]\n";
-    // std::cout << "  DQN Agent (Train Step & Target Sync): " << (testDqnAgent(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "\n[7. Reinforcement Learning]\n";
+    std::cout << "  DQN Agent (Train Step & Target Sync): " << (testDqnAgent(exec_target) ? "PASS" : "FAIL") << "\n";
 
-    // std::cout << "\n[8. Serialization & I/O]\n";
-    // std::cout << "  Matrix Binary I/O:                 " << (testMatrixSerialization(exec_target) ? "PASS" : "FAIL") << "\n";
-    // std::cout << "  Model Inference I/O (NNI1):        " << (testModelInferenceSerialization(exec_target) ? "PASS" : "FAIL") << "\n\n";
+    std::cout << "\n[8. Serialization & I/O]\n";
+    std::cout << "  Matrix Binary I/O:                 " << (testMatrixSerialization(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Model Inference I/O (NNI1):        " << (testModelInferenceSerialization(exec_target) ? "PASS" : "FAIL") << "\n\n";
 }
 
 int main()
 {
     Logger::setFileLogging(true);
     Logger::setOnlyActiveFeatures(Log_Feature::NONE);
-    Logger::logMessage("==================================Test log==================================", Log_Level::LOG_INFO, true);
     runTestSuite(Execution_Target::CPU, "CPU BACKEND");
     runTestSuite(Execution_Target::VULKAN_GPU, "VULKAN GPU BACKEND");
 
-    // std::cout << "========================================\n";
-    // std::cout << "   SYSTEM & LIFECYCLE MANAGEMENT TESTS  \n";
-    // std::cout << "========================================\n";
-
-    // std::cout << "  Learning Rate Schedulers Suite:    " << (testLearningRateSchedulers() ? "PASS" : "FAIL") << "\n";
-    // std::cout << "  GPU Vector Lifecycle & Resizing:   " << (testGpuVectorLifecycle() ? "PASS" : "FAIL") << "\n";
-    // std::cout << "  Sub-Allocator & Garbage Collector: " << (testVulkanSubAllocatorAndGarbageCollection() ? "PASS" : "FAIL") << "\n";
-    // std::cout << "  Operator Fusion & Graph Dispatch:  " << (testOperatorFusionAndGraphExecution() ? "PASS" : "FAIL") << "\n";
-    // std::cout << "  Async Data Pipeline Double-Buffer: " << (testAsyncDataPipeline() ? "PASS" : "FAIL") << "\n";
-    // std::cout << "  Replay Buffer Capacity & Sampling: " << (testReplayBuffer() ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Learning Rate Schedulers Suite:    " << (testLearningRateSchedulers() ? "PASS" : "FAIL") << "\n";
+    std::cout << "  GPU Vector Lifecycle & Resizing:   " << (testGpuVectorLifecycle() ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Sub-Allocator & Garbage Collector: " << (testVulkanSubAllocatorAndGarbageCollection() ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Operator Fusion & Graph Dispatch:  " << (testOperatorFusionAndGraphExecution() ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Async Data Pipeline Double-Buffer: " << (testAsyncDataPipeline() ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Replay Buffer Capacity & Sampling: " << (testReplayBuffer() ? "PASS" : "FAIL") << "\n";
     std::cout << "========================================\n";
 
     return 0;

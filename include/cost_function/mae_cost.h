@@ -11,7 +11,7 @@
 
 #include "helper/logger.h"
 #include "icost_function.h"
-#include "math/matrix.h"
+#include "math/tensor.h"
 
 class Mae_Cost : public ICost_Function
 {

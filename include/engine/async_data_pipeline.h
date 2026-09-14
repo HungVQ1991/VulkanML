@@ -18,7 +18,7 @@
 
 #include "engine/gpu_vector.h"
 #include "helper/logger.h"
-#include "math/matrix.h"
+#include "math/tensor.h"
 
 struct Batch_Data
 {

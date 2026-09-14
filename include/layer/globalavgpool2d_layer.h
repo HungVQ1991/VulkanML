@@ -11,7 +11,7 @@
 #include "helper/logger.h"
 #include "helper/magic_enum.hpp"
 #include "ilayer.h"
-#include "math/matrix.h"
+#include "math/tensor.h"
 
 class Global_Avg_Pool_2d_Layer : public ILayer
 {
