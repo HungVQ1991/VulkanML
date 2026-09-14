@@ -24,6 +24,7 @@
 #include "rl/dqn_agent.h"
 #include "rl/replay_buffer.h"
 #include "rl/transition.h"
+#include "population.h"
 
 bool nearlyEqual(float a, float b, float eps = 1e-3f)
 {
@@ -142,6 +143,73 @@ bool testMatmulAdd(Execution_Target exec_target)
 
     Matrix res = mat_a.matmulAdd(mat_b, mat_bias);
     return verifyMatrix(res, {9.0f, 10.0f, 15.0f, 14.0f});
+}
+
+bool testBatchedTensorMatmul(Execution_Target exec_target)
+{
+    Tensor t_a(Shape{2, 2, 3}, {
+        1.0f, 2.0f, 1.0f,
+        0.0f, 1.0f, 2.0f,
+        2.0f, 0.0f, 1.0f,
+        1.0f, 1.0f, 0.0f
+    }, exec_target);
+
+    Tensor t_b(Shape{2, 3, 2}, {
+        1.0f, 0.0f,
+        2.0f, 1.0f,
+        1.0f, 1.0f,
+        0.0f, 2.0f,
+        1.0f, 0.0f,
+        2.0f, 1.0f
+    }, exec_target);
+
+    Tensor res = t_a * t_b;
+    bool ok_3d = verifyMatrix(res, {6.0f, 3.0f, 4.0f, 3.0f, 2.0f, 5.0f, 1.0f, 2.0f});
+    bool shape_3d_ok = (res.getShape() == Shape{2, 2, 2});
+
+    Tensor t_b_bcast(Shape{3, 2}, {
+        1.0f, 2.0f,
+        0.0f, 1.0f,
+        1.0f, 0.0f
+    }, exec_target);
+
+    Tensor res_bcast = t_a * t_b_bcast;
+    bool ok_bcast = verifyMatrix(res_bcast, {2.0f, 4.0f, 2.0f, 1.0f, 3.0f, 4.0f, 1.0f, 3.0f});
+    bool shape_bcast_ok = (res_bcast.getShape() == Shape{2, 2, 2});
+
+    return ok_3d && shape_3d_ok && ok_bcast && shape_bcast_ok;
+}
+
+bool testBatchedTensorMatmulAdd(Execution_Target exec_target)
+{
+    Tensor t_a(Shape{2, 2, 2}, {
+        1.0f, 2.0f,
+        3.0f, 4.0f,
+        5.0f, 6.0f,
+        7.0f, 8.0f
+    }, exec_target);
+
+    Tensor t_w(Shape{2, 2}, {
+        1.0f, 0.0f,
+        0.0f, 2.0f
+    }, exec_target);
+
+    Tensor t_b_broadcast(Shape{1, 2}, {10.0f, 20.0f}, exec_target);
+
+    Tensor res_bcast = t_a.matmulAdd(t_w, t_b_broadcast);
+    bool ok_bcast = verifyMatrix(res_bcast, {11.0f, 24.0f, 13.0f, 28.0f, 15.0f, 32.0f, 17.0f, 36.0f});
+
+    Tensor t_b_full(Shape{2, 2, 2}, {
+        1.0f, 2.0f,
+        3.0f, 4.0f,
+        5.0f, 6.0f,
+        7.0f, 8.0f
+    }, exec_target);
+
+    Tensor res_full = t_a.matmulAdd(t_w, t_b_full);
+    bool ok_full = verifyMatrix(res_full, {2.0f, 6.0f, 6.0f, 12.0f, 10.0f, 18.0f, 14.0f, 24.0f});
+
+    return ok_bcast && ok_full;
 }
 
 bool testRelu(Execution_Target exec_target)
@@ -685,6 +753,33 @@ bool testOperatorFusionAndGraphExecution()
     return verifyMatrix(mat_relu, {3.0f, 5.0f, 7.0f, 9.0f});
 }
 
+bool testBatchedTensorMatmulFusion()
+{
+    Execution_Engine &engine = Execution_Engine::getInstance();
+    engine.getCurrentGraph().clear();
+
+    Tensor t_a(Shape{2, 2, 2}, {
+        -5.0f, 2.0f,
+        3.0f, -4.0f,
+        1.0f, -2.0f,
+        -3.0f, 4.0f
+    }, Execution_Target::VULKAN_GPU);
+
+    Tensor t_w(Shape{2, 2}, {
+        1.0f, 0.0f,
+        0.0f, 1.0f
+    }, Execution_Target::VULKAN_GPU);
+
+    Tensor t_b(Shape{1, 2}, {1.0f, 0.0f}, Execution_Target::VULKAN_GPU);
+
+    Tensor t_mmadd = t_a.matmulAdd(t_w, t_b);
+    Tensor t_fused = t_mmadd.relu();
+
+    engine.executeGraph();
+
+    return verifyMatrix(t_fused, {0.0f, 2.0f, 4.0f, 0.0f, 2.0f, 0.0f, 0.0f, 4.0f});
+}
+
 class Dummy_Data_Pipeline : public Async_Data_Pipeline
 {
 protected:
@@ -795,6 +890,187 @@ bool testDqnAgent(Execution_Target exec_target)
     agent.synchronizeTargetNetworkHard();
 
     return action_ok && epsilon_ok;
+}
+
+bool testPopulation(Execution_Target exec_target)
+{
+    constexpr std::size_t pop_size = 8;
+    constexpr std::size_t state_dim = 16;
+    constexpr std::size_t action_dim = 4;
+    constexpr std::size_t hidden_dim = 32;
+
+    // 1. Direct Configuration Constructor
+    Population pop(pop_size, state_dim, action_dim, hidden_dim, exec_target, 42);
+    if (pop.getPopulationSize() != pop_size)
+    {
+        return false;
+    }
+
+    // 2. Template Network Constructor
+    Neural_Network template_net(exec_target);
+    template_net.addLayer<Linear_Layer>(state_dim, hidden_dim, exec_target);
+    template_net.addLayer<Gelu_Layer>();
+    template_net.addLayer<Linear_Layer>(hidden_dim, action_dim, exec_target);
+    Population pop_tmpl(pop_size, template_net, exec_target, 123);
+    if (pop_tmpl.getPopulationSize() != pop_size)
+    {
+        return false;
+    }
+
+    // 3. Action Selection Determinism & Range
+    std::vector<float> test_state(state_dim);
+    for (std::size_t i = 0; i < state_dim; ++i)
+    {
+        test_state[i] = std::sin(static_cast<float>(i) * 0.5f);
+    }
+
+    for (std::size_t i = 0; i < pop_size; ++i)
+    {
+        std::size_t act1 = pop.selectAction(i, test_state);
+        std::size_t act2 = pop.selectAction(i, test_state);
+        if (act1 != act2 || act1 >= action_dim)
+        {
+            return false;
+        }
+    }
+
+    // 4. getIndividual Consistency
+    Neural_Network ind0 = pop.getIndividual(0);
+    Matrix ind0_input(1, state_dim, test_state, exec_target);
+    Matrix ind0_output = ind0.forward(ind0_input);
+    if (exec_target == Execution_Target::VULKAN_GPU)
+    {
+        Execution_Engine::getInstance().executeGraph();
+    }
+    std::vector<float> q_vals = ind0_output.getData();
+    std::size_t expected_act0 = 0;
+    float max_q = q_vals[0];
+    for (std::size_t a = 1; a < q_vals.size(); ++a)
+    {
+        if (q_vals[a] > max_q)
+        {
+            max_q = q_vals[a];
+            expected_act0 = a;
+        }
+    }
+    if (pop.selectAction(0, test_state) != expected_act0)
+    {
+        return false;
+    }
+
+    // 5. Batched Action Selection (selectBatchActions)
+    std::vector<float> flat_states(pop_size * state_dim);
+    std::vector<std::size_t> expected_batch(pop_size);
+    for (std::size_t i = 0; i < pop_size; ++i)
+    {
+        for (std::size_t d = 0; d < state_dim; ++d)
+        {
+            flat_states[i * state_dim + d] = std::cos(static_cast<float>(i * state_dim + d) * 0.2f);
+        }
+        expected_batch[i] = pop.selectAction(i, flat_states.data() + (i * state_dim));
+    }
+
+    std::vector<std::size_t> batch_results(pop_size);
+    pop.selectBatchActions(flat_states.data(), nullptr, pop_size, batch_results.data());
+    for (std::size_t i = 0; i < pop_size; ++i)
+    {
+        if (batch_results[i] != expected_batch[i])
+        {
+            return false;
+        }
+    }
+
+    // Test active_indices subset in selectBatchActions
+    std::vector<std::size_t> active_indices = {1, 3, 6};
+    std::vector<float> subset_states(active_indices.size() * state_dim);
+    for (std::size_t k = 0; k < active_indices.size(); ++k)
+    {
+        std::size_t idx = active_indices[k];
+        std::copy(flat_states.begin() + idx * state_dim,
+                  flat_states.begin() + (idx + 1) * state_dim,
+                  subset_states.begin() + k * state_dim);
+    }
+    std::vector<std::size_t> subset_results(active_indices.size());
+    pop.selectBatchActions(subset_states.data(), active_indices.data(), active_indices.size(), subset_results.data());
+    for (std::size_t k = 0; k < active_indices.size(); ++k)
+    {
+        if (subset_results[k] != expected_batch[active_indices[k]])
+        {
+            return false;
+        }
+    }
+
+    // 6. Serialization (saveIndividual & loadIndividual)
+    const std::string temp_file = "temp_population_individual.bin";
+    if (!pop.saveIndividual(2, temp_file))
+    {
+        return false;
+    }
+
+    Population pop_loader(pop_size, state_dim, action_dim, hidden_dim, exec_target, 9999);
+    if (!pop_loader.loadIndividual(5, temp_file))
+    {
+        std::remove(temp_file.c_str());
+        return false;
+    }
+    std::remove(temp_file.c_str());
+
+    for (std::size_t i = 0; i < pop_size; ++i)
+    {
+        const float *st = flat_states.data() + i * state_dim;
+        if (pop_loader.selectAction(5, st) != pop.selectAction(2, st))
+        {
+            return false;
+        }
+    }
+
+    // 7. Evolution, Elitism & Best Individual I/O
+    constexpr std::size_t elite_candidate = 4;
+    std::vector<std::size_t> ind4_actions(pop_size);
+    for (std::size_t i = 0; i < pop_size; ++i)
+    {
+        ind4_actions[i] = pop.selectAction(elite_candidate, flat_states.data() + i * state_dim);
+    }
+
+    std::vector<float> fitness(pop_size, 0.0f);
+    fitness[elite_candidate] = 1000.0f;
+
+    const std::string best_temp = "temp_best_champ.bin";
+    if (!pop.saveBestIndividual(best_temp, fitness.data()))
+    {
+        return false;
+    }
+    if (!pop_loader.loadBestIndividual(best_temp))
+    {
+        std::remove(best_temp.c_str());
+        return false;
+    }
+    std::remove(best_temp.c_str());
+
+    for (std::size_t i = 0; i < pop_size; ++i)
+    {
+        const float *st = flat_states.data() + i * state_dim;
+        if (pop_loader.selectAction(0, st) != ind4_actions[i])
+        {
+            return false;
+        }
+    }
+
+    // Evolve with 1 elite, 0% mutation -> elite candidate 4 must remain untouched
+    pop.evolve(fitness.data(), 0.15f, 0.0f, 0.0f, 0.0f, 3, 1);
+    for (std::size_t i = 0; i < pop_size; ++i)
+    {
+        const float *st = flat_states.data() + i * state_dim;
+        if (pop.selectAction(elite_candidate, st) != ind4_actions[i])
+        {
+            return false;
+        }
+    }
+
+    // Evolve with high mutation
+    pop.evolve(fitness.data(), 0.15f, 0.8f, 0.3f, 0.5f, 3, 1);
+
+    return true;
 }
 
 bool testMatrixConcatAndSplit(Execution_Target exec_target)
@@ -937,6 +1213,8 @@ void runTestSuite(Execution_Target exec_target, const std::string &target_name)
     std::cout << "  Transpose & Matrix Inversion:       " << (testTransposeAndInverse(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "  Euclidean L2 Normalization:        " << (testNormalize(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "  Fused Linear Bias Add (MatmulAdd): " << (testMatmulAdd(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Batched Tensor GEMM (3D):          " << (testBatchedTensorMatmul(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Batched Tensor GEMM Add (3D):      " << (testBatchedTensorMatmulAdd(exec_target) ? "PASS" : "FAIL") << "\n";
 
     std::cout << "\n[3. Activation Functions]\n";
     std::cout << "  ReLU Forward & Backward:           " << (testRelu(exec_target) ? "PASS" : "FAIL") << "\n";
@@ -968,6 +1246,7 @@ void runTestSuite(Execution_Target exec_target, const std::string &target_name)
 
     std::cout << "\n[7. Reinforcement Learning]\n";
     std::cout << "  DQN Agent (Train Step & Target Sync): " << (testDqnAgent(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Population Suite (GEMM/Evolve/IO): " << (testPopulation(exec_target) ? "PASS" : "FAIL") << "\n";
 
     std::cout << "\n[8. Serialization & I/O]\n";
     std::cout << "  Matrix Binary I/O:                 " << (testMatrixSerialization(exec_target) ? "PASS" : "FAIL") << "\n";
@@ -985,6 +1264,7 @@ int main()
     std::cout << "  GPU Vector Lifecycle & Resizing:   " << (testGpuVectorLifecycle() ? "PASS" : "FAIL") << "\n";
     std::cout << "  Sub-Allocator & Garbage Collector: " << (testVulkanSubAllocatorAndGarbageCollection() ? "PASS" : "FAIL") << "\n";
     std::cout << "  Operator Fusion & Graph Dispatch:  " << (testOperatorFusionAndGraphExecution() ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Batched GEMM + ReLU Fusion:        " << (testBatchedTensorMatmulFusion() ? "PASS" : "FAIL") << "\n";
     std::cout << "  Async Data Pipeline Double-Buffer: " << (testAsyncDataPipeline() ? "PASS" : "FAIL") << "\n";
     std::cout << "  Replay Buffer Capacity & Sampling: " << (testReplayBuffer() ? "PASS" : "FAIL") << "\n";
     std::cout << "========================================\n";

@@ -248,32 +248,76 @@ public:
 
     void matmul(const Tensor_Impl &other, Tensor_Impl &output) const override
     {
-        validateMatmulDimensions(other);
         const auto &a_data = getData();
         const auto &b_data = other.getData();
         auto &output_cpu = static_cast<Cpu_Tensor_Impl &>(output);
 
-        std::size_t m_dim = getRows();
-        std::size_t k_dim = getColumns();
-        std::size_t n_dim = other.getColumns();
+        std::size_t rank_a = shape.getRank();
+        std::size_t m_dim = (rank_a >= 2) ? shape[rank_a - 2] : getRows();
+        std::size_t k_dim = (rank_a >= 2) ? shape[rank_a - 1] : getColumns();
+        std::size_t b_dim = (rank_a >= 3) ? (total_elements / (m_dim * k_dim)) : 1;
 
-        output_cpu.reshape(m_dim, n_dim);
+        std::size_t rank_b = other.getShape().getRank();
+        std::size_t k_other = (rank_b >= 2) ? other.getShape()[rank_b - 2] : other.getRows();
+        std::size_t n_dim = (rank_b >= 2) ? other.getShape()[rank_b - 1] : other.getColumns();
+        std::size_t b_other = (rank_b >= 3) ? (other.getTotalElements() / (k_other * n_dim)) : 1;
+
+        if (k_dim != k_other)
+        {
+            throw std::invalid_argument("Matrix inner dimensions must match for multiplication");
+        }
+
+        bool broadcast_b = (b_other == 1 && b_dim > 1);
+        if (!broadcast_b && b_dim != b_other)
+        {
+            throw std::invalid_argument("Batch dimensions must match or be broadcastable");
+        }
+
+        Shape out_shape;
+        if (rank_a <= 2 && rank_b <= 2)
+        {
+            out_shape = Shape{m_dim, n_dim};
+        }
+        else if (rank_a == 3)
+        {
+            out_shape = Shape{b_dim, m_dim, n_dim};
+        }
+        else if (rank_a >= 4)
+        {
+            std::vector<std::size_t> dims(shape.getDimensions().begin(), shape.getDimensions().end());
+            dims[rank_a - 2] = m_dim;
+            dims[rank_a - 1] = n_dim;
+            out_shape = Shape(dims);
+        }
+        else
+        {
+            out_shape = Shape{b_dim, m_dim, n_dim};
+        }
+
+        output_cpu.reshape(out_shape);
         std::fill(output_cpu.storage_buffer->begin(), output_cpu.storage_buffer->end(), 0.0F);
 
-        for (std::size_t i = 0; i < m_dim; ++i)
+        for (std::size_t b = 0; b < b_dim; ++b)
         {
-            for (std::size_t k = 0; k < k_dim; ++k)
+            std::size_t a_batch_offset = b * m_dim * k_dim;
+            std::size_t b_batch_offset = broadcast_b ? 0 : (b * k_dim * n_dim);
+            std::size_t c_batch_offset = b * m_dim * n_dim;
+
+            for (std::size_t i = 0; i < m_dim; ++i)
             {
-                float a_val = a_data[i * k_dim + k];
-                for (std::size_t j = 0; j < n_dim; ++j)
+                for (std::size_t k = 0; k < k_dim; ++k)
                 {
-                    (*output_cpu.storage_buffer)[i * n_dim + j] += a_val * b_data[k * n_dim + j];
+                    float a_val = a_data[a_batch_offset + i * k_dim + k];
+                    for (std::size_t j = 0; j < n_dim; ++j)
+                    {
+                        (*output_cpu.storage_buffer)[c_batch_offset + i * n_dim + j] += a_val * b_data[b_batch_offset + k * n_dim + j];
+                    }
                 }
             }
         }
 
-        Logger::logMessage(Input_Format{"Cpu_Tensor_Impl::matmul: ({}x{}) x ({}x{}) -> ({}x{}), sample={}",
-                                        m_dim, k_dim, k_dim, n_dim, m_dim, n_dim, formatDataSample(*output_cpu.storage_buffer)},
+        Logger::logMessage(Input_Format{"Cpu_Tensor_Impl::matmul: batch={}, ({}x{}) x ({}x{}) -> ({}x{}), sample={}",
+                                        b_dim, m_dim, k_dim, k_dim, n_dim, m_dim, n_dim, formatDataSample(*output_cpu.storage_buffer)},
                            Log_Level::LOG_DEBUG, true, 0, Log_Feature::DENSE_COMPUTE);
     }
 
@@ -761,34 +805,97 @@ public:
 
     void matmulAdd(const Tensor_Impl &weights, const Tensor_Impl &biases, Tensor_Impl &output) const override
     {
-        validateMatmulDimensions(weights);
         const auto &a_data = getData();
         const auto &w_data = weights.getData();
         const auto &b_data = biases.getData();
         auto &output_cpu = static_cast<Cpu_Tensor_Impl &>(output);
 
-        std::size_t out_rows = getRows();
-        std::size_t out_cols = weights.getColumns();
-        output_cpu.reshape(out_rows, out_cols);
+        std::size_t rank_a = shape.getRank();
+        std::size_t m_dim = (rank_a >= 2) ? shape[rank_a - 2] : getRows();
+        std::size_t k_dim = (rank_a >= 2) ? shape[rank_a - 1] : getColumns();
+        std::size_t b_dim = (rank_a >= 3) ? (total_elements / (m_dim * k_dim)) : 1;
 
-        for (std::size_t i = 0; i < out_rows; ++i)
+        std::size_t rank_w = weights.getShape().getRank();
+        std::size_t k_w = (rank_w >= 2) ? weights.getShape()[rank_w - 2] : weights.getRows();
+        std::size_t n_dim = (rank_w >= 2) ? weights.getShape()[rank_w - 1] : weights.getColumns();
+        std::size_t b_w = (rank_w >= 3) ? (weights.getTotalElements() / (k_w * n_dim)) : 1;
+
+        if (k_dim != k_w)
         {
-            for (std::size_t j = 0; j < out_cols; ++j)
+            throw std::invalid_argument("Matrix inner dimensions must match for multiplication");
+        }
+
+        bool broadcast_w = (b_w == 1 && b_dim > 1);
+        if (!broadcast_w && b_dim != b_w)
+        {
+            throw std::invalid_argument("Batch dimensions must match or be broadcastable");
+        }
+
+        Shape out_shape;
+        if (rank_a <= 2 && rank_w <= 2)
+        {
+            out_shape = Shape{m_dim, n_dim};
+        }
+        else if (rank_a == 3)
+        {
+            out_shape = Shape{b_dim, m_dim, n_dim};
+        }
+        else if (rank_a >= 4)
+        {
+            std::vector<std::size_t> dims(shape.getDimensions().begin(), shape.getDimensions().end());
+            dims[rank_a - 2] = m_dim;
+            dims[rank_a - 1] = n_dim;
+            out_shape = Shape(dims);
+        }
+        else
+        {
+            out_shape = Shape{b_dim, m_dim, n_dim};
+        }
+
+        output_cpu.reshape(out_shape);
+
+        std::size_t b_total_elems = biases.getTotalElements();
+
+        for (std::size_t b = 0; b < b_dim; ++b)
+        {
+            std::size_t a_batch_offset = b * m_dim * k_dim;
+            std::size_t w_batch_offset = broadcast_w ? 0 : (b * k_dim * n_dim);
+            std::size_t c_batch_offset = b * m_dim * n_dim;
+            std::size_t b_batch_offset = (b_total_elems >= b_dim * m_dim * n_dim) ? (b * m_dim * n_dim) : 0;
+
+            for (std::size_t i = 0; i < m_dim; ++i)
             {
-                (*output_cpu.storage_buffer)[i * out_cols + j] = (biases.getRows() == 1) ? b_data[j] : b_data[i * out_cols + j];
-            }
-            for (std::size_t k = 0; k < getColumns(); ++k)
-            {
-                float in_val = a_data[i * getColumns() + k];
-                for (std::size_t j = 0; j < out_cols; ++j)
+                for (std::size_t j = 0; j < n_dim; ++j)
                 {
-                    (*output_cpu.storage_buffer)[i * out_cols + j] += in_val * w_data[k * out_cols + j];
+                    float bias_val = 0.0F;
+                    if (b_total_elems == n_dim || biases.getRows() == 1)
+                    {
+                        bias_val = b_data[j];
+                    }
+                    else if (b_total_elems == m_dim * n_dim)
+                    {
+                        bias_val = b_data[i * n_dim + j];
+                    }
+                    else
+                    {
+                        bias_val = b_data[b_batch_offset + i * n_dim + j];
+                    }
+                    (*output_cpu.storage_buffer)[c_batch_offset + i * n_dim + j] = bias_val;
+                }
+
+                for (std::size_t k = 0; k < k_dim; ++k)
+                {
+                    float in_val = a_data[a_batch_offset + i * k_dim + k];
+                    for (std::size_t j = 0; j < n_dim; ++j)
+                    {
+                        (*output_cpu.storage_buffer)[c_batch_offset + i * n_dim + j] += in_val * w_data[w_batch_offset + k * n_dim + j];
+                    }
                 }
             }
         }
 
-        Logger::logMessage(Input_Format{"Cpu_Tensor_Impl::matmulAdd: output shape=({}x{}), sample={}",
-                                        out_rows, out_cols, formatDataSample(*output_cpu.storage_buffer)},
+        Logger::logMessage(Input_Format{"Cpu_Tensor_Impl::matmulAdd: batch={}, ({}x{}) x ({}x{}) -> ({}x{}), sample={}",
+                                        b_dim, m_dim, k_dim, k_dim, n_dim, m_dim, n_dim, formatDataSample(*output_cpu.storage_buffer)},
                            Log_Level::LOG_DEBUG, true, 0, Log_Feature::DENSE_COMPUTE);
     }
 

@@ -709,6 +709,11 @@ public:
         return execution_target;
     }
 
+    const std::vector<std::unique_ptr<ILayer>> &getLayers() const noexcept
+    {
+        return layers;
+    }
+
     void setCostFunction(std::unique_ptr<ICost_Function> _cost_function)
     {
         if (!_cost_function)

@@ -19,9 +19,11 @@
 
 struct Matrix_Dimensions
 {
+    std::uint32_t batch_count = 1;
     std::uint32_t rows_a = 0;
     std::uint32_t columns_a = 0;
     std::uint32_t columns_b = 0;
+    std::uint32_t broadcast_b = 0;
 };
 
 struct Elementwise_Dimensions
@@ -233,7 +235,7 @@ public:
 
     const std::vector<float> &getData() const noexcept override
     {
-        Logger::logMessage(Input_Format{"Gpu_Tensor_Impl::getData: Reading data from GPU, risk of sync stall"},
+        Logger::logMessage("Gpu_Tensor_Impl::getData: Reading data from GPU, risk of sync stall",
                            Log_Level::LOG_WARNING, true, 1, Log_Feature::MEMORY_TRANSFER);
         if (total_elements == 0)
         {
@@ -407,7 +409,6 @@ public:
 
     void matmul(const Tensor_Impl &other, Tensor_Impl &output) const override
     {
-        validateMatmulDimensions(other);
         auto contig_self = ensureContiguousSelf();
         const auto *effective_self = contig_self ? contig_self.get() : this;
 
@@ -415,20 +416,64 @@ public:
         auto contig_other = other_gpu.ensureContiguousSelf();
         const auto *effective_other = contig_other ? contig_other.get() : &other_gpu;
 
+        std::size_t rank_a = shape.getRank();
+        std::size_t m_dim = (rank_a >= 2) ? shape[rank_a - 2] : getRows();
+        std::size_t k_dim = (rank_a >= 2) ? shape[rank_a - 1] : getColumns();
+        std::size_t b_dim = (rank_a >= 3) ? (total_elements / (m_dim * k_dim)) : 1;
+
+        std::size_t rank_b = other.getShape().getRank();
+        std::size_t k_other = (rank_b >= 2) ? other.getShape()[rank_b - 2] : other.getRows();
+        std::size_t n_dim = (rank_b >= 2) ? other.getShape()[rank_b - 1] : other.getColumns();
+        std::size_t b_other = (rank_b >= 3) ? (other.getTotalElements() / (k_other * n_dim)) : 1;
+
+        if (k_dim != k_other)
+        {
+            throw std::invalid_argument("Matrix inner dimensions must match for multiplication");
+        }
+
+        bool broadcast_b = (b_other == 1 && b_dim > 1);
+        if (!broadcast_b && b_dim != b_other)
+        {
+            throw std::invalid_argument("Batch dimensions must match or be broadcastable");
+        }
+
+        Shape out_shape;
+        if (rank_a <= 2 && rank_b <= 2)
+        {
+            out_shape = Shape{m_dim, n_dim};
+        }
+        else if (rank_a == 3)
+        {
+            out_shape = Shape{b_dim, m_dim, n_dim};
+        }
+        else if (rank_a >= 4)
+        {
+            std::vector<std::size_t> dims(shape.getDimensions().begin(), shape.getDimensions().end());
+            dims[rank_a - 2] = m_dim;
+            dims[rank_a - 1] = n_dim;
+            out_shape = Shape(dims);
+        }
+        else
+        {
+            out_shape = Shape{b_dim, m_dim, n_dim};
+        }
+
         auto &output_gpu = castToGpu(output);
-        output_gpu.reshape(getRows(), effective_other->getColumns());
+        output_gpu.reshape(out_shape);
 
         Matrix_Dimensions dims{
-            .rows_a = static_cast<std::uint32_t>(getRows()),
-            .columns_a = static_cast<std::uint32_t>(getColumns()),
-            .columns_b = static_cast<std::uint32_t>(output_gpu.getColumns())};
+            .batch_count = static_cast<std::uint32_t>(b_dim),
+            .rows_a = static_cast<std::uint32_t>(m_dim),
+            .columns_a = static_cast<std::uint32_t>(k_dim),
+            .columns_b = static_cast<std::uint32_t>(n_dim),
+            .broadcast_b = broadcast_b ? 1u : 0u};
 
-        Logger::logMessage(Input_Format{"Gpu_Tensor_Impl::matmul: rows_a={}, cols_a={}, cols_b={}",
-                                        dims.rows_a, dims.columns_a, dims.columns_b},
+        Logger::logMessage(Input_Format{"Gpu_Tensor_Impl::matmul: batch={}, rows_a={}, cols_a={}, cols_b={}",
+                                        dims.batch_count, dims.rows_a, dims.columns_a, dims.columns_b},
                            Log_Level::LOG_DEBUG, true, 1, Log_Feature::DENSE_COMPUTE);
 
         pushToGraph(Compute_Pipeline::MATMUL, {effective_self->storage, effective_other->storage, output_gpu.storage},
-                    dims, (dims.columns_b + 15) / 16, (dims.rows_a + 15) / 16);
+                    dims, (dims.columns_b + 15) / 16, (dims.rows_a + 15) / 16, dims.batch_count);
     }
 
     void matdiv(const Tensor_Impl &other, Tensor_Impl &output) const override
@@ -691,7 +736,6 @@ public:
 
     void matmulAdd(const Tensor_Impl &weights, const Tensor_Impl &biases, Tensor_Impl &output) const override
     {
-        validateMatmulDimensions(weights);
         auto contig_self = ensureContiguousSelf();
         const auto *effective_self = contig_self ? contig_self.get() : this;
 
@@ -703,20 +747,88 @@ public:
         auto contig_b = b_gpu.ensureContiguousSelf();
         const auto *effective_b = contig_b ? contig_b.get() : &b_gpu;
 
+        std::size_t rank_a = shape.getRank();
+        std::size_t m_dim = (rank_a >= 2) ? shape[rank_a - 2] : getRows();
+        std::size_t k_dim = (rank_a >= 2) ? shape[rank_a - 1] : getColumns();
+        std::size_t b_dim = (rank_a >= 3) ? (total_elements / (m_dim * k_dim)) : 1;
+
+        std::size_t rank_w = weights.getShape().getRank();
+        std::size_t k_w = (rank_w >= 2) ? weights.getShape()[rank_w - 2] : weights.getRows();
+        std::size_t n_dim = (rank_w >= 2) ? weights.getShape()[rank_w - 1] : weights.getColumns();
+        std::size_t b_w = (rank_w >= 3) ? (weights.getTotalElements() / (k_w * n_dim)) : 1;
+
+        if (k_dim != k_w)
+        {
+            throw std::invalid_argument("Matrix inner dimensions must match for multiplication");
+        }
+
+        bool broadcast_w = (b_w == 1 && b_dim > 1);
+        if (!broadcast_w && b_dim != b_w)
+        {
+            throw std::invalid_argument("Batch dimensions must match or be broadcastable");
+        }
+
+        Shape out_shape;
+        if (rank_a <= 2 && rank_w <= 2)
+        {
+            out_shape = Shape{m_dim, n_dim};
+        }
+        else if (rank_a == 3)
+        {
+            out_shape = Shape{b_dim, m_dim, n_dim};
+        }
+        else if (rank_a >= 4)
+        {
+            std::vector<std::size_t> dims(shape.getDimensions().begin(), shape.getDimensions().end());
+            dims[rank_a - 2] = m_dim;
+            dims[rank_a - 1] = n_dim;
+            out_shape = Shape(dims);
+        }
+        else
+        {
+            out_shape = Shape{b_dim, m_dim, n_dim};
+        }
+
         auto &output_gpu = castToGpu(output);
-        output_gpu.reshape(getRows(), effective_w->getColumns());
+        output_gpu.reshape(out_shape);
+
+        std::size_t b_total_elems = biases.getTotalElements();
+        std::uint32_t broadcast_b_flag = 0;
+        if (b_total_elems == n_dim || biases.getRows() == 1)
+        {
+            broadcast_b_flag = 1;
+        }
+        else if (b_total_elems == m_dim * n_dim)
+        {
+            broadcast_b_flag = (b_dim > 1) ? 2 : 0;
+        }
+        else
+        {
+            broadcast_b_flag = 0;
+        }
 
         struct Matmul_Add_Constants
         {
+            std::uint32_t batch_count;
             std::uint32_t rows_x;
             std::uint32_t columns_x;
             std::uint32_t columns_weights;
-            std::uint32_t padding;
-        } constants{static_cast<std::uint32_t>(getRows()), static_cast<std::uint32_t>(getColumns()),
-                    static_cast<std::uint32_t>(effective_w->getColumns()), 0};
+            std::uint32_t broadcast_w;
+            std::uint32_t broadcast_b;
+        } constants{
+            .batch_count = static_cast<std::uint32_t>(b_dim),
+            .rows_x = static_cast<std::uint32_t>(m_dim),
+            .columns_x = static_cast<std::uint32_t>(k_dim),
+            .columns_weights = static_cast<std::uint32_t>(n_dim),
+            .broadcast_w = broadcast_w ? 1u : 0u,
+            .broadcast_b = broadcast_b_flag};
+
+        Logger::logMessage(Input_Format{"Gpu_Tensor_Impl::matmulAdd: batch={}, rows_x={}, cols_x={}, cols_w={}",
+                                        constants.batch_count, constants.rows_x, constants.columns_x, constants.columns_weights},
+                           Log_Level::LOG_DEBUG, true, 1, Log_Feature::DENSE_COMPUTE);
 
         pushToGraph(Compute_Pipeline::MATMUL_ADD, {effective_self->storage, effective_w->storage, effective_b->storage, output_gpu.storage}, constants,
-                    (constants.columns_weights + 15) / 16, (constants.rows_x + 15) / 16, 1);
+                    (constants.columns_weights + 15) / 16, (constants.rows_x + 15) / 16, constants.batch_count);
     }
 
     void uploadData(const std::vector<float> &host_data) override

@@ -864,6 +864,16 @@ public:
                 shader_generator.addLogicSnippet("    uint ih = n_ih % pc.data[1];");
                 shader_generator.addLogicSnippet("    if (c >= pc.data[3] || iw >= pc.data[2] || ih >= pc.data[1] || n >= pc.data[0]) return;");
             }
+            else if (primary_pipeline == Compute_Pipeline::MATMUL ||
+                     primary_pipeline == Compute_Pipeline::MATMUL_ADD)
+            {
+                shader_generator.addLogicSnippet("    uint c = gl_GlobalInvocationID.x;");
+                shader_generator.addLogicSnippet("    uint r = gl_GlobalInvocationID.y;");
+                shader_generator.addLogicSnippet("    uint b = gl_GlobalInvocationID.z;");
+                shader_generator.addLogicSnippet("    uint lc = gl_LocalInvocationID.x;");
+                shader_generator.addLogicSnippet("    uint lr = gl_LocalInvocationID.y;");
+                shader_generator.addLogicSnippet("    if (b >= pc.data[0]) return;");
+            }
             else
             {
                 shader_generator.addLogicSnippet("    if (gl_GlobalInvocationID.x >= pc.data[0]) return;");
@@ -986,11 +996,15 @@ public:
                     remove_exact(snippet, "uint oc = gl_GlobalInvocationID.x;");
                     remove_exact(snippet, "uint ic = gl_GlobalInvocationID.x;");
                     remove_exact(snippet, "uint c = gl_GlobalInvocationID.x;");
+                    remove_exact(snippet, "uint r = gl_GlobalInvocationID.y;");
+                    remove_exact(snippet, "uint b = gl_GlobalInvocationID.z;");
                     remove_exact(snippet, "uint ow = gl_GlobalInvocationID.y;");
                     remove_exact(snippet, "uint iw = gl_GlobalInvocationID.y;");
                     remove_exact(snippet, "uint n = gl_GlobalInvocationID.y;");
                     remove_exact(snippet, "uint n_oh = gl_GlobalInvocationID.z;");
                     remove_exact(snippet, "uint n_ih = gl_GlobalInvocationID.z;");
+                    remove_exact(snippet, "uint lc = gl_LocalInvocationID.x;");
+                    remove_exact(snippet, "uint lr = gl_LocalInvocationID.y;");
 
                     remove_pattern(snippet, "uint n = n_oh /", ";");
                     remove_pattern(snippet, "uint oh = n_oh %", ";");
@@ -999,6 +1013,8 @@ public:
                     remove_pattern(snippet, "if (oc >= ", " return;");
                     remove_pattern(snippet, "if (c >= ", " return;");
                     remove_pattern(snippet, "if (ic >= ", " return;");
+                    remove_pattern(snippet, "if (b >= ", " return;");
+                    remove_pattern(snippet, "if (r >= ", " return;");
                 }
                 else if (primary_operation_class == Operation_Class::STANDALONE)
                 {
