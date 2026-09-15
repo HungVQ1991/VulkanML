@@ -43,6 +43,13 @@ enum class Layer_Type
 
 class ILayer
 {
+private:
+    static const Matrix &emptyMatrix()
+    {
+        static const Matrix empty_matrix(0, 0);
+        return empty_matrix;
+    }
+
 public:
     void logBufferAddress(Matrix *_target_matrix, const std::string &_matrix_name) const
     {
@@ -137,11 +144,11 @@ public:
     virtual Matrix forward(const Matrix &_input_matrix) = 0;
     virtual Matrix backward(const Matrix &_output_gradient) = 0;
 
-    virtual Matrix getWeights() const { return Matrix(0, 0); }
-    virtual Matrix getBiases() const { return Matrix(0, 0); }
-    virtual Matrix getWeightsGradient() { return Matrix(0, 0); }
-    virtual Matrix getInput() { return Matrix(0, 0); }
-    virtual Matrix getOutput() { return Matrix(0, 0); }
+    virtual const Matrix &getWeights() const { return emptyMatrix(); }
+    virtual const Matrix &getBiases() const { return emptyMatrix(); }
+    virtual const Matrix &getWeightsGradient() const { return emptyMatrix(); }
+    virtual const Matrix &getInput() const { return emptyMatrix(); }
+    virtual const Matrix &getOutput() const { return emptyMatrix(); }
     virtual Execution_Target getExecutionTarget() const = 0;
 
     virtual bool hasParameters() const { return false; }

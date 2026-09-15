@@ -100,6 +100,15 @@ private:
         }
     }
 
+    void syncDeviceToHost()
+    {
+        for (size_t l = 0; l < dense_layers.size(); ++l)
+        {
+            host_weights[l] = dense_layers[l].weights.getData();
+            host_biases[l] = dense_layers[l].weights.getData();
+        }
+    }
+
 public:
     Population(std::size_t pop_size,
                const Neural_Network &template_net,
@@ -244,15 +253,36 @@ public:
 
     void selectBatchActions(const float *states_flat, const std::size_t *active_indices, std::size_t active_count, std::size_t *actions_out) const
     {
-        if (active_count == 0) return;
+        if (active_count == 0)
+        {
+            return;
+        }
 
-        if (execution_target == Execution_Target::VULKAN_GPU && active_count == population_size && !active_indices)
+        if (execution_target == Execution_Target::VULKAN_GPU)
         {
             if (batched_input_host.size() != population_size * state_dimension)
             {
-                batched_input_host.resize(population_size * state_dimension);
+                batched_input_host.assign(population_size * state_dimension, 0.0f);
             }
-            std::copy(states_flat, states_flat + (population_size * state_dimension), batched_input_host.begin());
+
+            if (!active_indices && active_count == population_size)
+            {
+                std::copy(states_flat, states_flat + (population_size * state_dimension), batched_input_host.begin());
+            }
+            else
+            {
+                for (std::size_t i = 0; i < active_count; ++i)
+                {
+                    std::size_t agent_idx = active_indices ? active_indices[i] : i;
+                    if (agent_idx < population_size)
+                    {
+                        const float *src = states_flat + (i * state_dimension);
+                        float *dst = batched_input_host.data() + (agent_idx * state_dimension);
+                        std::copy(src, src + state_dimension, dst);
+                    }
+                }
+            }
+
             batched_input_tensor.uploadData(batched_input_host);
 
             Tensor current_tensor = batched_input_tensor;
@@ -272,7 +302,8 @@ public:
             std::vector<float> q_values = current_tensor.getData();
             for (std::size_t i = 0; i < active_count; ++i)
             {
-                std::size_t offset = i * action_space_size;
+                std::size_t agent_idx = active_indices ? active_indices[i] : i;
+                std::size_t offset = agent_idx * action_space_size;
                 std::size_t best_act = 0;
                 float max_val = q_values[offset];
                 for (std::size_t a = 1; a < action_space_size; ++a)

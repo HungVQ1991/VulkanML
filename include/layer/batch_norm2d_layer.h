@@ -41,6 +41,7 @@ private:
     Matrix input_gradient;
 
     bool is_forward_completed = false;
+    bool is_accumulated = false;
     Execution_Target execution_target = Execution_Target::CPU;
 
 public:
@@ -68,6 +69,8 @@ public:
           normalized_input(0, 0, _execution_target),
           input_matrix(0, 0, _execution_target),
           output_matrix(0, 0, _execution_target),
+          is_accumulated(false),
+          is_forward_completed(false),
           input_gradient(0, 0, _execution_target)
     {
     }
@@ -153,29 +156,29 @@ public:
         return Layer_Type::BATCH_NORM_2D;
     }
 
-    Matrix getOutput() override
+    const Matrix &getOutput() const override
     {
         return output_matrix;
     }
 
-    Matrix getInput() override
+    const Matrix &getInput() const override
     {
         return input_matrix;
     }
 
-    Matrix getWeights() const override
+    const Matrix &getWeights() const override
     {
         return gamma;
     }
 
-    Matrix getBiases() const override
+    const Matrix &getBiases() const override
     {
         return beta;
     }
 
     Execution_Target getExecutionTarget() const override { return execution_target; }
 
-    Matrix getWeightsGradient() override
+    const Matrix &getWeightsGradient() const override
     {
         return gamma_gradient;
     }

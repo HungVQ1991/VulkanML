@@ -27,3 +27,5 @@ verify_humanoid.cpp
 assets/
 train_mujoco.cpp
 include/environment/
+.editorconfig
+.prettierrc

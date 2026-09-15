@@ -31,6 +31,8 @@ private:
 
     std::size_t input_dimension = 0;
     std::size_t output_dimension = 0;
+    bool is_forward_completed = false;
+    bool is_accumulated = false;
     Execution_Target execution_target = Execution_Target::CPU;
 
 public:
@@ -41,9 +43,10 @@ public:
           output_matrix(0, 0),
           input_gradient(0, 0),
           weights_gradient(0, 0),
-          biases_gradient(0, 0)
-    {
-    }
+          biases_gradient(0, 0),
+          is_forward_completed(false),
+          is_accumulated(false)
+    {}
 
     Linear_Layer(std::size_t _input_dimension,
                  std::size_t _output_dimension,
@@ -58,6 +61,8 @@ public:
           biases_gradient(1, _output_dimension, _execution_target),
           input_dimension(_input_dimension),
           output_dimension(_output_dimension),
+          is_accumulated(false),
+          is_forward_completed(false),
           execution_target(_execution_target)
     {
         std::vector<float> weight_data(_input_dimension * _output_dimension);
@@ -114,12 +119,21 @@ public:
 
         logBufferAddress(&weights, "weights (Forward)");
         logBufferAddress(&biases, "biases (Forward)");
-
+        is_forward_completed = true;
         return output_matrix;
     }
 
     Matrix backward(const Matrix &_output_gradient) override
     {
+        if (!is_forward_completed)
+        {
+            Logger::logMessage(Input_Format{"Global_Avg_Pool_2d_Layer::backward: Backward called before forward"},
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::POOLING_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
+            throw std::logic_error("Backward called before forward");
+        }
         if (_output_gradient.getColumns() != output_dimension || _output_gradient.getRows() != input_matrix.getRows())
         {
             Logger::logMessage(Input_Format{"Linear_Layer::backward: Gradient output dimension mismatch"},
@@ -138,6 +152,7 @@ public:
                            1,
                            Log_Feature::DENSE_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
+                           
         input_matrix.linearBackwardWeightBias(_output_gradient, weights_gradient, biases_gradient);
         _output_gradient.linearBackwardInput(weights, input_gradient);
 
@@ -148,17 +163,17 @@ public:
         return input_gradient;
     }
 
-    Matrix getWeights() const override
+    const Matrix &getWeights() const override
     {
         return weights;
     }
 
-    Matrix getBiases() const override
+    const Matrix &getBiases() const override
     {
         return biases;
     }
 
-    Matrix getWeightsGradient() override
+    const Matrix &getWeightsGradient() const override
     {
         return weights_gradient;
     }
@@ -168,12 +183,12 @@ public:
         return biases_gradient;
     }
 
-    Matrix getInput() override
+    const Matrix &getInput() const override
     {
         return input_matrix;
     }
 
-    Matrix getOutput() override
+    const Matrix &getOutput() const override
     {
         return output_matrix;
     }
@@ -220,6 +235,7 @@ public:
 
     void resetGradient() override
     {
+        is_forward_completed = false;
     }
 
     bool hasParameters() const noexcept override

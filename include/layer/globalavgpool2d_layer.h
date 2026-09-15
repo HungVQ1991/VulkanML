@@ -25,6 +25,7 @@ private:
     Matrix input_gradient;
 
     bool is_forward_completed = false;
+    bool is_accumulated = false;
     Execution_Target execution_target = Execution_Target::CPU;
 
 public:
@@ -39,6 +40,7 @@ public:
           output_matrix(0, 0, _execution_target),
           input_gradient(0, 0, _execution_target),
           is_forward_completed(false),
+          is_accumulated(false),
           execution_target(_execution_target)
     {
     }
@@ -107,12 +109,12 @@ public:
         return Layer_Type::GLOBAL_AVG_POOL_2D;
     }
 
-    Matrix getInput() override
+    const Matrix &getInput() const override
     {
         return input_matrix;
     }
 
-    Matrix getOutput() override
+    const Matrix &getOutput() const override
     {
         return output_matrix;
     }

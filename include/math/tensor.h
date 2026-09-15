@@ -30,8 +30,6 @@ private:
     std::shared_ptr<Tensor_Impl> implementation;
     Execution_Target execution_target;
 
-    // Magic header sentinel distinguishing N-D Tensor format from legacy 2D Matrix format.
-    // Temporary backward-compatibility exception for 2D Matrix, to be phased out completely.
     static constexpr std::uint32_t TENSOR_MAGIC_HEADER = 0x7FFFFFFF;
 
 public:
@@ -669,6 +667,22 @@ public:
         return Tensor(rows_count, columns_count, std::move(host_data), target);
     }
 
+    Tensor clone() const
+    {
+        return Tensor(getShape(), getData(), execution_target);
+    }
+
+    void fill(float value)
+    {
+        std::vector<float> buffer(getTotalElements(), value);
+        uploadData(buffer);
+    }
+
+    void zero()
+    {
+        fill(0.0f);
+    }
+
     void saveTensor(std::ofstream &output_file_stream) const
     {
         saveMatrix(output_file_stream);
@@ -678,6 +692,7 @@ public:
     {
         return loadMatrix(input_file_stream, target);
     }
+
 };
 
 using Matrix = Tensor;

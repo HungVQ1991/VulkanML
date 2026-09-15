@@ -39,6 +39,7 @@ private:
     Matrix input_gradient;
 
     bool is_forward_completed = false;
+    bool is_accumulated = false;
     Execution_Target execution_target = Execution_Target::CPU;
 
     void initializeParameters()
@@ -82,6 +83,7 @@ public:
           output_matrix(0, 0, _execution_target),
           input_gradient(0, 0, _execution_target),
           is_forward_completed(false),
+          is_accumulated(false),
           execution_target(_execution_target)
     {
         initializeParameters();
@@ -176,27 +178,27 @@ public:
         is_forward_completed = false;
     }
 
-    Matrix getWeights() const override
+    const Matrix &getWeights() const override
     {
         return gamma;
     }
 
-    Matrix getBiases() const override
+    const Matrix &getBiases() const override
     {
         return beta;
     }
 
-    Matrix getWeightsGradient() override
+    const Matrix &getWeightsGradient() const override
     {
         return gamma_gradient;
     }
 
-    Matrix getInput() override
+    const Matrix &getInput() const override
     {
         return input_matrix;
     }
 
-    Matrix getOutput() override
+    const Matrix &getOutput() const override
     {
         return output_matrix;
     }

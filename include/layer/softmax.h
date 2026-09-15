@@ -19,6 +19,8 @@ private:
     Matrix cached_output_matrix;
     Matrix input_gradient;
     bool is_fused_with_loss = false;
+    bool is_accumulated = false;
+    bool is_forward_completed = false;
     Execution_Target execution_target = Execution_Target::CPU;
 
 public:
@@ -27,7 +29,9 @@ public:
           cached_output_matrix(0, 0, _execution_target),
           input_gradient(0, 0, _execution_target),
           is_fused_with_loss(_is_fused_with_loss),
-          execution_target(_execution_target)
+          execution_target(_execution_target),
+          is_accumulated(false),
+          is_forward_completed(false)
     {
     }
 
@@ -83,12 +87,12 @@ public:
         return Layer_Type::SOFTMAX;
     }
 
-    Matrix getInput() override
+    const Matrix &getInput() const override
     {
         return input_matrix;
     }
 
-    Matrix getOutput() override
+    const Matrix &getOutput() const override
     {
         return cached_output_matrix;
     }

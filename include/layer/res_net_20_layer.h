@@ -30,6 +30,7 @@ private:
 
     bool is_forward_completed = false;
     bool is_training = true;
+    bool is_accumulated = false;
     Execution_Target execution_target = Execution_Target::CPU;
 
     std::vector<std::unique_ptr<ILayer>> layers;
@@ -85,7 +86,9 @@ public:
           execution_target(_execution_target),
           input_matrix(0, 0, _execution_target),
           output_matrix(0, 0, _execution_target),
-          input_gradient(0, 0, _execution_target)
+          input_gradient(0, 0, _execution_target),
+          is_accumulated(false),
+          is_forward_completed(false)
     {
         buildNetwork();
     }
@@ -157,12 +160,12 @@ public:
         return Layer_Type::RES_NET_20;
     }
 
-    Matrix getInput() override
+    const Matrix &getInput() const override
     {
         return input_matrix;
     }
 
-    Matrix getOutput() override
+    const Matrix &getOutput() const override
     {
         return output_matrix;
     }
