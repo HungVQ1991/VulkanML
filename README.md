@@ -71,7 +71,7 @@ Neural Network
 #include "engine/execution_engine.h"
 #include "helper/layer.h"
 #include "learning_rate/cosine_annealing.h"
-#include "math/matrix.h"
+#include "math/tensor.h"
 #include "neural_network.h"
 #include "optimizer/adam_optimizer.h"
 

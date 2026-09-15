@@ -68,6 +68,7 @@ enum Compute_Pipeline
     CONCATENATE_ROWS,
     SPLIT_COLUMNS,
     SPLIT_ROWS,
+    CONTIGUOUS,
     COMPUTE_PIPELINE_END
 };
 

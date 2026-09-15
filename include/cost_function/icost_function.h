@@ -4,7 +4,7 @@
 #include <fstream>
 
 #include "helper/logger.h"
-#include "math/matrix.h"
+#include "math/tensor.h"
 
 enum class Cost_Type : std::uint32_t
 {

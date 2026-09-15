@@ -17,7 +17,7 @@
 #include "helper/magic_enum.hpp"
 #include "ilayer.h"
 #include "linear_layer.h"
-#include "math/matrix.h"
+#include "math/tensor.h"
 #include "res_net_block_2d_layer.h"
 
 class Res_Net_20_Layer : public ILayer

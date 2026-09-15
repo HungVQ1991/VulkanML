@@ -21,7 +21,7 @@
 #include "helper/logger.h"
 #include "helper/magic_enum.hpp"
 #include "layer/ilayer.h"
-#include "math/matrix.h"
+#include "math/tensor.h"
 #include "training_context.h"
 
 class Neural_Network

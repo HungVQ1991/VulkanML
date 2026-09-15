@@ -12,7 +12,7 @@
 
 #include "helper/logger.h"
 #include "ioptimizer.h"
-#include "math/matrix.h"
+#include "math/tensor.h"
 
 class Adam_Optimizer : public IOptimizer
 {

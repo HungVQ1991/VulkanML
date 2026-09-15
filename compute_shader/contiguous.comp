@@ -1,0 +1,66 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer Input_Buffer
+{
+    float input_data[];
+};
+
+layout(std430, binding = 1) writeonly buffer Output_Buffer
+{
+    float output_data[];
+};
+
+layout(push_constant) uniform Contiguous_Constants
+{
+    uint total_elements;
+    uint rank;
+    uint offset_elements;
+    uint shape_0;
+    uint shape_1;
+    uint shape_2;
+    uint shape_3;
+    uint shape_4;
+    uint shape_5;
+    uint stride_0;
+    uint stride_1;
+    uint stride_2;
+    uint stride_3;
+    uint stride_4;
+    uint stride_5;
+} constants;
+
+void main()
+{
+    uint gid = gl_GlobalInvocationID.x;
+    if (gid >= constants.total_elements)
+    {
+        return;
+    }
+
+    uint shapes[6] = uint[6](
+        constants.shape_0, constants.shape_1, constants.shape_2,
+        constants.shape_3, constants.shape_4, constants.shape_5
+    );
+    uint strides[6] = uint[6](
+        constants.stride_0, constants.stride_1, constants.stride_2,
+        constants.stride_3, constants.stride_4, constants.stride_5
+    );
+
+    uint rem = gid;
+    uint in_idx = constants.offset_elements;
+
+    for (int d = int(constants.rank) - 1; d >= 0; --d)
+    {
+        uint dim_size = shapes[d];
+        if (dim_size > 0)
+        {
+            uint coord = rem % dim_size;
+            rem = rem / dim_size;
+            in_idx += coord * strides[d];
+        }
+    }
+
+    output_data[gid] = input_data[in_idx];
+}

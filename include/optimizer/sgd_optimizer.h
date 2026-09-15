@@ -9,7 +9,7 @@
 
 #include "helper/logger.h"
 #include "ioptimizer.h"
-#include "math/matrix.h"
+#include "math/tensor.h"
 
 class Sgd_Optimizer : public IOptimizer
 {
