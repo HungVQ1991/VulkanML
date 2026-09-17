@@ -65,6 +65,7 @@ private:
     }
 
 public:
+    using ILayer::forward;
     Conv2d_Layer(std::uint32_t _height,
                  std::uint32_t _width,
                  std::uint32_t _input_channels,
@@ -111,6 +112,33 @@ public:
         input_matrix.conv2d(weights, biases, output_matrix, input_height, input_width, input_channels, output_channels, kernel_size, stride, padding);
         is_forward_completed = true;
         return output_matrix;
+    }
+
+    Tensor forward(const Tensor& _batched_input, const std::vector<Tensor>& _batched_params) const override
+    {
+        if (_batched_params.size() != getPopulationParameterDims().size())
+        {
+            Logger::logMessage(Input_Format{ "Conv2d_Layer::forward: expected {} batched parameter tensors (weights, biases), got {}",
+                                            getPopulationParameterDims().size(), _batched_params.size() },
+                Log_Level::LOG_ERROR,
+                true,
+                0,
+                Log_Feature::CONV2D_COMPUTE | Log_Feature::FORWARD_EVALUATION);
+            throw std::invalid_argument("Invalid input params size");
+        }
+
+        Tensor output(_batched_input.getExecutionTarget());
+        _batched_input.conv2d(_batched_params[0],
+            _batched_params[1],
+            output,
+            input_height,
+            input_width,
+            input_channels,
+            output_channels,
+            kernel_size,
+            stride,
+            padding);
+        return output;
     }
 
     Matrix backward(const Matrix &_output_gradient) override
@@ -179,6 +207,133 @@ public:
     Layer_Type getLayerType() const noexcept override
     {
         return Layer_Type::CONV2D;
+    }
+
+    std::vector<Shape> getPopulationParameterDims() const override
+    {
+        return { Shape{ output_channels, input_channels, kernel_size, kernel_size }, Shape{ 1, output_channels } };
+    }
+
+    bool supportsPopulationBatch() const noexcept override
+    {
+        return true;
+    }
+
+    std::vector<bool> getPopulationParameterIsEvolvable() const override
+    {
+        return { true, true };
+    }
+
+    std::function<float(std::mt19937&)> getPopulationParameterInitializer(std::size_t param_index) const override
+    {
+        if (param_index == 0)
+        {
+            float fan_in = static_cast<float>(kernel_size * kernel_size * input_channels);
+            float standard_deviation = (fan_in > 0.0f) ? std::sqrt(2.0f / fan_in) : 0.0f;
+            return [standard_deviation](std::mt19937& generator)
+                {
+                    std::normal_distribution<float> distribution(0.0f, standard_deviation);
+                    return distribution(generator);
+                };
+        }
+        else if (param_index == 1)
+        {
+            return [](std::mt19937&)
+                {
+                    return 0.0f;
+                };
+        }
+
+        return [](std::mt19937&)
+            {
+                return 0.0f;
+            };
+    }
+
+    std::unique_ptr<ILayer> clone() const override
+    {
+        return std::make_unique<Conv2d_Layer>(
+            input_height, input_width, input_channels, output_channels, kernel_size, stride, padding, execution_target);
+    }
+
+    void setPopulationParameter(std::size_t param_index, std::vector<float> flat_data) override
+    {
+        std::size_t weight_count = kernel_size * kernel_size * input_channels * output_channels;
+        if (param_index == 0)
+        {
+            if (flat_data.size() != weight_count)
+            {
+                throw std::invalid_argument("Conv2d_Layer::setPopulationParameter: Weight size mismatch");
+            }
+            weights = Matrix(1, weight_count, std::move(flat_data), execution_target);
+        }
+        else if (param_index == 1)
+        {
+            if (flat_data.size() != output_channels)
+            {
+                throw std::invalid_argument("Conv2d_Layer::setPopulationParameter: Bias size mismatch");
+            }
+            biases = Matrix(1, output_channels, std::move(flat_data), execution_target);
+        }
+        else
+        {
+            throw std::out_of_range("Conv2d_Layer::setPopulationParameter: Parameter index out of range");
+        }
+    }
+
+    bool isAccumulated() const noexcept
+    {
+        return is_accumulated;
+    }
+
+    void setAccumulated(bool _is_accumulated) noexcept
+    {
+        is_accumulated = _is_accumulated;
+    }
+
+    std::uint32_t getInputHeight() const noexcept
+    {
+        return input_height;
+    }
+
+    std::uint32_t getInputWidth() const noexcept
+    {
+        return input_width;
+    }
+
+    std::uint32_t getInputChannels() const noexcept
+    {
+        return input_channels;
+    }
+
+    std::uint32_t getOutputChannels() const noexcept
+    {
+        return output_channels;
+    }
+
+    std::uint32_t getKernelSize() const noexcept
+    {
+        return kernel_size;
+    }
+
+    std::uint32_t getStride() const noexcept
+    {
+        return stride;
+    }
+
+    std::uint32_t getPadding() const noexcept
+    {
+        return padding;
+    }
+
+    std::uint32_t getOutputHeight() const noexcept
+    {
+        return output_height;
+    }
+
+    std::uint32_t getOutputWidth() const noexcept
+    {
+        return output_width;
     }
 
     void saveConfiguration(std::ofstream &_output_file_stream) const override

@@ -36,6 +36,7 @@ private:
     Execution_Target execution_target = Execution_Target::CPU;
 
 public:
+    using ILayer::forward;
     Max_Pool_2d_Layer(
         std::uint32_t _height,
         std::uint32_t _width,
@@ -80,6 +81,109 @@ public:
         is_forward_completed = true;
         logBufferAddress(&mask_matrix, "mask_matrix");
         return output_matrix;
+    }
+
+    Tensor forward(const Tensor& _batched_input, const std::vector<Tensor>& _batched_params) const override
+    {
+        if (!_batched_params.empty())
+        {
+            Logger::logMessage(Input_Format{ "Max_Pool_2d_Layer::forward: expected 0 batched parameter tensors, got {}",
+                                            _batched_params.size() },
+                Log_Level::LOG_ERROR,
+                true,
+                0,
+                Log_Feature::POOLING_COMPUTE | Log_Feature::FORWARD_EVALUATION);
+            throw std::invalid_argument("Invalid input params size: Max_Pool_2d_Layer expects 0 parameters");
+        }
+
+        Tensor output_tensor(_batched_input.getExecutionTarget());
+        Tensor mask_tensor(_batched_input.getExecutionTarget());
+        _batched_input.maxpool2d(output_tensor, mask_tensor, input_height, input_width, channels, kernel_size, stride, padding);
+        return output_tensor;
+    }
+
+    std::vector<Shape> getPopulationParameterDims() const override
+    {
+        return {};
+    }
+
+    std::vector<bool> getPopulationParameterIsEvolvable() const override
+    {
+        return {};
+    }
+
+    bool supportsPopulationBatch() const override
+    {
+        return true;
+    }
+
+    std::unique_ptr<ILayer> clone() const override
+    {
+        return std::make_unique<Max_Pool_2d_Layer>(
+            input_height, input_width, channels, kernel_size, stride, padding, execution_target);
+    }
+
+    std::function<float(std::mt19937&)> getPopulationParameterInitializer(std::size_t param_index) const override
+    {
+        return [](std::mt19937&)
+            {
+                return 0.0f;
+            };
+    }
+
+    void setPopulationParameter(std::size_t param_index, std::vector<float> flat_data) override
+    {
+        throw std::out_of_range("Max_Pool_2d_Layer::setPopulationParameter: Layer has no parameters");
+    }
+
+    bool isAccumulated() const noexcept
+    {
+        return is_accumulated;
+    }
+
+    void setAccumulated(bool _is_accumulated) noexcept
+    {
+        is_accumulated = _is_accumulated;
+    }
+
+    std::uint32_t getInputHeight() const noexcept
+    {
+        return input_height;
+    }
+
+    std::uint32_t getInputWidth() const noexcept
+    {
+        return input_width;
+    }
+
+    std::uint32_t getChannels() const noexcept
+    {
+        return channels;
+    }
+
+    std::uint32_t getOutputHeight() const noexcept
+    {
+        return output_height;
+    }
+
+    std::uint32_t getOutputWidth() const noexcept
+    {
+        return output_width;
+    }
+
+    std::uint32_t getKernelSize() const noexcept
+    {
+        return kernel_size;
+    }
+
+    std::uint32_t getStride() const noexcept
+    {
+        return stride;
+    }
+
+    std::uint32_t getPadding() const noexcept
+    {
+        return padding;
     }
 
     Matrix backward(const Matrix &_output_gradient) override

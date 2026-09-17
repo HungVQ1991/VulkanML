@@ -45,6 +45,7 @@ private:
     Execution_Target execution_target = Execution_Target::CPU;
 
 public:
+    using ILayer::forward;
     Batch_Norm_2d_Layer(
         std::uint32_t _height,
         std::uint32_t _width,
@@ -106,6 +107,145 @@ public:
         logBufferAddress(&input_matrix, "input_matrix (Forward)");
         logBufferAddress(&output_matrix, "output_matrix (Forward)");
         return output_matrix;
+    }
+
+    Tensor forward(const Tensor& _batched_input, const std::vector<Tensor>& _batched_params) const override
+    {
+        if (_batched_params.size() != getPopulationParameterDims().size())
+        {
+            Logger::logMessage(Input_Format{ "Batch_Norm_2d_Layer::forward: expected {} batched parameter tensors (gamma, beta, running_mean, running_variance), got {}",
+                                            getPopulationParameterDims().size(), _batched_params.size() },
+                Log_Level::LOG_ERROR,
+                true,
+                0,
+                Log_Feature::NORMALIZATION_COMPUTE | Log_Feature::FORWARD_EVALUATION);
+            throw std::invalid_argument("Invalid input params size");
+        }
+
+        Tensor batch_mean_tensor(getExecutionTarget());
+        Tensor batch_variance_tensor(getExecutionTarget());
+        Tensor normalized_input_tensor(getExecutionTarget());
+        Tensor output_tensor(getExecutionTarget());
+
+        _batched_input.batchNorm2dForward(
+            _batched_params[0],
+            _batched_params[1],
+            const_cast<Tensor&>(_batched_params[2]),
+            const_cast<Tensor&>(_batched_params[3]),
+            batch_mean_tensor,
+            batch_variance_tensor,
+            normalized_input_tensor,
+            output_tensor,
+            input_height,
+            input_width,
+            channels,
+            epsilon,
+            momentum,
+            is_training);
+
+        return output_tensor;
+    }
+
+    std::vector<bool> getPopulationParameterIsEvolvable() const override
+    {
+        return { true, true, false, false };
+    }
+
+    std::vector<Shape> getPopulationParameterDims() const noexcept override
+    {
+        return { Shape{1, channels}, Shape{1, channels}, Shape{1, channels}, Shape{1, channels}};
+    }
+
+    bool supportsPopulationBatch() const override { return true; }
+
+    std::unique_ptr<ILayer> clone() const override
+    {
+        return std::make_unique<Batch_Norm_2d_Layer>(
+            input_height, input_width, channels, epsilon, momentum, execution_target);
+    }
+
+    std::function<float(std::mt19937&)> getPopulationParameterInitializer(std::size_t param_index) const override
+    {
+        if (param_index == 0 || param_index == 3)
+        {
+            return [](std::mt19937&)
+                {
+                    return 1.0f;
+                };
+        }
+        else if (param_index == 1 || param_index == 2)
+        {
+            return [](std::mt19937&)
+                {
+                    return 0.0f;
+                };
+        }
+
+        return [](std::mt19937&)
+            {
+                return 0.0f;
+            };
+    }
+
+    void setPopulationParameter(std::size_t param_index, std::vector<float> flat_data) override
+    {
+        if (flat_data.size() != channels)
+        {
+            throw std::invalid_argument("Batch_Norm_2d_Layer::setPopulationParameter: Dimension mismatch");
+        }
+
+        switch (param_index)
+        {
+        case 0:
+            gamma = Matrix(1, channels, std::move(flat_data), execution_target);
+            break;
+        case 1:
+            beta = Matrix(1, channels, std::move(flat_data), execution_target);
+            break;
+        case 2:
+            running_mean = Matrix(1, channels, std::move(flat_data), execution_target);
+            break;
+        case 3:
+            running_variance = Matrix(1, channels, std::move(flat_data), execution_target);
+            break;
+        default:
+            throw std::out_of_range("Batch_Norm_2d_Layer::setPopulationParameter: Parameter index out of range");
+        }
+    }
+
+    bool isAccumulated() const noexcept
+    {
+        return is_accumulated;
+    }
+
+    void setAccumulated(bool _is_accumulated) noexcept
+    {
+        is_accumulated = _is_accumulated;
+    }
+
+    std::uint32_t getInputHeight() const noexcept
+    {
+        return input_height;
+    }
+
+    std::uint32_t getInputWidth() const noexcept
+    {
+        return input_width;
+    }
+
+    std::uint32_t getChannels() const noexcept
+    {
+        return channels;
+    }
+
+    float getEpsilon() const noexcept
+    {
+        return epsilon;
+    }
+
+    float getMomentum() const noexcept
+    {
+        return momentum;
     }
 
     Matrix backward(const Matrix &_output_gradient) override

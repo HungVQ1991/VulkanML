@@ -62,6 +62,7 @@ private:
     }
 
 public:
+    using ILayer::forward;
     explicit Batch_Norm_Layer(std::size_t _dimension,
                               float _epsilon = 1e-5f,
                               float _momentum = 0.1f,
@@ -139,6 +140,39 @@ public:
         return output_matrix;
     }
 
+    Tensor forward(const Tensor& _batched_input, const std::vector<Tensor>& _batched_params) const override
+    {
+        if (_batched_params.size() != getPopulationParameterDims().size())
+        {
+            Logger::logMessage(Input_Format{ "Batch_Norm_Layer::forward: expected {} batched parameter tensors (gamma, beta, running_mean, running_variance), got {}",
+                                            getPopulationParameterDims().size(), _batched_params.size() },
+                Log_Level::LOG_ERROR,
+                true,
+                0,
+                Log_Feature::NORMALIZATION_COMPUTE | Log_Feature::FORWARD_EVALUATION);
+            throw std::invalid_argument("Invalid input params size");
+        }
+        Tensor batch_mean_tensor(getExecutionTarget());
+        Tensor batch_variance_tensor(getExecutionTarget());
+        Tensor normalized_input_tensor(getExecutionTarget());
+        Tensor output_tensor(getExecutionTarget());
+
+        _batched_input.batchNormForward(
+            _batched_params[0],
+            _batched_params[1],
+            const_cast<Tensor &>(_batched_params[2]),
+            const_cast<Tensor &>(_batched_params[3]),
+            batch_mean_tensor,
+            batch_variance_tensor,
+            normalized_input_tensor,
+            output_tensor,
+            epsilon,
+            momentum,
+            is_training);
+
+        return output_tensor;
+    }
+
     Matrix backward(const Matrix &_output_gradient) override
     {
         if (!is_forward_completed)
@@ -210,9 +244,103 @@ public:
         return true;
     }
 
+    bool supportsPopulationBatch() const noexcept override
+    {
+        return true;
+    }
+
     Layer_Type getLayerType() const noexcept override
     {
         return Layer_Type::BATCH_NORM;
+    }
+
+    std::vector<Shape> getPopulationParameterDims() const override
+    {
+        return { Shape{ 1, input_dimension }, Shape{ 1, input_dimension }, Shape{ 1, input_dimension }, Shape{ 1, input_dimension } };
+    }
+
+    std::vector<bool> getPopulationParameterIsEvolvable() const override
+    {
+        return {true, true, false, false};
+    }
+
+    std::unique_ptr<ILayer> clone() const override
+    {
+        return std::make_unique<Batch_Norm_Layer>(input_dimension, epsilon, momentum, execution_target);
+    }
+
+    std::function<float(std::mt19937&)> getPopulationParameterInitializer(std::size_t param_index) const override
+    {
+        if (param_index == 0 || param_index == 3)
+        {
+            return [](std::mt19937&)
+                {
+                    return 1.0f;
+                };
+        }
+        else if (param_index == 1 || param_index == 2)
+        {
+            return [](std::mt19937&)
+                {
+                    return 0.0f;
+                };
+        }
+
+        return [](std::mt19937&)
+            {
+                return 0.0f;
+            };
+    }
+
+    void setPopulationParameter(std::size_t param_index, std::vector<float> flat_data) override
+    {
+        if (flat_data.size() != input_dimension)
+        {
+            throw std::invalid_argument("Batch_Norm_Layer::setPopulationParameter: Dimension mismatch");
+        }
+
+        switch (param_index)
+        {
+        case 0:
+            gamma = Matrix(1, input_dimension, std::move(flat_data), execution_target);
+            break;
+        case 1:
+            beta = Matrix(1, input_dimension, std::move(flat_data), execution_target);
+            break;
+        case 2:
+            running_mean = Matrix(1, input_dimension, std::move(flat_data), execution_target);
+            break;
+        case 3:
+            running_variance = Matrix(1, input_dimension, std::move(flat_data), execution_target);
+            break;
+        default:
+            throw std::out_of_range("Batch_Norm_Layer::setPopulationParameter: Parameter index out of range");
+        }
+    }
+
+    bool isAccumulated() const noexcept
+    {
+        return is_accumulated;
+    }
+
+    void setAccumulated(bool _is_accumulated) noexcept
+    {
+        is_accumulated = _is_accumulated;
+    }
+
+    std::size_t getInputDimension() const noexcept
+    {
+        return input_dimension;
+    }
+
+    float getEpsilon() const noexcept
+    {
+        return epsilon;
+    }
+
+    float getMomentum() const noexcept
+    {
+        return momentum;
     }
 
     void saveConfiguration(std::ofstream &_output_file_stream) const override

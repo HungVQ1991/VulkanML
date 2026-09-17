@@ -24,6 +24,7 @@ private:
     Execution_Target execution_target = Execution_Target::CPU;
 
 public:
+    using ILayer::forward;
     explicit Softmax_Layer(bool _is_fused_with_loss = false, Execution_Target _execution_target = Execution_Target::CPU)
         : input_matrix(0, 0, _execution_target),
           cached_output_matrix(0, 0, _execution_target),
@@ -52,16 +53,88 @@ public:
         return cached_output_matrix;
     }
 
-    Matrix backward(const Matrix &_output_gradient) override
+    Tensor forward(const Tensor& _batched_input, const std::vector<Tensor>& _batched_params) const override
     {
-        Logger::logMessage(Input_Format{"Softmax_Layer::backward: output_gradient rows={}, columns={}, is_fused_with_loss={}",
+        if (!_batched_params.empty())
+        {
+            Logger::logMessage(Input_Format{ "Softmax_Layer::forward: expected 0 batched parameter tensors, got {}",
+                                            _batched_params.size() },
+                Log_Level::LOG_ERROR,
+                true,
+                0,
+                Log_Feature::ACTIVATION_COMPUTE | Log_Feature::FORWARD_EVALUATION);
+            throw std::invalid_argument("Invalid input params size: Softmax_Layer expects 0 parameters");
+        }
+
+        Tensor output_tensor(_batched_input.getExecutionTarget());
+        _batched_input.softmax(output_tensor);
+        return output_tensor;
+    }
+
+    std::vector<Shape> getPopulationParameterDims() const override
+    {
+        return {};
+    }
+
+    std::vector<bool> getPopulationParameterIsEvolvable() const override
+    {
+        return {};
+    }
+
+    bool supportsPopulationBatch() const override
+    {
+        return true;
+    }
+
+    std::unique_ptr<ILayer> clone() const override
+    {
+        return std::make_unique<Softmax_Layer>(is_fused_with_loss, execution_target);
+    }
+
+    std::function<float(std::mt19937&)> getPopulationParameterInitializer(std::size_t param_index) const override
+    {
+        return [](std::mt19937&)
+            {
+                return 0.0f;
+            };
+    }
+
+    void setPopulationParameter(std::size_t param_index, std::vector<float> flat_data) override
+    {
+        throw std::out_of_range("Softmax_Layer::setPopulationParameter: Layer has no parameters");
+    }
+
+    bool isAccumulated() const noexcept
+    {
+        return is_accumulated;
+    }
+
+    void setAccumulated(bool _is_accumulated) noexcept
+    {
+        is_accumulated = _is_accumulated;
+    }
+
+
+    Matrix backward(const Matrix& _output_gradient) override
+    {
+        if (!is_forward_completed)
+        {
+            Logger::logMessage(Input_Format{ "Softmax_Layer::backward: Backward called before forward" },
+                Log_Level::LOG_ERROR,
+                true,
+                0,
+                Log_Feature::ACTIVATION_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
+            throw std::logic_error("Backward called before forward");
+        }
+
+        Logger::logMessage(Input_Format{ "Softmax_Layer::backward: output_gradient rows={}, columns={}, is_fused_with_loss={}",
                                         _output_gradient.getRows(),
                                         _output_gradient.getColumns(),
-                                        is_fused_with_loss},
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           1,
-                           Log_Feature::ACTIVATION_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
+                                        is_fused_with_loss },
+            Log_Level::LOG_DEBUG,
+            true,
+            1,
+            Log_Feature::ACTIVATION_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
         logBufferAddress(&input_matrix, "input_matrix (Backward)");
         if (is_fused_with_loss)
@@ -75,6 +148,7 @@ public:
 
     void resetGradient() override
     {
+        is_forward_completed = false;
     }
 
     bool hasParameters() const noexcept override

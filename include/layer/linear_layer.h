@@ -30,12 +30,15 @@ private:
     Matrix biases_gradient;
 
     std::size_t input_dimension = 0;
+    float initialization_gain = 2.0f;
     std::size_t output_dimension = 0;
     bool is_forward_completed = false;
     bool is_accumulated = false;
     Execution_Target execution_target = Execution_Target::CPU;
 
 public:
+    using ILayer::forward;
+
     Linear_Layer()
         : weights(0, 0),
           biases(0, 0),
@@ -123,15 +126,30 @@ public:
         return output_matrix;
     }
 
+    Tensor forward(const Tensor& _batched_input, const std::vector<Tensor>& _batched_params) const override
+    {
+        if (_batched_params.size() != getPopulationParameterDims().size())
+        {
+            Logger::logMessage(Input_Format{ "Linear_Layer::forward: expected {} batched parameter tensors, got {}",
+                                            getPopulationParameterDims().size(), _batched_params.size() },
+                Log_Level::LOG_ERROR,
+                true,
+                0,
+                Log_Feature::DENSE_COMPUTE | Log_Feature::FORWARD_EVALUATION);
+            throw std::invalid_argument("Invalid input params size");
+        }
+        return _batched_input.matmulAdd(_batched_params[0], _batched_params[1]);
+    }
+
     Matrix backward(const Matrix &_output_gradient) override
     {
         if (!is_forward_completed)
         {
-            Logger::logMessage(Input_Format{"Global_Avg_Pool_2d_Layer::backward: Backward called before forward"},
+            Logger::logMessage(Input_Format{"Linear_Layer::backward: Backward called before forward"},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
-                               Log_Feature::POOLING_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
+                               Log_Feature::DENSE_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
             throw std::logic_error("Backward called before forward");
         }
         if (_output_gradient.getColumns() != output_dimension || _output_gradient.getRows() != input_matrix.getRows())
@@ -201,6 +219,63 @@ public:
     std::size_t getOutputDimension() const noexcept
     {
         return output_dimension;
+    }
+
+    bool supportsPopulationBatch() const noexcept override
+    {
+        return true;
+    }
+
+    std::vector<Shape> getPopulationParameterDims() const override 
+    {
+        std::vector<Shape> result;
+        result.push_back({input_dimension, output_dimension});
+        result.push_back({1, output_dimension});
+        return result;
+    }
+
+    std::unique_ptr<ILayer> clone() const override
+    {
+        return std::make_unique<Linear_Layer>(input_dimension, output_dimension, execution_target, initialization_gain);
+    }
+
+    void setPopulationParameter(std::size_t param_index, std::vector<float> flat_data) override
+    {
+        if (param_index == 0)
+        {
+            if (flat_data.size() != input_dimension * output_dimension)
+            {
+                throw std::invalid_argument("Linear_Layer::setPopulationParameter: Weight size mismatch");
+            }
+            weights = Matrix(input_dimension, output_dimension, std::move(flat_data), execution_target);
+        }
+        else if (param_index == 1)
+        {
+            if (flat_data.size() != output_dimension)
+            {
+                throw std::invalid_argument("Linear_Layer::setPopulationParameter: Bias size mismatch");
+            }
+            biases = Matrix(1, output_dimension, std::move(flat_data), execution_target);
+        }
+        else
+        {
+            throw std::out_of_range("Linear_Layer::setPopulationParameter: Parameter index out of range");
+        }
+    }
+
+    bool isAccumulated() const noexcept
+    {
+        return is_accumulated;
+    }
+
+    void setAccumulated(bool _is_accumulated) noexcept
+    {
+        is_accumulated = _is_accumulated;
+    }
+
+    float getInitializationGain() const noexcept
+    {
+        return initialization_gain;
     }
 
     Execution_Target getExecutionTarget() const override { return execution_target; }
@@ -284,6 +359,8 @@ public:
         biases = Matrix::loadMatrix(_input_file_stream, execution_target);
         weights_gradient = Matrix::loadMatrix(_input_file_stream, execution_target);
         biases_gradient = Matrix::loadMatrix(_input_file_stream, execution_target);
+        input_dimension = weights.getRows();
+        output_dimension = weights.getColumns();
     }
 
     std::vector<std::pair<Matrix *, Matrix *>> getParametersAndGradients() override

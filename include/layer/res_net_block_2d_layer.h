@@ -36,6 +36,7 @@ private:
     Execution_Target execution_target = Execution_Target::CPU;
 
 public:
+    using ILayer::forward;
     explicit Res_Net_Block_2d_Layer(Execution_Target _execution_target = Execution_Target::CPU)
         : input_matrix(0, 0, _execution_target),
           main_branch_output(0, 0, _execution_target),
@@ -208,6 +209,223 @@ public:
 
         is_forward_completed = true;
         return final_output;
+    }
+
+    Tensor forward(const Tensor& _batched_input, const std::vector<Tensor>& _batched_params) const override
+    {
+        if (_batched_params.size() != getPopulationParameterDims().size())
+        {
+            Logger::logMessage(Input_Format{ "Res_Net_Block_2d_Layer::forward: expected {} batched parameter tensors, got {}",
+                                            getPopulationParameterDims().size(), _batched_params.size() },
+                Log_Level::LOG_ERROR,
+                true,
+                0,
+                Log_Feature::FORWARD_EVALUATION);
+            throw std::invalid_argument("Invalid input params size");
+        }
+
+        std::size_t param_offset = 0;
+        Tensor current_main = _batched_input;
+
+        for (const auto& layer : main_branch)
+        {
+            std::size_t param_count = layer->getPopulationParameterDims().size();
+            std::vector<Tensor> sub_params(
+                _batched_params.begin() + param_offset,
+                _batched_params.begin() + param_offset + param_count);
+            current_main = layer->forward(current_main, sub_params);
+            param_offset += param_count;
+        }
+
+        Tensor current_shortcut = _batched_input;
+        if (!shortcut_branch.empty())
+        {
+            for (const auto& layer : shortcut_branch)
+            {
+                std::size_t param_count = layer->getPopulationParameterDims().size();
+                std::vector<Tensor> sub_params(
+                    _batched_params.begin() + param_offset,
+                    _batched_params.begin() + param_offset + param_count);
+                current_shortcut = layer->forward(current_shortcut, sub_params);
+                param_offset += param_count;
+            }
+        }
+
+        Tensor sum_tensor(_batched_input.getExecutionTarget());
+        current_main.add(current_shortcut, sum_tensor);
+
+        if (post_activation)
+        {
+            std::size_t param_count = post_activation->getPopulationParameterDims().size();
+            std::vector<Tensor> sub_params(
+                _batched_params.begin() + param_offset,
+                _batched_params.begin() + param_offset + param_count);
+            return post_activation->forward(sum_tensor, sub_params);
+        }
+
+        return sum_tensor;
+    }
+
+    bool supportsPopulationBatch() const noexcept override
+    {
+        for (const auto& layer : main_branch)
+        {
+            if (!layer->supportsPopulationBatch())
+            {
+                return false;
+            }
+        }
+        for (const auto& layer : shortcut_branch)
+        {
+            if (!layer->supportsPopulationBatch())
+            {
+                return false;
+            }
+        }
+        if (post_activation && !post_activation->supportsPopulationBatch())
+        {
+            return false;
+        }
+        return true;
+    }
+
+    std::vector<Shape> getPopulationParameterDims() const override
+    {
+        std::vector<Shape> total_dims;
+        for (const auto& layer : main_branch)
+        {
+            auto dims = layer->getPopulationParameterDims();
+            total_dims.insert(total_dims.end(), dims.begin(), dims.end());
+        }
+        for (const auto& layer : shortcut_branch)
+        {
+            auto dims = layer->getPopulationParameterDims();
+            total_dims.insert(total_dims.end(), dims.begin(), dims.end());
+        }
+        if (post_activation)
+        {
+            auto dims = post_activation->getPopulationParameterDims();
+            total_dims.insert(total_dims.end(), dims.begin(), dims.end());
+        }
+        return total_dims;
+    }
+
+    std::vector<bool> getPopulationParameterIsEvolvable() const override
+    {
+        std::vector<bool> total_evolvable;
+        for (const auto& layer : main_branch)
+        {
+            auto evolvable = layer->getPopulationParameterIsEvolvable();
+            total_evolvable.insert(total_evolvable.end(), evolvable.begin(), evolvable.end());
+        }
+        for (const auto& layer : shortcut_branch)
+        {
+            auto evolvable = layer->getPopulationParameterIsEvolvable();
+            total_evolvable.insert(total_evolvable.end(), evolvable.begin(), evolvable.end());
+        }
+        if (post_activation)
+        {
+            auto evolvable = post_activation->getPopulationParameterIsEvolvable();
+            total_evolvable.insert(total_evolvable.end(), evolvable.begin(), evolvable.end());
+        }
+        return total_evolvable;
+    }
+
+    std::unique_ptr<ILayer> clone() const override
+    {
+        auto cloned_layer = std::make_unique<Res_Net_Block_2d_Layer>(execution_target);
+        for (const auto& layer : main_branch)
+        {
+            cloned_layer->addMainLayer(layer->clone());
+        }
+        for (const auto& layer : shortcut_branch)
+        {
+            cloned_layer->addShortcutLayer(layer->clone());
+        }
+        if (post_activation)
+        {
+            cloned_layer->setPostActivation(post_activation->clone());
+        }
+        return cloned_layer;
+    }
+
+    std::function<float(std::mt19937&)> getPopulationParameterInitializer(std::size_t param_index) const override
+    {
+        std::size_t current_offset = 0;
+        for (const auto& layer : main_branch)
+        {
+            std::size_t count = layer->getPopulationParameterDims().size();
+            if (param_index < current_offset + count)
+            {
+                return layer->getPopulationParameterInitializer(param_index - current_offset);
+            }
+            current_offset += count;
+        }
+        for (const auto& layer : shortcut_branch)
+        {
+            std::size_t count = layer->getPopulationParameterDims().size();
+            if (param_index < current_offset + count)
+            {
+                return layer->getPopulationParameterInitializer(param_index - current_offset);
+            }
+            current_offset += count;
+        }
+        if (post_activation)
+        {
+            std::size_t count = post_activation->getPopulationParameterDims().size();
+            if (param_index < current_offset + count)
+            {
+                return post_activation->getPopulationParameterInitializer(param_index - current_offset);
+            }
+            current_offset += count;
+        }
+        throw std::out_of_range("Res_Net_Block_2d_Layer::getPopulationParameterInitializer: Parameter index out of range");
+    }
+
+    void setPopulationParameter(std::size_t param_index, std::vector<float> flat_data) override
+    {
+        std::size_t current_offset = 0;
+        for (auto& layer : main_branch)
+        {
+            std::size_t count = layer->getPopulationParameterDims().size();
+            if (param_index < current_offset + count)
+            {
+                layer->setPopulationParameter(param_index - current_offset, std::move(flat_data));
+                return;
+            }
+            current_offset += count;
+        }
+        for (auto& layer : shortcut_branch)
+        {
+            std::size_t count = layer->getPopulationParameterDims().size();
+            if (param_index < current_offset + count)
+            {
+                layer->setPopulationParameter(param_index - current_offset, std::move(flat_data));
+                return;
+            }
+            current_offset += count;
+        }
+        if (post_activation)
+        {
+            std::size_t count = post_activation->getPopulationParameterDims().size();
+            if (param_index < current_offset + count)
+            {
+                post_activation->setPopulationParameter(param_index - current_offset, std::move(flat_data));
+                return;
+            }
+            current_offset += count;
+        }
+        throw std::out_of_range("Res_Net_Block_2d_Layer::setPopulationParameter: Parameter index out of range");
+    }
+
+    bool isAccumulated() const noexcept
+    {
+        return is_accumulated;
+    }
+
+    void setAccumulated(bool _is_accumulated) noexcept
+    {
+        is_accumulated = _is_accumulated;
     }
 
     Matrix backward(const Matrix &_output_gradient) override

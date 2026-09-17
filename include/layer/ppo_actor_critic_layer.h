@@ -39,6 +39,7 @@ private:
     Execution_Target execution_target = Execution_Target::CPU;
 
 public:
+    using ILayer::forward;
     PPO_Actor_Critic_Layer(std::uint64_t _actor_output_dimension, Execution_Target _execution_target = Execution_Target::CPU)
         : actor_output_dimension(_actor_output_dimension),
           input_matrix(0, 0, _execution_target),
@@ -154,6 +155,160 @@ public:
 
         is_forward_completed = true;
         return output_matrix;
+    }
+
+    Tensor forward(const Tensor& _batched_input, const std::vector<Tensor>& _batched_params) const override
+    {
+        if (_batched_params.size() != getPopulationParameterDims().size())
+        {
+            Logger::logMessage(Input_Format{ "PPO_Actor_Critic_Layer::forward: expected {} batched parameter tensors, got {}",
+                                            getPopulationParameterDims().size(), _batched_params.size() },
+                Log_Level::LOG_ERROR,
+                true,
+                0,
+                Log_Feature::FORWARD_EVALUATION);
+            throw std::invalid_argument("Invalid input params size");
+        }
+
+        std::size_t param_offset = 0;
+        Tensor running_actor = _batched_input;
+        for (const auto& layer : actor)
+        {
+            std::size_t param_count = layer->getPopulationParameterDims().size();
+            std::vector<Tensor> sub_params(
+                _batched_params.begin() + param_offset,
+                _batched_params.begin() + param_offset + param_count);
+            running_actor = layer->forward(running_actor, sub_params);
+            param_offset += param_count;
+        }
+
+        Tensor running_critic = _batched_input;
+        for (const auto& layer : critic)
+        {
+            std::size_t param_count = layer->getPopulationParameterDims().size();
+            std::vector<Tensor> sub_params(
+                _batched_params.begin() + param_offset,
+                _batched_params.begin() + param_offset + param_count);
+            running_critic = layer->forward(running_critic, sub_params);
+            param_offset += param_count;
+        }
+
+        Tensor combined_output(_batched_input.getExecutionTarget());
+        running_actor.concatenateCollumns(running_critic, combined_output);
+        return combined_output;
+    }
+
+    std::vector<Shape> getPopulationParameterDims() const override
+    {
+        std::vector<Shape> total_dims;
+        for (const auto& layer : actor)
+        {
+            auto dims = layer->getPopulationParameterDims();
+            total_dims.insert(total_dims.end(), dims.begin(), dims.end());
+        }
+        for (const auto& layer : critic)
+        {
+            auto dims = layer->getPopulationParameterDims();
+            total_dims.insert(total_dims.end(), dims.begin(), dims.end());
+        }
+        return total_dims;
+    }
+
+    std::vector<bool> getPopulationParameterIsEvolvable() const override
+    {
+        std::vector<bool> total_evolvable;
+        for (const auto& layer : actor)
+        {
+            auto evolvable = layer->getPopulationParameterIsEvolvable();
+            total_evolvable.insert(total_evolvable.end(), evolvable.begin(), evolvable.end());
+        }
+        for (const auto& layer : critic)
+        {
+            auto evolvable = layer->getPopulationParameterIsEvolvable();
+            total_evolvable.insert(total_evolvable.end(), evolvable.begin(), evolvable.end());
+        }
+        return total_evolvable;
+    }
+
+    bool supportsPopulationBatch() const noexcept override { return true; }
+
+    std::unique_ptr<ILayer> clone() const override
+    {
+        auto cloned_layer = std::make_unique<PPO_Actor_Critic_Layer>(actor_output_dimension, execution_target);
+        for (const auto& layer : actor)
+        {
+            cloned_layer->addActorLayer(layer->clone());
+        }
+        for (const auto& layer : critic)
+        {
+            cloned_layer->addCriticLayer(layer->clone());
+        }
+        return cloned_layer;
+    }
+
+    std::function<float(std::mt19937&)> getPopulationParameterInitializer(std::size_t param_index) const override
+    {
+        std::size_t current_offset = 0;
+        for (const auto& layer : actor)
+        {
+            std::size_t count = layer->getPopulationParameterDims().size();
+            if (param_index < current_offset + count)
+            {
+                return layer->getPopulationParameterInitializer(param_index - current_offset);
+            }
+            current_offset += count;
+        }
+        for (const auto& layer : critic)
+        {
+            std::size_t count = layer->getPopulationParameterDims().size();
+            if (param_index < current_offset + count)
+            {
+                return layer->getPopulationParameterInitializer(param_index - current_offset);
+            }
+            current_offset += count;
+        }
+        throw std::out_of_range("PPO_Actor_Critic_Layer::getPopulationParameterInitializer: Parameter index out of range");
+    }
+
+    void setPopulationParameter(std::size_t param_index, std::vector<float> flat_data) override
+    {
+        std::size_t current_offset = 0;
+        for (auto& layer : actor)
+        {
+            std::size_t count = layer->getPopulationParameterDims().size();
+            if (param_index < current_offset + count)
+            {
+                layer->setPopulationParameter(param_index - current_offset, std::move(flat_data));
+                return;
+            }
+            current_offset += count;
+        }
+        for (auto& layer : critic)
+        {
+            std::size_t count = layer->getPopulationParameterDims().size();
+            if (param_index < current_offset + count)
+            {
+                layer->setPopulationParameter(param_index - current_offset, std::move(flat_data));
+                return;
+            }
+            current_offset += count;
+        }
+        throw std::out_of_range("PPO_Actor_Critic_Layer::setPopulationParameter: Parameter index out of range");
+    }
+
+    bool isAccumulated() const noexcept
+    {
+        return is_accumulated;
+    }
+
+    void setAccumulated(bool _is_accumulated) noexcept
+    {
+        is_accumulated = _is_accumulated;
+    }
+
+    std::uint64_t getActorOutputDimension() const noexcept
+    {
+        return actor_output_dimension;
     }
 
     Matrix backward(const Matrix &_output_gradient) override

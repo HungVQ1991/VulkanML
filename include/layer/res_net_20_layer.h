@@ -73,6 +73,7 @@ private:
     }
 
 public:
+    using ILayer::forward;
     Res_Net_20_Layer(
         std::uint32_t _height = 32,
         std::uint32_t _width = 32,
@@ -117,6 +118,126 @@ public:
 
         is_forward_completed = true;
         return output_matrix;
+    }
+    
+    Tensor forward(const Tensor& _batched_input, const std::vector<Tensor>& _batched_params) const override
+    {
+        if (_batched_params.size() != getPopulationParameterDims().size())
+        {
+            Logger::logMessage(Input_Format{ "Res_Net_20_Layer::forward: expected {} batched parameter tensors, got {}",
+                                            getPopulationParameterDims().size(), _batched_params.size() },
+                Log_Level::LOG_ERROR,
+                true,
+                0,
+                Log_Feature::FORWARD_EVALUATION);
+            throw std::invalid_argument("Invalid input params size");
+        }
+
+        std::size_t param_offset = 0;
+        Tensor current_tensor = _batched_input;
+
+        for (const auto& layer : layers)
+        {
+            std::size_t param_count = layer->getPopulationParameterDims().size();
+            std::vector<Tensor> sub_params(
+                _batched_params.begin() + param_offset,
+                _batched_params.begin() + param_offset + param_count);
+            current_tensor = layer->forward(current_tensor, sub_params);
+            param_offset += param_count;
+        }
+
+        return current_tensor;
+    }
+
+    bool supportsPopulationBatch() const noexcept override { return true; }
+
+    std::vector<Shape> getPopulationParameterDims() const override
+    {
+        std::vector<Shape> total_dims;
+        for (const auto& layer : layers)
+        {
+            auto dims = layer->getPopulationParameterDims();
+            total_dims.insert(total_dims.end(), dims.begin(), dims.end());
+        }
+        return total_dims;
+    }
+
+    std::vector<bool> getPopulationParameterIsEvolvable() const override
+    {
+        std::vector<bool> total_evolvable;
+        for (const auto& layer : layers)
+        {
+            auto evolvable = layer->getPopulationParameterIsEvolvable();
+            total_evolvable.insert(total_evolvable.end(), evolvable.begin(), evolvable.end());
+        }
+        return total_evolvable;
+    }
+
+    std::unique_ptr<ILayer> clone() const override
+    {
+        return std::make_unique<Res_Net_20_Layer>(
+            input_height, input_width, input_channels, num_classes, execution_target);
+    }
+
+    std::function<float(std::mt19937&)> getPopulationParameterInitializer(std::size_t param_index) const override
+    {
+        std::size_t current_offset = 0;
+        for (const auto& layer : layers)
+        {
+            std::size_t count = layer->getPopulationParameterDims().size();
+            if (param_index < current_offset + count)
+            {
+                return layer->getPopulationParameterInitializer(param_index - current_offset);
+            }
+            current_offset += count;
+        }
+        throw std::out_of_range("Res_Net_20_Layer::getPopulationParameterInitializer: Parameter index out of range");
+    }
+
+    void setPopulationParameter(std::size_t param_index, std::vector<float> flat_data) override
+    {
+        std::size_t current_offset = 0;
+        for (auto& layer : layers)
+        {
+            std::size_t count = layer->getPopulationParameterDims().size();
+            if (param_index < current_offset + count)
+            {
+                layer->setPopulationParameter(param_index - current_offset, std::move(flat_data));
+                return;
+            }
+            current_offset += count;
+        }
+        throw std::out_of_range("Res_Net_20_Layer::setPopulationParameter: Parameter index out of range");
+    }
+
+    bool isAccumulated() const noexcept
+    {
+        return is_accumulated;
+    }
+
+    void setAccumulated(bool _is_accumulated) noexcept
+    {
+        is_accumulated = _is_accumulated;
+    }
+
+    std::uint32_t getInputHeight() const noexcept
+    {
+        return input_height;
+    }
+
+    std::uint32_t getInputWidth() const noexcept
+    {
+        return input_width;
+    }
+
+    std::uint32_t getInputChannels() const noexcept
+    {
+        return input_channels;
+    }
+
+    std::uint32_t getNumClasses() const noexcept
+    {
+        return num_classes;
     }
 
     Matrix backward(const Matrix &_output_gradient) override

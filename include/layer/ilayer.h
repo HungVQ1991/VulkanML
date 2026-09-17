@@ -11,6 +11,8 @@
 #include <utility>
 #include <variant>
 #include <vector>
+#include <functional>
+#include <random>
 
 #include "engine/execution_engine.h"
 #include "engine/gpu_vector.h"
@@ -141,7 +143,7 @@ public:
 
     virtual ~ILayer() noexcept = default;
 
-    virtual Matrix forward(const Matrix &_input_matrix) = 0;
+    virtual Matrix forward(const Matrix &_input_matrix) { return Tensor{}; };
     virtual Matrix backward(const Matrix &_output_gradient) = 0;
 
     virtual const Matrix &getWeights() const { return emptyMatrix(); }
@@ -152,12 +154,35 @@ public:
     virtual Execution_Target getExecutionTarget() const = 0;
 
     virtual bool hasParameters() const { return false; }
+    virtual bool supportsPopulationBatch() const { return false; }
     virtual void resetGradient() {}
     virtual void resetGradients() { resetGradient(); }
     virtual void setTrainingMode(bool _is_training) {}
 
     virtual std::vector<std::pair<Matrix *, Matrix *>> getParametersAndGradients() { return {}; }
     virtual std::vector<std::pair<Matrix *, Matrix *>> getParamsAndGrads() { return getParametersAndGradients(); }
+
+    virtual std::vector<Shape> getPopulationParameterDims() const { return {}; }
+
+    virtual Tensor forward(const Tensor& _batched_input, const std::vector<Tensor>& _batched_params) const
+    {
+        throw std::logic_error(std::format("{} does not support population-batched forward",
+            getEnumString<Layer_Type>(getLayerType())));
+    }
+
+    virtual std::vector<bool> getPopulationParameterIsEvolvable() const
+    {
+        return std::vector<bool>(getPopulationParameterDims().size(), true);
+    }
+
+    virtual std::function<float(std::mt19937&)> getPopulationParameterInitializer(std::size_t param_index) const
+    {
+        return [](std::mt19937&) { return 0.0f; }; 
+    }
+
+    virtual std::unique_ptr<ILayer> clone() const = 0; 
+
+    virtual void setPopulationParameter(std::size_t param_index, std::vector<float> flat_data) {}
 
     virtual Layer_Type getLayerType() const = 0;
 

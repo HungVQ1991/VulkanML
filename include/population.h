@@ -4,8 +4,10 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <format>
 #include <fstream>
-#include <iostream>
+#include <functional>
+#include <memory>
 #include <numeric>
 #include <random>
 #include <span>
@@ -14,33 +16,38 @@
 #include <utility>
 #include <vector>
 
-#include "layer/gelu.h"
-#include "layer/linear_layer.h"
-#include "layer/relu.h"
+#include "helper/logger.h"
+#include "helper/magic_enum.hpp"
+#include "layer/ilayer.h"
+#include "math/shape.h"
 #include "math/tensor.h"
 #include "neural_network.h"
 
-enum class Population_Activation
+inline std::size_t calculateNumel(const Shape &shape)
 {
-    NONE,
-    RELU,
-    GELU
-};
-
-struct Population_Layer_Block
-{
-    std::size_t in_dim = 0;
-    std::size_t out_dim = 0;
-    Population_Activation activation = Population_Activation::NONE;
-    Tensor weights;
-    Tensor biases;
-
-    Population_Layer_Block(std::size_t pop_size, std::size_t in_d, std::size_t out_d, Population_Activation act, Execution_Target target)
-        : in_dim(in_d), out_dim(out_d), activation(act),
-          weights(Shape{pop_size, in_d, out_d}, target),
-          biases(Shape{pop_size, 1, out_d}, target)
+    std::size_t total = 1;
+    for (std::size_t dimension : shape.getDimensions())
     {
+        total *= dimension;
     }
+    return total;
+}
+
+inline Shape prependPopulationDim(std::size_t population_size, const Shape &shape)
+{
+    std::vector<std::size_t> dimensions{population_size};
+    dimensions.insert(dimensions.end(), shape.getDimensions().begin(), shape.getDimensions().end());
+    return Shape(dimensions);
+}
+
+struct Population_Layer_Adapter
+{
+    const ILayer *template_layer = nullptr;
+    std::vector<Shape> param_shapes;
+    std::vector<bool> param_evolvable;
+    std::vector<std::size_t> param_numel;
+    std::vector<Tensor> batched_params;
+    std::vector<std::vector<float>> host_params;
 };
 
 class Population
@@ -49,129 +56,104 @@ private:
     std::size_t population_size = 0;
     std::size_t state_dimension = 0;
     std::size_t action_space_size = 0;
-    std::size_t hidden_dimension = 128;
     Execution_Target execution_target = Execution_Target::CPU;
     mutable std::mt19937 random_engine;
 
-    std::vector<Population_Layer_Block> dense_layers;
-
-    std::vector<std::vector<float>> host_weights;
-    std::vector<std::vector<float>> host_biases;
+    std::vector<Population_Layer_Adapter> layer_adapters;
 
     mutable Tensor batched_input_tensor;
     mutable std::vector<float> batched_input_host;
 
     void initializeWeights()
     {
-        host_weights.resize(dense_layers.size());
-        host_biases.resize(dense_layers.size());
-
-        for (std::size_t l = 0; l < dense_layers.size(); ++l)
+        for (auto &adapter : layer_adapters)
         {
-            std::size_t in_d = dense_layers[l].in_dim;
-            std::size_t out_d = dense_layers[l].out_dim;
-            std::size_t w_total = population_size * in_d * out_d;
-            std::size_t b_total = population_size * out_d;
-
-            host_weights[l].resize(w_total);
-            host_biases[l].assign(b_total, 0.0f);
-
-            float std_dev = std::sqrt(2.0f / static_cast<float>(in_d));
-            std::normal_distribution<float> dist(0.0f, std_dev);
-
-            for (std::size_t i = 0; i < w_total; ++i)
+            adapter.host_params.resize(adapter.param_shapes.size());
+            for (std::size_t p = 0; p < adapter.param_shapes.size(); ++p)
             {
-                host_weights[l][i] = dist(random_engine);
+                std::size_t total = population_size * adapter.param_numel[p];
+                adapter.host_params[p].resize(total);
+
+                auto init_fn = adapter.template_layer->getPopulationParameterInitializer(p);
+                for (float &value : adapter.host_params[p])
+                {
+                    value = init_fn(random_engine);
+                }
             }
         }
-
-        batched_input_tensor = Tensor(Shape{population_size, 1, state_dimension}, execution_target);
-        batched_input_host.assign(population_size * state_dimension, 0.0f);
-
         syncHostToDevice();
     }
 
     void syncHostToDevice()
     {
-        for (std::size_t l = 0; l < dense_layers.size(); ++l)
+        for (auto &adapter : layer_adapters)
         {
-            dense_layers[l].weights.uploadData(host_weights[l]);
-            dense_layers[l].biases.uploadData(host_biases[l]);
+            for (std::size_t p = 0; p < adapter.batched_params.size(); ++p)
+            {
+                adapter.batched_params[p].uploadData(adapter.host_params[p]);
+            }
         }
     }
 
     void syncDeviceToHost()
     {
-        for (size_t l = 0; l < dense_layers.size(); ++l)
+        for (auto &adapter : layer_adapters)
         {
-            host_weights[l] = dense_layers[l].weights.getData();
-            host_biases[l] = dense_layers[l].weights.getData();
+            for (std::size_t p = 0; p < adapter.batched_params.size(); ++p)
+            {
+                adapter.host_params[p] = adapter.batched_params[p].getData();
+            }
         }
     }
 
 public:
-    Population(std::size_t pop_size,
-               const Neural_Network &template_net,
-               Execution_Target target = Execution_Target::CPU,
-               std::uint32_t seed = std::random_device{}())
-        : population_size(pop_size), execution_target(target), random_engine(seed)
+    Population(std::size_t _population_size,
+               const Neural_Network &_template_net,
+               std::size_t _state_dimension,
+               std::size_t _action_dimension,
+               Execution_Target _execution_target = Execution_Target::CPU,
+               std::uint32_t _seed = std::random_device{}())
+        : population_size(_population_size),
+          state_dimension(_state_dimension),
+          action_space_size(_action_dimension),
+          execution_target(_execution_target),
+          random_engine(_seed)
     {
-        const auto &layers = template_net.getLayers();
-        for (std::size_t i = 0; i < layers.size(); ++i)
+        for (const auto &layer_ptr : _template_net.getLayers())
         {
-            if (layers[i]->getLayerType() == Layer_Type::LINEAR)
+            if (!layer_ptr->supportsPopulationBatch())
             {
-                auto *lin = dynamic_cast<const Linear_Layer *>(layers[i].get());
-                if (lin)
-                {
-                    std::size_t in_d = lin->getWeights().getRows();
-                    std::size_t out_d = lin->getWeights().getColumns();
-                    Population_Activation act = Population_Activation::NONE;
-                    if (i + 1 < layers.size())
-                    {
-                        Layer_Type next_t = layers[i + 1]->getLayerType();
-                        if (next_t == Layer_Type::GELU)
-                        {
-                            act = Population_Activation::GELU;
-                        }
-                        else if (next_t == Layer_Type::RELU)
-                        {
-                            act = Population_Activation::RELU;
-                        }
-                    }
-                    dense_layers.emplace_back(pop_size, in_d, out_d, act, target);
-                }
+                throw std::invalid_argument(std::format("Layer {} not supported in population mode",
+                                                        magic_enum::enum_name(layer_ptr->getLayerType())));
             }
+
+            Population_Layer_Adapter adapter;
+            adapter.template_layer = layer_ptr.get();
+            adapter.param_shapes = layer_ptr->getPopulationParameterDims();
+            adapter.param_evolvable = layer_ptr->getPopulationParameterIsEvolvable();
+
+            if (adapter.param_evolvable.size() != adapter.param_shapes.size())
+            {
+                throw std::logic_error(std::format("{}: getPopulationParameterIsEvolvable() size mismatch",
+                                                   magic_enum::enum_name(layer_ptr->getLayerType())));
+            }
+
+            for (const Shape &shape : adapter.param_shapes)
+            {
+                adapter.param_numel.push_back(calculateNumel(shape));
+                adapter.batched_params.emplace_back(prependPopulationDim(_population_size, shape), _execution_target);
+            }
+
+            layer_adapters.push_back(std::move(adapter));
         }
 
-        if (dense_layers.empty())
+        if (layer_adapters.empty())
         {
-            throw std::invalid_argument("Template neural network contains no Linear layers");
+            throw std::invalid_argument("Template neural network has no population-capable layers");
         }
 
-        state_dimension = dense_layers.front().in_dim;
-        action_space_size = dense_layers.back().out_dim;
-        hidden_dimension = dense_layers.front().out_dim;
-
-        initializeWeights();
-    }
-
-    Population(std::size_t pop_size,
-               std::size_t state_dim,
-               std::size_t action_dim,
-               std::size_t hidden_dim = 128,
-               Execution_Target target = Execution_Target::CPU,
-               std::uint32_t seed = std::random_device{}())
-        : population_size(pop_size),
-          state_dimension(state_dim),
-          action_space_size(action_dim),
-          hidden_dimension(hidden_dim),
-          execution_target(target),
-          random_engine(seed)
-    {
-        dense_layers.emplace_back(pop_size, state_dim, hidden_dim, Population_Activation::GELU, target);
-        dense_layers.emplace_back(pop_size, hidden_dim, hidden_dim, Population_Activation::GELU, target);
-        dense_layers.emplace_back(pop_size, hidden_dim, action_dim, Population_Activation::NONE, target);
+        batched_input_tensor = Tensor(Shape{_population_size, 1, _state_dimension}, _execution_target);
+        batched_input_host.assign(_population_size * _state_dimension, 0.0f);
 
         initializeWeights();
     }
@@ -188,142 +170,79 @@ public:
             throw std::out_of_range("Individual index out of range in selectAction");
         }
 
-        std::vector<float> current_act(state_data, state_data + state_dimension);
-        std::vector<float> next_act;
+        Neural_Network individual_net = getIndividual(individual_index);
+        std::vector<float> input_vector(state_data, state_data + state_dimension);
+        Matrix input_matrix(1, state_dimension, std::move(input_vector), execution_target);
+        Matrix output_matrix = individual_net.forward(input_matrix);
 
-        for (std::size_t l = 0; l < dense_layers.size(); ++l)
+        const auto &output_data = output_matrix.getData();
+        if (output_data.empty())
         {
-            const auto &layer = dense_layers[l];
-            std::size_t in_d = layer.in_dim;
-            std::size_t out_d = layer.out_dim;
-            const float *w_ptr = host_weights[l].data() + individual_index * (in_d * out_d);
-            const float *b_ptr = host_biases[l].data() + individual_index * out_d;
-
-            next_act.assign(out_d, 0.0f);
-
-            for (std::size_t j = 0; j < out_d; ++j)
-            {
-                next_act[j] = b_ptr[j];
-            }
-
-            for (std::size_t k = 0; k < in_d; ++k)
-            {
-                float in_val = current_act[k];
-                const float *w_row = w_ptr + k * out_d;
-                for (std::size_t j = 0; j < out_d; ++j)
-                {
-                    next_act[j] += in_val * w_row[j];
-                }
-            }
-
-            if (layer.activation == Population_Activation::GELU)
-            {
-                constexpr float ALPHA = 0.7978845608F;
-                constexpr float BETA = 0.044715F;
-                for (std::size_t j = 0; j < out_d; ++j)
-                {
-                    float x = next_act[j];
-                    float tanh_in = std::tanh(ALPHA * (x + BETA * x * x * x));
-                    next_act[j] = 0.5F * x * (1.0F + tanh_in);
-                }
-            }
-            else if (layer.activation == Population_Activation::RELU)
-            {
-                for (std::size_t j = 0; j < out_d; ++j)
-                {
-                    next_act[j] = std::max(0.0F, next_act[j]);
-                }
-            }
-
-            current_act = std::move(next_act);
+            return 0;
         }
 
-        std::size_t best_action = 0;
-        float max_val = current_act[0];
-        for (std::size_t i = 1; i < current_act.size(); ++i)
-        {
-            if (current_act[i] > max_val)
-            {
-                max_val = current_act[i];
-                best_action = i;
-            }
-        }
-        return best_action;
+        return static_cast<std::size_t>(std::distance(
+            output_data.begin(),
+            std::max_element(output_data.begin(), output_data.end())));
     }
 
-    void selectBatchActions(const float *states_flat, const std::size_t *active_indices, std::size_t active_count, std::size_t *actions_out) const
+    void selectBatchActions(const float *states_flat,
+                            const std::size_t *active_indices,
+                            std::size_t active_count,
+                            std::size_t *actions_out) const
     {
         if (active_count == 0)
         {
             return;
         }
 
-        if (execution_target == Execution_Target::VULKAN_GPU)
+        if (batched_input_host.size() != population_size * state_dimension)
         {
-            if (batched_input_host.size() != population_size * state_dimension)
-            {
-                batched_input_host.assign(population_size * state_dimension, 0.0f);
-            }
+            batched_input_host.assign(population_size * state_dimension, 0.0f);
+        }
 
-            if (!active_indices && active_count == population_size)
-            {
-                std::copy(states_flat, states_flat + (population_size * state_dimension), batched_input_host.begin());
-            }
-            else
-            {
-                for (std::size_t i = 0; i < active_count; ++i)
-                {
-                    std::size_t agent_idx = active_indices ? active_indices[i] : i;
-                    if (agent_idx < population_size)
-                    {
-                        const float *src = states_flat + (i * state_dimension);
-                        float *dst = batched_input_host.data() + (agent_idx * state_dimension);
-                        std::copy(src, src + state_dimension, dst);
-                    }
-                }
-            }
-
-            batched_input_tensor.uploadData(batched_input_host);
-
-            Tensor current_tensor = batched_input_tensor;
-            for (std::size_t l = 0; l < dense_layers.size(); ++l)
-            {
-                current_tensor = current_tensor.matmulAdd(dense_layers[l].weights, dense_layers[l].biases);
-                if (dense_layers[l].activation == Population_Activation::GELU)
-                {
-                    current_tensor = current_tensor.gelu();
-                }
-                else if (dense_layers[l].activation == Population_Activation::RELU)
-                {
-                    current_tensor = current_tensor.relu();
-                }
-            }
-
-            std::vector<float> q_values = current_tensor.getData();
+        if (!active_indices && active_count == population_size)
+        {
+            std::copy(states_flat, states_flat + (population_size * state_dimension), batched_input_host.begin());
+        }
+        else
+        {
             for (std::size_t i = 0; i < active_count; ++i)
             {
                 std::size_t agent_idx = active_indices ? active_indices[i] : i;
-                std::size_t offset = agent_idx * action_space_size;
-                std::size_t best_act = 0;
-                float max_val = q_values[offset];
-                for (std::size_t a = 1; a < action_space_size; ++a)
+                if (agent_idx < population_size)
                 {
-                    if (q_values[offset + a] > max_val)
-                    {
-                        max_val = q_values[offset + a];
-                        best_act = a;
-                    }
+                    const float *src = states_flat + (i * state_dimension);
+                    float *dst = batched_input_host.data() + (agent_idx * state_dimension);
+                    std::copy(src, src + state_dimension, dst);
                 }
-                actions_out[i] = best_act;
             }
-            return;
         }
 
+        batched_input_tensor.uploadData(batched_input_host);
+
+        Tensor current_tensor = batched_input_tensor;
+        for (const auto &adapter : layer_adapters)
+        {
+            current_tensor = adapter.template_layer->forward(current_tensor, adapter.batched_params);
+        }
+
+        std::vector<float> action_values = current_tensor.getData();
         for (std::size_t i = 0; i < active_count; ++i)
         {
             std::size_t agent_idx = active_indices ? active_indices[i] : i;
-            const float *agent_state = states_flat + (i * state_dimension);
-            actions_out[i] = selectAction(agent_idx, agent_state);
+            std::size_t offset = agent_idx * action_space_size;
+            std::size_t best_action = 0;
+            float max_value = action_values[offset];
+            for (std::size_t a = 1; a < action_space_size; ++a)
+            {
+                if (action_values[offset + a] > max_value)
+                {
+                    max_value = action_values[offset + a];
+                    best_action = a;
+                }
+            }
+            actions_out[i] = best_action;
         }
     }
 
@@ -349,8 +268,12 @@ public:
         std::normal_distribution<float> norm_dist(0.0f, mutation_strength);
         std::uniform_real_distribution<float> prob_dist(0.0f, 1.0f);
 
-        auto prev_weights = host_weights;
-        auto prev_biases = host_biases;
+        std::vector<std::vector<std::vector<float>>> prev_params;
+        prev_params.reserve(layer_adapters.size());
+        for (const auto &adapter : layer_adapters)
+        {
+            prev_params.push_back(adapter.host_params);
+        }
 
         auto selectParentTournament = [&]() -> std::size_t {
             if (tournament_size <= 1 || population_size <= 1)
@@ -371,57 +294,60 @@ public:
             return best_cand;
         };
 
+        for (std::size_t i = 0; i < elite_count; ++i)
+        {
+            std::size_t elite_src = indices[i];
+            for (std::size_t l = 0; l < layer_adapters.size(); ++l)
+            {
+                auto &adapter = layer_adapters[l];
+                for (std::size_t p = 0; p < adapter.param_shapes.size(); ++p)
+                {
+                    std::size_t len = adapter.param_numel[p];
+                    std::copy_n(prev_params[l][p].data() + elite_src * len, len,
+                                adapter.host_params[p].data() + i * len);
+                }
+            }
+        }
+
         for (std::size_t i = elite_count; i < population_size; ++i)
         {
-            std::size_t target_idx = indices[i];
-            std::size_t parent_a_idx = selectParentTournament();
-            std::size_t parent_b_idx = selectParentTournament();
+            std::size_t target_idx = i;
+            std::size_t parent_a = selectParentTournament();
+            std::size_t parent_b = selectParentTournament();
 
-            for (std::size_t l = 0; l < dense_layers.size(); ++l)
+            for (std::size_t l = 0; l < layer_adapters.size(); ++l)
             {
-                std::size_t w_len = dense_layers[l].in_dim * dense_layers[l].out_dim;
-                std::size_t b_len = dense_layers[l].out_dim;
-
-                std::size_t w_dst_offset = target_idx * w_len;
-                std::size_t w_p1_offset = parent_a_idx * w_len;
-                std::size_t w_p2_offset = parent_b_idx * w_len;
-
-                for (std::size_t w = 0; w < w_len; ++w)
+                auto &adapter = layer_adapters[l];
+                for (std::size_t p = 0; p < adapter.param_shapes.size(); ++p)
                 {
-                    float val = (prob_dist(random_engine) < crossover_rate)
-                                    ? prev_weights[l][w_p2_offset + w]
-                                    : prev_weights[l][w_p1_offset + w];
-                    if (prob_dist(random_engine) < mutation_rate)
-                    {
-                        val += norm_dist(random_engine);
-                    }
-                    host_weights[l][w_dst_offset + w] = val;
-                }
+                    std::size_t len = adapter.param_numel[p];
+                    auto &host = adapter.host_params[p];
+                    const auto &prev = prev_params[l][p];
 
-                std::size_t b_dst_offset = target_idx * b_len;
-                std::size_t b_p1_offset = parent_a_idx * b_len;
-                std::size_t b_p2_offset = parent_b_idx * b_len;
-
-                for (std::size_t b = 0; b < b_len; ++b)
-                {
-                    float val = (prob_dist(random_engine) < crossover_rate)
-                                    ? prev_biases[l][b_p2_offset + b]
-                                    : prev_biases[l][b_p1_offset + b];
-                    if (prob_dist(random_engine) < mutation_rate)
+                    if (!adapter.param_evolvable[p])
                     {
-                        val += norm_dist(random_engine);
+                        std::copy_n(prev.data() + parent_a * len, len, host.data() + target_idx * len);
+                        continue;
                     }
-                    host_biases[l][b_dst_offset + b] = val;
+
+                    std::size_t dst = target_idx * len;
+                    std::size_t pa = parent_a * len;
+                    std::size_t pb = parent_b * len;
+
+                    for (std::size_t k = 0; k < len; ++k)
+                    {
+                        float val = (prob_dist(random_engine) < crossover_rate) ? prev[pb + k] : prev[pa + k];
+                        if (prob_dist(random_engine) < mutation_rate)
+                        {
+                            val += norm_dist(random_engine);
+                        }
+                        host[dst + k] = val;
+                    }
                 }
             }
         }
 
         syncHostToDevice();
-    }
-
-    std::size_t getPopulationSize() const noexcept
-    {
-        return population_size;
     }
 
     Neural_Network getIndividual(std::size_t index) const
@@ -431,58 +357,81 @@ public:
             throw std::out_of_range("Individual index out of range in getIndividual");
         }
 
-        Neural_Network net(Execution_Target::CPU);
-        for (std::size_t l = 0; l < dense_layers.size(); ++l)
+        Neural_Network individual_net(Execution_Target::CPU);
+        for (const auto &adapter : layer_adapters)
         {
-            std::size_t in_d = dense_layers[l].in_dim;
-            std::size_t out_d = dense_layers[l].out_dim;
-
-            auto &lin = net.addLayer<Linear_Layer>(in_d, out_d, Execution_Target::CPU);
-
-            std::vector<float> w(host_weights[l].begin() + index * (in_d * out_d),
-                                 host_weights[l].begin() + (index + 1) * (in_d * out_d));
-            std::vector<float> b(host_biases[l].begin() + index * out_d,
-                                 host_biases[l].begin() + (index + 1) * out_d);
-
-            lin.setWeights(Matrix(in_d, out_d, std::move(w), Execution_Target::CPU));
-            lin.setBiases(Matrix(1, out_d, std::move(b), Execution_Target::CPU));
-
-            if (dense_layers[l].activation == Population_Activation::GELU)
+            auto layer_clone = adapter.template_layer->clone();
+            for (std::size_t p = 0; p < adapter.param_shapes.size(); ++p)
             {
-                net.addLayer<Gelu_Layer>();
+                std::size_t len = adapter.param_numel[p];
+                std::vector<float> slice(adapter.host_params[p].begin() + index * len,
+                                         adapter.host_params[p].begin() + (index + 1) * len);
+                layer_clone->setPopulationParameter(p, std::move(slice));
             }
-            else if (dense_layers[l].activation == Population_Activation::RELU)
+            individual_net.addLayer(std::move(layer_clone));
+        }
+        individual_net.setExecutionTarget(execution_target);
+        return individual_net;
+    }
+
+    Neural_Network getBestIndividual(const float *fitness_scores) const
+    {
+        std::size_t best_idx = 0;
+        float max_fitness = fitness_scores[0];
+        for (std::size_t i = 1; i < population_size; ++i)
+        {
+            if (fitness_scores[i] > max_fitness)
             {
-                net.addLayer<Relu_Layer>();
+                max_fitness = fitness_scores[i];
+                best_idx = i;
             }
         }
-
-        net.setExecutionTarget(execution_target);
-        return net;
+        return getIndividual(best_idx);
     }
 
     bool saveIndividual(std::size_t individual_index, const std::string &file_path) const
     {
-        if (individual_index >= population_size) return false;
-        std::ofstream out_file(file_path, std::ios::binary);
-        if (!out_file.is_open()) return false;
-
-        std::size_t layer_count = dense_layers.size() * 2;
-        out_file.write(reinterpret_cast<const char *>(&layer_count), sizeof(layer_count));
-
-        for (std::size_t l = 0; l < dense_layers.size(); ++l)
+        if (individual_index >= population_size)
         {
-            std::size_t w_len = dense_layers[l].in_dim * dense_layers[l].out_dim;
-            std::size_t b_len = dense_layers[l].out_dim;
-
-            out_file.write(reinterpret_cast<const char *>(&w_len), sizeof(w_len));
-            const float *w_ptr = host_weights[l].data() + individual_index * w_len;
-            out_file.write(reinterpret_cast<const char *>(w_ptr), w_len * sizeof(float));
-
-            out_file.write(reinterpret_cast<const char *>(&b_len), sizeof(b_len));
-            const float *b_ptr = host_biases[l].data() + individual_index * b_len;
-            out_file.write(reinterpret_cast<const char *>(b_ptr), b_len * sizeof(float));
+            return false;
         }
+        std::ofstream out_file(file_path, std::ios::binary);
+        if (!out_file.is_open())
+        {
+            return false;
+        }
+
+        const char magic_header[4] = {'N', 'N', 'I', 'K'};
+        out_file.write(magic_header, 4);
+
+        std::uint32_t file_version = 1;
+        out_file.write(reinterpret_cast<const char *>(&file_version), sizeof(file_version));
+
+        std::uint64_t state_dim_val = static_cast<std::uint64_t>(state_dimension);
+        std::uint64_t action_dim_val = static_cast<std::uint64_t>(action_space_size);
+        std::uint64_t layer_count_val = static_cast<std::uint64_t>(layer_adapters.size());
+
+        out_file.write(reinterpret_cast<const char *>(&state_dim_val), sizeof(state_dim_val));
+        out_file.write(reinterpret_cast<const char *>(&action_dim_val), sizeof(action_dim_val));
+        out_file.write(reinterpret_cast<const char *>(&layer_count_val), sizeof(layer_count_val));
+
+        for (const auto &adapter : layer_adapters)
+        {
+            Layer_Type layer_type = adapter.template_layer->getLayerType();
+            out_file.write(reinterpret_cast<const char *>(&layer_type), sizeof(layer_type));
+
+            std::uint64_t param_count = static_cast<std::uint64_t>(adapter.param_shapes.size());
+            out_file.write(reinterpret_cast<const char *>(&param_count), sizeof(param_count));
+
+            for (std::size_t p = 0; p < adapter.param_shapes.size(); ++p)
+            {
+                std::uint64_t len = static_cast<std::uint64_t>(adapter.param_numel[p]);
+                out_file.write(reinterpret_cast<const char *>(&len), sizeof(len));
+                const float *ptr = adapter.host_params[p].data() + individual_index * len;
+                out_file.write(reinterpret_cast<const char *>(ptr), len * sizeof(float));
+            }
+        }
+
         return true;
     }
 
@@ -503,29 +452,71 @@ public:
 
     bool loadIndividual(std::size_t individual_index, const std::string &file_path)
     {
-        if (individual_index >= population_size) return false;
-        std::ifstream in_file(file_path, std::ios::binary);
-        if (!in_file.is_open()) return false;
-
-        std::size_t layer_count = 0;
-        in_file.read(reinterpret_cast<char *>(&layer_count), sizeof(layer_count));
-        if (layer_count != dense_layers.size() * 2) return false;
-
-        for (std::size_t l = 0; l < dense_layers.size(); ++l)
+        if (individual_index >= population_size)
         {
-            std::size_t w_len = 0;
-            in_file.read(reinterpret_cast<char *>(&w_len), sizeof(w_len));
-            if (w_len != dense_layers[l].in_dim * dense_layers[l].out_dim) return false;
+            return false;
+        }
+        std::ifstream in_file(file_path, std::ios::binary);
+        if (!in_file.is_open())
+        {
+            return false;
+        }
 
-            float *w_ptr = host_weights[l].data() + individual_index * w_len;
-            in_file.read(reinterpret_cast<char *>(w_ptr), w_len * sizeof(float));
+        char magic_header[4];
+        in_file.read(magic_header, 4);
+        if (magic_header[0] != 'N' || magic_header[1] != 'N' || magic_header[2] != 'I' || magic_header[3] != 'K')
+        {
+            return false;
+        }
 
-            std::size_t b_len = 0;
-            in_file.read(reinterpret_cast<char *>(&b_len), sizeof(b_len));
-            if (b_len != dense_layers[l].out_dim) return false;
+        std::uint32_t file_version = 0;
+        in_file.read(reinterpret_cast<char *>(&file_version), sizeof(file_version));
+        if (file_version != 1)
+        {
+            return false;
+        }
 
-            float *b_ptr = host_biases[l].data() + individual_index * b_len;
-            in_file.read(reinterpret_cast<char *>(b_ptr), b_len * sizeof(float));
+        std::uint64_t state_dim_val = 0;
+        std::uint64_t action_dim_val = 0;
+        std::uint64_t layer_count_val = 0;
+
+        in_file.read(reinterpret_cast<char *>(&state_dim_val), sizeof(state_dim_val));
+        in_file.read(reinterpret_cast<char *>(&action_dim_val), sizeof(action_dim_val));
+        in_file.read(reinterpret_cast<char *>(&layer_count_val), sizeof(layer_count_val));
+
+        if (state_dim_val != state_dimension || action_dim_val != action_space_size || layer_count_val != layer_adapters.size())
+        {
+            return false;
+        }
+
+        for (auto &adapter : layer_adapters)
+        {
+            Layer_Type layer_type;
+            in_file.read(reinterpret_cast<char *>(&layer_type), sizeof(layer_type));
+            if (layer_type != adapter.template_layer->getLayerType())
+            {
+                return false;
+            }
+
+            std::uint64_t param_count = 0;
+            in_file.read(reinterpret_cast<char *>(&param_count), sizeof(param_count));
+            if (param_count != adapter.param_shapes.size())
+            {
+                return false;
+            }
+
+            for (std::size_t p = 0; p < adapter.param_shapes.size(); ++p)
+            {
+                std::uint64_t len = 0;
+                in_file.read(reinterpret_cast<char *>(&len), sizeof(len));
+                if (len != adapter.param_numel[p])
+                {
+                    return false;
+                }
+
+                float *ptr = adapter.host_params[p].data() + individual_index * len;
+                in_file.read(reinterpret_cast<char *>(ptr), len * sizeof(float));
+            }
         }
 
         syncHostToDevice();
@@ -535,5 +526,167 @@ public:
     bool loadBestIndividual(const std::string &file_path)
     {
         return loadIndividual(0, file_path);
+    }
+
+    bool saveCheckpoint(const std::string &file_path, std::uint64_t generation = 0, const float *fitness_scores = nullptr) const
+    {
+        std::ofstream out_file(file_path, std::ios::binary);
+        if (!out_file.is_open())
+        {
+            return false;
+        }
+
+        const char magic_header[4] = {'N', 'N', 'P', 'K'};
+        out_file.write(magic_header, 4);
+
+        std::uint32_t file_version = 1;
+        out_file.write(reinterpret_cast<const char *>(&file_version), sizeof(file_version));
+
+        std::uint64_t generation_val = generation;
+        std::uint64_t pop_size_val = static_cast<std::uint64_t>(population_size);
+        std::uint64_t state_dim_val = static_cast<std::uint64_t>(state_dimension);
+        std::uint64_t action_dim_val = static_cast<std::uint64_t>(action_space_size);
+        std::uint64_t layer_count_val = static_cast<std::uint64_t>(layer_adapters.size());
+
+        out_file.write(reinterpret_cast<const char *>(&generation_val), sizeof(generation_val));
+        out_file.write(reinterpret_cast<const char *>(&pop_size_val), sizeof(pop_size_val));
+        out_file.write(reinterpret_cast<const char *>(&state_dim_val), sizeof(state_dim_val));
+        out_file.write(reinterpret_cast<const char *>(&action_dim_val), sizeof(action_dim_val));
+        out_file.write(reinterpret_cast<const char *>(&layer_count_val), sizeof(layer_count_val));
+
+        for (const auto &adapter : layer_adapters)
+        {
+            Layer_Type layer_type = adapter.template_layer->getLayerType();
+            out_file.write(reinterpret_cast<const char *>(&layer_type), sizeof(layer_type));
+
+            std::uint64_t param_count = static_cast<std::uint64_t>(adapter.param_shapes.size());
+            out_file.write(reinterpret_cast<const char *>(&param_count), sizeof(param_count));
+
+            for (std::size_t p = 0; p < adapter.param_shapes.size(); ++p)
+            {
+                std::uint64_t len = static_cast<std::uint64_t>(adapter.param_numel[p]);
+                out_file.write(reinterpret_cast<const char *>(&len), sizeof(len));
+                out_file.write(reinterpret_cast<const char *>(adapter.host_params[p].data()),
+                               adapter.host_params[p].size() * sizeof(float));
+            }
+        }
+
+        std::uint8_t has_fitness = (fitness_scores != nullptr) ? 1 : 0;
+        out_file.write(reinterpret_cast<const char *>(&has_fitness), sizeof(has_fitness));
+        if (has_fitness != 0)
+        {
+            out_file.write(reinterpret_cast<const char *>(fitness_scores), population_size * sizeof(float));
+        }
+
+        return true;
+    }
+
+    bool loadCheckpoint(const std::string &file_path, std::uint64_t &generation, float *fitness_scores_out = nullptr)
+    {
+        std::ifstream in_file(file_path, std::ios::binary);
+        if (!in_file.is_open())
+        {
+            return false;
+        }
+
+        char magic_header[4];
+        in_file.read(magic_header, 4);
+        if (magic_header[0] != 'N' || magic_header[1] != 'N' || magic_header[2] != 'P' || magic_header[3] != 'K')
+        {
+            return false;
+        }
+
+        std::uint32_t file_version = 0;
+        in_file.read(reinterpret_cast<char *>(&file_version), sizeof(file_version));
+        if (file_version != 1)
+        {
+            return false;
+        }
+
+        std::uint64_t generation_val = 0;
+        std::uint64_t pop_size_val = 0;
+        std::uint64_t state_dim_val = 0;
+        std::uint64_t action_dim_val = 0;
+        std::uint64_t layer_count_val = 0;
+
+        in_file.read(reinterpret_cast<char *>(&generation_val), sizeof(generation_val));
+        in_file.read(reinterpret_cast<char *>(&pop_size_val), sizeof(pop_size_val));
+        in_file.read(reinterpret_cast<char *>(&state_dim_val), sizeof(state_dim_val));
+        in_file.read(reinterpret_cast<char *>(&action_dim_val), sizeof(action_dim_val));
+        in_file.read(reinterpret_cast<char *>(&layer_count_val), sizeof(layer_count_val));
+
+        if (pop_size_val != population_size || state_dim_val != state_dimension || action_dim_val != action_space_size || layer_count_val != layer_adapters.size())
+        {
+            return false;
+        }
+
+        generation = generation_val;
+
+        for (auto &adapter : layer_adapters)
+        {
+            Layer_Type layer_type;
+            in_file.read(reinterpret_cast<char *>(&layer_type), sizeof(layer_type));
+            if (layer_type != adapter.template_layer->getLayerType())
+            {
+                return false;
+            }
+
+            std::uint64_t param_count = 0;
+            in_file.read(reinterpret_cast<char *>(&param_count), sizeof(param_count));
+            if (param_count != adapter.param_shapes.size())
+            {
+                return false;
+            }
+
+            for (std::size_t p = 0; p < adapter.param_shapes.size(); ++p)
+            {
+                std::uint64_t len = 0;
+                in_file.read(reinterpret_cast<char *>(&len), sizeof(len));
+                if (len != adapter.param_numel[p])
+                {
+                    return false;
+                }
+
+                in_file.read(reinterpret_cast<char *>(adapter.host_params[p].data()),
+                             adapter.host_params[p].size() * sizeof(float));
+            }
+        }
+
+        std::uint8_t has_fitness = 0;
+        in_file.read(reinterpret_cast<char *>(&has_fitness), sizeof(has_fitness));
+        if (has_fitness != 0)
+        {
+            if (fitness_scores_out != nullptr)
+            {
+                in_file.read(reinterpret_cast<char *>(fitness_scores_out), population_size * sizeof(float));
+            }
+            else
+            {
+                in_file.seekg(population_size * sizeof(float), std::ios::cur);
+            }
+        }
+
+        syncHostToDevice();
+        return true;
+    }
+
+    std::size_t getPopulationSize() const noexcept
+    {
+        return population_size;
+    }
+
+    std::size_t getStateDimension() const noexcept
+    {
+        return state_dimension;
+    }
+
+    std::size_t getActionSpaceSize() const noexcept
+    {
+        return action_space_size;
+    }
+
+    Execution_Target getExecutionTarget() const noexcept
+    {
+        return execution_target;
     }
 };

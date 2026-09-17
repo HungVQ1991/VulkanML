@@ -29,6 +29,7 @@ private:
     Execution_Target execution_target = Execution_Target::CPU;
 
 public:
+    using ILayer::forward;
     Global_Avg_Pool_2d_Layer(std::uint32_t _height,
                              std::uint32_t _width,
                              std::uint32_t _channels,
@@ -64,6 +65,84 @@ public:
 
         return output_matrix;
     }
+
+    Tensor forward(const Tensor &_batched_input, const std::vector<Tensor> &_batched_params) const override
+    {
+        if (_batched_params.size() != getPopulationParameterDims().size())
+        {
+            Logger::logMessage(Input_Format{ "Conv2d_Layer::forward: expected {} batched parameter tensors (weights, biases), got {}",
+                                            getPopulationParameterDims().size(), _batched_params.size() },
+                Log_Level::LOG_ERROR,
+                true,
+                0,
+                Log_Feature::POOLING_COMPUTE | Log_Feature::FORWARD_EVALUATION);
+            throw std::invalid_argument("Invalid input params size");
+        }
+
+        Tensor output_matrix(execution_target);
+        _batched_input.globalAvgPool2d(output_matrix, input_height, input_width, channels);
+        return output_matrix;
+    }
+
+    std::vector<Shape> getPopulationParameterDims() const override
+    {
+        return {};
+    }
+
+    std::vector<bool> getPopulationParameterIsEvolvable() const override
+    {
+        return {};
+    }
+
+    bool supportsPopulationBatch() const override
+    {
+        return true;
+    }
+
+    std::unique_ptr<ILayer> clone() const override
+    {
+        return std::make_unique<Global_Avg_Pool_2d_Layer>(
+            input_height, input_width, channels, execution_target);
+    }
+
+    std::function<float(std::mt19937&)> getPopulationParameterInitializer(std::size_t param_index) const override
+    {
+        return [](std::mt19937&)
+            {
+                return 0.0f;
+            };
+    }
+
+    void setPopulationParameter(std::size_t param_index, std::vector<float> flat_data) override
+    {
+        throw std::out_of_range("Global_Avg_Pool_2d_Layer::setPopulationParameter: Layer has no parameters");
+    }
+
+    bool isAccumulated() const noexcept
+    {
+        return is_accumulated;
+    }
+
+    void setAccumulated(bool _is_accumulated) noexcept
+    {
+        is_accumulated = _is_accumulated;
+    }
+
+    std::uint32_t getInputHeight() const noexcept
+    {
+        return input_height;
+    }
+
+    std::uint32_t getInputWidth() const noexcept
+    {
+        return input_width;
+    }
+
+    std::uint32_t getChannels() const noexcept
+    {
+        return channels;
+    }
+
 
     Matrix backward(const Matrix &_output_gradient) override
     {
