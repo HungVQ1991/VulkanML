@@ -233,60 +233,6 @@ public:
 
     ~Gpu_Tensor_Impl() noexcept override = default;
 
-    const std::vector<float> &getData() const noexcept override
-    {
-        Logger::logMessage("Gpu_Tensor_Impl::getData: Reading data from GPU, risk of sync stall",
-                           Log_Level::LOG_WARNING, true, 1, Log_Feature::MEMORY_TRANSFER);
-        if (total_elements == 0)
-        {
-            host_cache.clear();
-            return host_cache;
-        }
-
-        if (!isContiguous() || byte_offset != 0)
-        {
-            Gpu_Tensor_Impl contig_gpu(shape);
-            contiguous(contig_gpu);
-            return contig_gpu.getData();
-        }
-
-        Execution_Engine::getInstance().getContext().flush();
-        host_cache.resize(total_elements);
-        if (storage)
-        {
-            storage->downloadData(host_cache);
-        }
-        return host_cache;
-    }
-
-    Storage_Handle getStorage() const override
-    {
-        return storage;
-    }
-
-    Mutable_Storage_Handle getStorage() override
-    {
-        if (!isContiguous() || byte_offset != 0)
-        {
-            auto contiguous_tensor = std::make_shared<Gpu_Tensor_Impl>(shape);
-            contiguous(*contiguous_tensor);
-            storage = contiguous_tensor->storage;
-            byte_offset = 0;
-            strides = shape.computeContiguousStrides();
-        }
-        return storage;
-    }
-
-    std::shared_ptr<gpu::vector> getVector() override
-    {
-        return storage;
-    }
-
-    bool isEmpty() const noexcept override
-    {
-        return !storage || storage->isEmpty();
-    }
-
     void reshape(std::size_t rows, std::size_t columns) override
     {
         reshape(Shape{rows, columns});
@@ -523,12 +469,12 @@ public:
 
     void hadamardMul(const Tensor_Impl &other, Tensor_Impl &output) const override
     {
-        executeElementwise(other, output, Compute_Pipeline::HADAMARD_MUL, false);
+        executeElementwise(other, output, Compute_Pipeline::HADAMARD_MUL, true);
     }
 
     void hadamardDiv(const Tensor_Impl &other, Tensor_Impl &output) const override
     {
-        executeElementwise(other, output, Compute_Pipeline::HADAMARD_DIV, false);
+        executeElementwise(other, output, Compute_Pipeline::HADAMARD_DIV, true);
     }
 
     void transpose(Tensor_Impl &output) const override
@@ -1579,6 +1525,51 @@ public:
         pushToGraph(Compute_Pipeline::SPLIT_ROWS, {effective_self->storage, up_gpu.storage, down_gpu.storage}, c,
                     (c.columns + 15) / 16, (static_cast<std::uint32_t>(getRows()) + 15) / 16);
     }
+
+    const std::vector<float> &getData() const noexcept override
+    {
+        Logger::logMessage("Gpu_Tensor_Impl::getData: Reading data from GPU, risk of sync stall",
+                           Log_Level::LOG_WARNING, true, 1, Log_Feature::MEMORY_TRANSFER);
+        if (total_elements == 0)
+        {
+            host_cache.clear();
+            return host_cache;
+        }
+
+        if (!isContiguous() || byte_offset != 0)
+        {
+            Gpu_Tensor_Impl contig_gpu(shape);
+            contiguous(contig_gpu);
+            return contig_gpu.getData();
+        }
+
+        Execution_Engine::getInstance().getContext().flush();
+        host_cache.resize(total_elements);
+        if (storage)
+        {
+            storage->downloadData(host_cache);
+        }
+        return host_cache;
+    }
+
+    Mutable_Storage_Handle getStorage() override
+    {
+        if (!isContiguous() || byte_offset != 0)
+        {
+            auto contiguous_tensor = std::make_shared<Gpu_Tensor_Impl>(shape);
+            contiguous(*contiguous_tensor);
+            storage = contiguous_tensor->storage;
+            byte_offset = 0;
+            strides = shape.computeContiguousStrides();
+        }
+        return storage;
+    }
+
+    Storage_Handle getStorage() const override { return storage; }
+    std::shared_ptr<gpu::vector> getVector() override { return storage; }
+    bool isEmpty() const noexcept override { return !storage || storage->isEmpty(); }
+
+    void setStorage(std::shared_ptr<gpu::vector> _storage) noexcept { storage = std::move(_storage); }
 };
 
 using Gpu_Matrix_Impl = Gpu_Tensor_Impl;

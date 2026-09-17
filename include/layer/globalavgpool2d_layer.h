@@ -20,12 +20,11 @@ private:
     std::uint32_t input_width = 0;
     std::uint32_t channels = 0;
 
-    Matrix input_matrix;
-    Matrix output_matrix;
-    Matrix input_gradient;
+    Tensor input_tensor;
+    Tensor output_tensor;
+    Tensor input_gradient_tensor;
 
     bool is_forward_completed = false;
-    bool is_accumulated = false;
     Execution_Target execution_target = Execution_Target::CPU;
 
 public:
@@ -37,18 +36,17 @@ public:
         : input_height(_height),
           input_width(_width),
           channels(_channels),
-          input_matrix(0, 0, _execution_target),
-          output_matrix(0, 0, _execution_target),
-          input_gradient(0, 0, _execution_target),
+          input_tensor(0, 0, _execution_target),
+          output_tensor(0, 0, _execution_target),
+          input_gradient_tensor(0, 0, _execution_target),
           is_forward_completed(false),
-          is_accumulated(false),
           execution_target(_execution_target)
     {
     }
 
     ~Global_Avg_Pool_2d_Layer() noexcept override = default;
 
-    Matrix forward(const Matrix &_input_matrix) override
+    Tensor forward(const Tensor &_input_tensor) override
     {
         Logger::logMessage(Input_Format{"Global_Avg_Pool_2d_Layer::forward: input_height={}, input_width={}, channels={}",
                                         input_height, input_width, channels},
@@ -57,20 +55,20 @@ public:
                            1,
                            Log_Feature::POOLING_COMPUTE | Log_Feature::FORWARD_EVALUATION);
 
-        input_matrix = _input_matrix;
-        input_matrix.globalAvgPool2d(output_matrix, input_height, input_width, channels);
+        input_tensor = _input_tensor;
+        input_tensor.globalAvgPool2d(output_tensor, input_height, input_width, channels);
         is_forward_completed = true;
-        logBufferAddress(&input_matrix, "input_matrix (Forward)");
-        logBufferAddress(&output_matrix, "output_matrix (Forward)");
+        logBufferAddress(&input_tensor, "input_tensor (Forward)");
+        logBufferAddress(&output_tensor, "output_tensor (Forward)");
 
-        return output_matrix;
+        return output_tensor;
     }
 
     Tensor forward(const Tensor &_batched_input, const std::vector<Tensor> &_batched_params) const override
     {
         if (_batched_params.size() != getPopulationParameterDims().size())
         {
-            Logger::logMessage(Input_Format{ "Conv2d_Layer::forward: expected {} batched parameter tensors (weights, biases), got {}",
+            Logger::logMessage(Input_Format{ "Global_Avg_Pool_2d_Layer::forward: expected {} batched parameter tensors, got {}",
                                             getPopulationParameterDims().size(), _batched_params.size() },
                 Log_Level::LOG_ERROR,
                 true,
@@ -79,24 +77,9 @@ public:
             throw std::invalid_argument("Invalid input params size");
         }
 
-        Tensor output_matrix(execution_target);
-        _batched_input.globalAvgPool2d(output_matrix, input_height, input_width, channels);
-        return output_matrix;
-    }
-
-    std::vector<Shape> getPopulationParameterDims() const override
-    {
-        return {};
-    }
-
-    std::vector<bool> getPopulationParameterIsEvolvable() const override
-    {
-        return {};
-    }
-
-    bool supportsPopulationBatch() const override
-    {
-        return true;
+        Tensor output_tensor_result(_batched_input.getExecutionTarget());
+        _batched_input.globalAvgPool2d(output_tensor_result, input_height, input_width, channels);
+        return output_tensor_result;
     }
 
     std::unique_ptr<ILayer> clone() const override
@@ -105,46 +88,7 @@ public:
             input_height, input_width, channels, execution_target);
     }
 
-    std::function<float(std::mt19937&)> getPopulationParameterInitializer(std::size_t param_index) const override
-    {
-        return [](std::mt19937&)
-            {
-                return 0.0f;
-            };
-    }
-
-    void setPopulationParameter(std::size_t param_index, std::vector<float> flat_data) override
-    {
-        throw std::out_of_range("Global_Avg_Pool_2d_Layer::setPopulationParameter: Layer has no parameters");
-    }
-
-    bool isAccumulated() const noexcept
-    {
-        return is_accumulated;
-    }
-
-    void setAccumulated(bool _is_accumulated) noexcept
-    {
-        is_accumulated = _is_accumulated;
-    }
-
-    std::uint32_t getInputHeight() const noexcept
-    {
-        return input_height;
-    }
-
-    std::uint32_t getInputWidth() const noexcept
-    {
-        return input_width;
-    }
-
-    std::uint32_t getChannels() const noexcept
-    {
-        return channels;
-    }
-
-
-    Matrix backward(const Matrix &_output_gradient) override
+    Tensor backward(const Tensor &_output_gradient) override
     {
         if (!is_forward_completed)
         {
@@ -164,41 +108,19 @@ public:
                            1,
                            Log_Feature::POOLING_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
-        _output_gradient.globalAvgPool2dBackward(input_gradient, input_height, input_width, channels);
+        _output_gradient.globalAvgPool2dBackward(input_gradient_tensor, input_height, input_width, channels);
 
-        logBufferAddress(&input_matrix, "input_matrix (Backward)");
-        logBufferAddress(&input_gradient, "input_gradient (Backward)");
-        logBufferAddress(const_cast<Matrix *>(&_output_gradient), "output_gradient (Backward)");
+        logBufferAddress(&input_tensor, "input_tensor (Backward)");
+        logBufferAddress(&input_gradient_tensor, "input_gradient_tensor (Backward)");
+        logBufferAddress(const_cast<Tensor *>(&_output_gradient), "output_gradient (Backward)");
 
-        return input_gradient;
+        return input_gradient_tensor;
     }
 
     void resetGradient() override
     {
         is_forward_completed = false;
     }
-
-    bool hasParameters() const noexcept override
-    {
-        return false;
-    }
-
-    Layer_Type getLayerType() const noexcept override
-    {
-        return Layer_Type::GLOBAL_AVG_POOL_2D;
-    }
-
-    const Matrix &getInput() const override
-    {
-        return input_matrix;
-    }
-
-    const Matrix &getOutput() const override
-    {
-        return output_matrix;
-    }
-
-    Execution_Target getExecutionTarget() const override { return execution_target; }
 
     void saveConfiguration(std::ofstream &_output_file_stream) const override
     {
@@ -212,6 +134,28 @@ public:
     void saveCheckpoint(std::ofstream &_output_file_stream) const override {}
     void loadCheckpoint(std::ifstream &_input_file_stream) override {}
 
+    std::function<float(std::mt19937&)> getPopulationParameterInitializer(std::size_t param_index) const override { return [](std::mt19937&) { return 0.0f; }; }
+    std::vector<Shape> getPopulationParameterDims() const override { return {}; }
+    std::vector<bool> getPopulationParameterIsEvolvable() const override { return {}; }
+    const Tensor &getInputGradient() const noexcept { return input_gradient_tensor; }
+    const Tensor &getInput() const override { return input_tensor; }
+    const Tensor &getOutput() const override { return output_tensor; }
+    Execution_Target getExecutionTarget() const override { return execution_target; }
+    std::uint32_t getInputHeight() const noexcept { return input_height; }
+    std::uint32_t getInputWidth() const noexcept { return input_width; }
+    Layer_Type getLayerType() const noexcept override { return Layer_Type::GLOBAL_AVG_POOL_2D; }
+    std::uint32_t getChannels() const noexcept { return channels; }
+    bool supportsPopulationBatch() const override { return true; }
+    bool isForwardCompleted() const noexcept { return is_forward_completed; }
+    bool hasParameters() const noexcept override { return false; }
+
+    void setPopulationParameter(std::size_t param_index, std::vector<float> flat_data) override
+    {
+        throw std::out_of_range("Global_Avg_Pool_2d_Layer::setPopulationParameter: Layer has no parameters");
+    }
+    void setInputGradient(const Tensor &_tensor) { input_gradient_tensor = _tensor; }
+    void setInput(const Tensor &_tensor) { input_tensor = _tensor; }
+    void setOutput(const Tensor &_tensor) { output_tensor = _tensor; }
     void setExecutionTarget(Execution_Target _new_execution_target) override
     {
         if (execution_target == _new_execution_target)
@@ -222,10 +166,14 @@ public:
         logChangeExecutionTarget(_new_execution_target);
 
         execution_target = _new_execution_target;
-        input_matrix.setExecutionTarget(_new_execution_target);
-        output_matrix.setExecutionTarget(_new_execution_target);
-        input_gradient.setExecutionTarget(_new_execution_target);
+        input_tensor.setExecutionTarget(_new_execution_target);
+        output_tensor.setExecutionTarget(_new_execution_target);
+        input_gradient_tensor.setExecutionTarget(_new_execution_target);
     }
+    void setInputHeight(std::uint32_t _height) noexcept { input_height = _height; }
+    void setInputWidth(std::uint32_t _width) noexcept { input_width = _width; }
+    void setChannels(std::uint32_t _channels) noexcept { channels = _channels; }
+    void setIsForwardCompleted(bool _is_completed) noexcept { is_forward_completed = _is_completed; }
 };
 
 using GlobalAvgPool2d_Layer = Global_Avg_Pool_2d_Layer;

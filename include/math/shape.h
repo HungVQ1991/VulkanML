@@ -62,30 +62,6 @@ public:
         return dimensions[index];
     }
 
-    std::size_t getRank() const noexcept
-    {
-        return rank_size;
-    }
-
-    std::span<const std::size_t> getDimensions() const noexcept
-    {
-        return {dimensions.data(), rank_size};
-    }
-
-    std::size_t getTotalElements() const noexcept
-    {
-        if (rank_size == 0)
-        {
-            return 0;
-        }
-        std::size_t total = 1;
-        for (std::size_t i = 0; i < rank_size; ++i)
-        {
-            total *= dimensions[i];
-        }
-        return total;
-    }
-
     Shape computeContiguousStrides() const noexcept
     {
         Shape strides_result;
@@ -133,6 +109,43 @@ public:
             }
         }
         return true;
+    }
+
+    std::span<const std::size_t> getDimensions() const noexcept { return {dimensions.data(), rank_size}; }
+
+    std::size_t getTotalElements() const noexcept
+    {
+        if (rank_size == 0)
+        {
+            return 0;
+        }
+        std::size_t total = 1;
+        for (std::size_t i = 0; i < rank_size; ++i)
+        {
+            total *= dimensions[i];
+        }
+        return total;
+    }
+
+    std::size_t getRank() const noexcept { return rank_size; }
+
+    void setDimensions(std::span<const std::size_t> _dimension_span)
+    {
+        if (_dimension_span.size() > MAX_TENSOR_RANK)
+        {
+            throw std::invalid_argument("Shape: Rank exceeds maximum supported rank");
+        }
+        rank_size = static_cast<std::uint8_t>(_dimension_span.size());
+        std::copy(_dimension_span.begin(), _dimension_span.end(), dimensions.begin());
+    }
+
+    void setRank(std::size_t _rank)
+    {
+        if (_rank > MAX_TENSOR_RANK)
+        {
+            throw std::invalid_argument("Shape: Rank exceeds maximum supported rank");
+        }
+        rank_size = static_cast<std::uint8_t>(_rank);
     }
 };
 

@@ -72,7 +72,7 @@ public:
 
     void loadFromFile(const std::string &_file_path)
     {
-        Logger::logMessage(std::format("Shader_Dictionary::loadFromFile: Loading shader metadata from {}", _file_path),
+        Logger::logMessage(Input_Format{"Shader_Dictionary::loadFromFile: Loading shader metadata from {}", _file_path},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -81,7 +81,7 @@ public:
         std::ifstream file_stream(_file_path);
         if (!file_stream.is_open())
         {
-            Logger::logMessage(std::format("Shader_Dictionary::loadFromFile: Failed to open {}", _file_path),
+            Logger::logMessage(Input_Format{"Shader_Dictionary::loadFromFile: Failed to open {}", _file_path},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -138,16 +138,9 @@ public:
         }
     }
 
-    const Snippet_Metadata &getMetadata(Compute_Pipeline _pipeline) const noexcept
-    {
-        return metadata_table[static_cast<std::size_t>(_pipeline)];
-    }
-
-    const Snippet_Metadata &getSnippetMetadata(Compute_Pipeline _pipeline) const noexcept
-    {
-        return metadata_table[static_cast<std::size_t>(_pipeline)];
-    }
-
+    const std::array<Snippet_Metadata, static_cast<std::size_t>(Compute_Pipeline::COMPUTE_PIPELINE_END)> &getMetadataTable() const noexcept { return metadata_table; }
+    const Snippet_Metadata &getSnippetMetadata(Compute_Pipeline _pipeline) const noexcept { return metadata_table[static_cast<std::size_t>(_pipeline)]; }
+    const Snippet_Metadata &getMetadata(Compute_Pipeline _pipeline) const noexcept { return metadata_table[static_cast<std::size_t>(_pipeline)]; }
     const std::string &getGlslTemplate(Compute_Pipeline _pipeline, bool _use_cooperative_matrix) const noexcept
     {
         const auto &meta = metadata_table[static_cast<std::size_t>(_pipeline)];
@@ -157,7 +150,6 @@ public:
         }
         return meta.glsl_template;
     }
-
     std::uint32_t getSharedMemorySize(Compute_Pipeline _pipeline, bool _use_cooperative_matrix) const noexcept
     {
         const auto &meta = metadata_table[static_cast<std::size_t>(_pipeline)];
@@ -167,15 +159,12 @@ public:
         }
         return meta.shared_memory_size;
     }
-
-    const std::array<Snippet_Metadata, static_cast<std::size_t>(Compute_Pipeline::COMPUTE_PIPELINE_END)> &getMetadataTable() const noexcept
-    {
-        return metadata_table;
-    }
-
     bool hasMetadata(Compute_Pipeline _pipeline) const noexcept
     {
         std::size_t pipeline_index = static_cast<std::size_t>(_pipeline);
         return pipeline_index < metadata_table.size() && !metadata_table[pipeline_index].glsl_template.empty();
     }
+
+    void setMetadataTable(const std::array<Snippet_Metadata, static_cast<std::size_t>(Compute_Pipeline::COMPUTE_PIPELINE_END)> &_table) noexcept { metadata_table = _table; }
+    void setMetadata(Compute_Pipeline _pipeline, const Snippet_Metadata &_metadata) noexcept { metadata_table[static_cast<std::size_t>(_pipeline)] = _metadata; }
 };

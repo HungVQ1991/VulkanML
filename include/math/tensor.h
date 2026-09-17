@@ -146,44 +146,6 @@ public:
         implementation->reshape(new_shape);
     }
 
-    const Shape &getShape() const noexcept { return implementation->getShape(); }
-    const Stride &getStrides() const noexcept { return implementation->getStrides(); }
-    std::size_t getRank() const noexcept { return implementation->getRank(); }
-    std::size_t getTotalElements() const noexcept { return implementation->getTotalElements(); }
-
-    std::size_t getRows() const noexcept { return implementation->getRows(); }
-    std::size_t getColumns() const noexcept { return implementation->getColumns(); }
-    std::size_t getCols() const noexcept { return implementation->getColumns(); }
-
-    Execution_Target getExecutionTarget() const noexcept { return execution_target; }
-    Execution_Target getTarget() const noexcept { return execution_target; }
-    std::shared_ptr<Tensor_Impl> getImplementation() const noexcept { return implementation; }
-
-    void setExecutionTarget(Execution_Target new_target)
-    {
-        if (execution_target == new_target)
-        {
-            return;
-        }
-        Shape current_shape = getShape();
-        std::vector<float> current_data = getData();
-        *this = Tensor(current_shape, current_data, new_target);
-        if (new_target == Execution_Target::VULKAN_GPU)
-        {
-            Execution_Engine::getInstance().getContext().executePendingTransfers();
-        }
-    }
-
-    std::vector<float> getData() const { return implementation->getData(); }
-    Storage_Handle getStorage() const
-    {
-        const Tensor_Impl &const_implementation = *implementation;
-        return const_implementation.getStorage();
-    }
-    Mutable_Storage_Handle getStorage() { return implementation->getStorage(); }
-    void uploadData(const std::vector<float> &host_data) { implementation->uploadData(host_data); }
-    bool isEmpty() const noexcept { return implementation->isEmpty(); }
-
     Tensor permute(const std::vector<std::size_t> &axes_permutation) const
     {
         Tensor result(execution_target);
@@ -606,11 +568,11 @@ public:
         }
     }
 
-    void saveMatrix(std::ofstream &output_file_stream) const
+    void saveTensor(std::ofstream &output_file_stream) const
     {
         if (!output_file_stream.is_open())
         {
-            throw std::runtime_error("Tensor::saveMatrix: Output stream is not open");
+            throw std::runtime_error("Tensor::saveTensor: Output stream is not open");
         }
 
         output_file_stream.write(reinterpret_cast<const char *>(&TENSOR_MAGIC_HEADER), sizeof(TENSOR_MAGIC_HEADER));
@@ -629,11 +591,11 @@ public:
         output_file_stream.write(reinterpret_cast<const char *>(host_data.data()), static_cast<std::streamsize>(host_data.size() * sizeof(float)));
     }
 
-    static Tensor loadMatrix(std::ifstream &input_file_stream, Execution_Target target = Execution_Target::CPU)
+    static Tensor loadTensor(std::ifstream &input_file_stream, Execution_Target target = Execution_Target::CPU)
     {
         if (!input_file_stream.is_open())
         {
-            throw std::runtime_error("Tensor::loadMatrix: Input stream is not open");
+            throw std::runtime_error("Tensor::loadTensor: Input stream is not open");
         }
 
         std::uint32_t first_header_field = 0;
@@ -667,6 +629,16 @@ public:
         return Tensor(rows_count, columns_count, std::move(host_data), target);
     }
 
+    void saveMatrix(std::ofstream &output_file_stream) const
+    {
+        saveTensor(output_file_stream);
+    }
+
+    static Tensor loadMatrix(std::ifstream &input_file_stream, Execution_Target target = Execution_Target::CPU)
+    {
+        return loadTensor(input_file_stream, target);
+    }
+
     Tensor clone() const
     {
         return Tensor(getShape(), getData(), execution_target);
@@ -683,16 +655,38 @@ public:
         fill(0.0f);
     }
 
-    void saveTensor(std::ofstream &output_file_stream) const
-    {
-        saveMatrix(output_file_stream);
-    }
+    const Shape &getShape() const noexcept { return implementation->getShape(); }
+    const Stride &getStrides() const noexcept { return implementation->getStrides(); }
+    Storage_Handle getStorage() const { const Tensor_Impl &const_implementation = *implementation; return const_implementation.getStorage(); }
+    Mutable_Storage_Handle getStorage() { return implementation->getStorage(); }
+    std::vector<float> getData() const { return implementation->getData(); }
+    std::shared_ptr<Tensor_Impl> getImplementation() const noexcept { return implementation; }
+    std::size_t getTotalElements() const noexcept { return implementation->getTotalElements(); }
+    std::size_t getColumns() const noexcept { return implementation->getColumns(); }
+    std::size_t getRank() const noexcept { return implementation->getRank(); }
+    std::size_t getRows() const noexcept { return implementation->getRows(); }
+    std::size_t getCols() const noexcept { return implementation->getColumns(); }
+    Execution_Target getExecutionTarget() const noexcept { return execution_target; }
+    Execution_Target getTarget() const noexcept { return execution_target; }
+    bool isEmpty() const noexcept { return implementation->isEmpty(); }
 
-    static Tensor loadTensor(std::ifstream &input_file_stream, Execution_Target target = Execution_Target::CPU)
+    void uploadData(const std::vector<float> &host_data) { implementation->uploadData(host_data); }
+    void setImplementation(std::shared_ptr<Tensor_Impl> _impl) noexcept { implementation = std::move(_impl); }
+    void setExecutionTarget(Execution_Target new_target)
     {
-        return loadMatrix(input_file_stream, target);
+        if (execution_target == new_target)
+        {
+            return;
+        }
+        Shape current_shape = getShape();
+        std::vector<float> current_data = getData();
+        *this = Tensor(current_shape, current_data, new_target);
+        if (new_target == Execution_Target::VULKAN_GPU)
+        {
+            Execution_Engine::getInstance().getContext().executePendingTransfers();
+        }
     }
-
+    void setTarget(Execution_Target new_target) { setExecutionTarget(new_target); }
 };
 
 using Matrix = Tensor;

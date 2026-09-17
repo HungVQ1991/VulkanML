@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <format>
 #include <fstream>
 #include <functional>
@@ -38,6 +39,7 @@ public:
     Pipeline_Cache_Manager(const Vulkan_Context &_context, VkPipelineLayout _pipeline_layout)
         : context(_context), pipeline_layout(_pipeline_layout)
     {
+        initializePipelineCache();
     }
 
     ~Pipeline_Cache_Manager()
@@ -65,84 +67,21 @@ public:
     Pipeline_Cache_Manager(Pipeline_Cache_Manager &&_other) noexcept = default;
     Pipeline_Cache_Manager &operator=(Pipeline_Cache_Manager &&_other) noexcept = default;
 
-    const Vulkan_Context &getContext() const noexcept
-    {
-        return context;
-    }
-
-    VkPipelineLayout getPipelineLayout() const noexcept
-    {
-        return pipeline_layout;
-    }
-
-    const Shader_Compiler &getShaderCompiler() const noexcept
-    {
-        return shader_compiler;
-    }
-
-    Shader_Compiler &getShaderCompiler() noexcept
-    {
-        return shader_compiler;
-    }
-
-    VkPipelineCache getPipelineCache() const noexcept
-    {
-        return pipeline_cache;
-    }
-
-    const std::string &getCacheFilePath() const noexcept
-    {
-        return cache_file_path;
-    }
-
-    const std::unordered_map<std::size_t, VkPipeline> &getCachedPipelines() const noexcept
-    {
-        return cached_pipelines;
-    }
-
-    void freezeCache(bool _freeze = true) noexcept
-    {
-        is_frozen.store(_freeze, std::memory_order_release);
-    }
-
-    bool isFrozen() const noexcept
-    {
-        return is_frozen.load(std::memory_order_relaxed);
-    }
-
-    std::size_t getCachedPipelineCount() const noexcept
-    {
-        if (is_frozen.load(std::memory_order_relaxed))
-        {
-            return cached_pipelines.size();
-        }
-        std::lock_guard<std::mutex> lock(cache_mutex);
-        return cached_pipelines.size();
-    }
-
-    bool hasPipeline(std::size_t _code_hash) const noexcept
-    {
-        if (is_frozen.load(std::memory_order_relaxed))
-        {
-            return cached_pipelines.contains(_code_hash);
-        }
-        std::lock_guard<std::mutex> lock(cache_mutex);
-        return cached_pipelines.contains(_code_hash);
-    }
-
-    void setCacheFilePath(const std::string &_cache_file_path)
-    {
-        cache_file_path = _cache_file_path;
-    }
-
     void initializePipelineCache(const std::string &_cache_file_path = "temp/pipeline_cache.bin")
     {
         cache_file_path = _cache_file_path;
-        Logger::logMessage(std::format("Pipeline_Cache_Manager::initializePipelineCache: Initializing cache from file '{}'", cache_file_path),
+        Logger::logMessage(Input_Format{"Pipeline_Cache_Manager::initializePipelineCache: Initializing cache from file '{}'", cache_file_path},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
                            Log_Feature::SHADER_GENERATION);
+
+        std::filesystem::path path(cache_file_path);
+        if (path.has_parent_path())
+        {
+            std::error_code ec;
+            std::filesystem::create_directories(path.parent_path(), ec);
+        }
 
         std::vector<char> cache_data;
         if (std::ifstream cache_file_stream(cache_file_path, std::ios::binary | std::ios::ate); cache_file_stream.is_open())
@@ -152,7 +91,7 @@ public:
             cache_data.resize(static_cast<std::size_t>(file_size));
             if (cache_file_stream.read(cache_data.data(), file_size))
             {
-                Logger::logMessage(std::format("Pipeline_Cache_Manager::initializePipelineCache: Loaded {} bytes from cache file", file_size),
+                Logger::logMessage(Input_Format{"Pipeline_Cache_Manager::initializePipelineCache: Loaded {} bytes from cache file", file_size},
                                    Log_Level::LOG_DEBUG,
                                    true,
                                    0,
@@ -160,7 +99,7 @@ public:
             }
             else
             {
-                Logger::logMessage(std::format("Pipeline_Cache_Manager::initializePipelineCache: Failed to read data from file '{}'", cache_file_path),
+                Logger::logMessage(Input_Format{"Pipeline_Cache_Manager::initializePipelineCache: Failed to read data from file '{}'", cache_file_path},
                                    Log_Level::LOG_WARNING,
                                    true,
                                    0,
@@ -170,7 +109,7 @@ public:
         }
         else
         {
-            Logger::logMessage(std::format("Pipeline_Cache_Manager::initializePipelineCache: Cache file '{}' not found, creating empty pipeline cache", cache_file_path),
+            Logger::logMessage(Input_Format{"Pipeline_Cache_Manager::initializePipelineCache: Cache file '{}' not found, creating empty pipeline cache", cache_file_path},
                                Log_Level::LOG_WARNING,
                                false,
                                0,
@@ -240,10 +179,17 @@ public:
             return;
         }
 
+        std::filesystem::path path(cache_file_path);
+        if (path.has_parent_path())
+        {
+            std::error_code ec;
+            std::filesystem::create_directories(path.parent_path(), ec);
+        }
+
         if (std::ofstream cache_file_stream(cache_file_path, std::ios::binary); cache_file_stream.is_open())
         {
             cache_file_stream.write(cache_data.data(), static_cast<std::streamsize>(cache_data.size()));
-            Logger::logMessage(std::format("Pipeline_Cache_Manager::savePipelineCache: Successfully saved {} bytes to '{}'", cache_data_size, cache_file_path),
+            Logger::logMessage(Input_Format{"Pipeline_Cache_Manager::savePipelineCache: Successfully saved {} bytes to '{}'", cache_data_size, cache_file_path},
                                Log_Level::LOG_DEBUG,
                                true,
                                0,
@@ -251,7 +197,7 @@ public:
         }
         else
         {
-            Logger::logMessage(std::format("Pipeline_Cache_Manager::savePipelineCache: Failed to open file '{}' for writing", cache_file_path),
+            Logger::logMessage(Input_Format{"Pipeline_Cache_Manager::savePipelineCache: Failed to open file '{}' for writing", cache_file_path},
                                Log_Level::LOG_WARNING,
                                true,
                                0,
@@ -275,7 +221,7 @@ public:
             std::lock_guard<std::mutex> lock(cache_mutex);
             if (auto pipeline_iterator = cached_pipelines.find(code_hash); pipeline_iterator != cached_pipelines.end())
             {
-                Logger::logMessage(std::format("Pipeline_Cache_Manager::getOrCreatePipeline: Cache hit for code hash {:x}", code_hash),
+                Logger::logMessage(Input_Format{"Pipeline_Cache_Manager::getOrCreatePipeline: Cache hit for code hash {:x}", code_hash},
                                    Log_Level::LOG_DEBUG,
                                    true,
                                    0,
@@ -284,7 +230,7 @@ public:
             }
         }
 
-        Logger::logMessage(std::format("Pipeline_Cache_Manager::getOrCreatePipeline: Cache miss for code hash {:x}, compiling GLSL to SPIR-V", code_hash),
+        Logger::logMessage(Input_Format{"Pipeline_Cache_Manager::getOrCreatePipeline: Cache miss for code hash {:x}, compiling GLSL to SPIR-V", code_hash},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -302,7 +248,7 @@ public:
         VkShaderModule shader_module = VK_NULL_HANDLE;
         if (vkCreateShaderModule(context.getDevice(), &shader_module_create_information, nullptr, &shader_module) != VK_SUCCESS)
         {
-            Logger::logMessage(std::format("Pipeline_Cache_Manager::getOrCreatePipeline: Failed to create VkShaderModule for hash {:x}", code_hash),
+            Logger::logMessage(Input_Format{"Pipeline_Cache_Manager::getOrCreatePipeline: Failed to create VkShaderModule for hash {:x}", code_hash},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -340,7 +286,7 @@ public:
 
         if (creation_result != VK_SUCCESS || new_pipeline == VK_NULL_HANDLE)
         {
-            Logger::logMessage(std::format("Pipeline_Cache_Manager::getOrCreatePipeline: Failed to create compute pipeline for hash {:x}", code_hash),
+            Logger::logMessage(Input_Format{"Pipeline_Cache_Manager::getOrCreatePipeline: Failed to create compute pipeline for hash {:x}", code_hash},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -358,7 +304,7 @@ public:
             }
         }
 
-        Logger::logMessage(std::format("Pipeline_Cache_Manager::getOrCreatePipeline: Successfully created and cached compute pipeline for hash {:x}", code_hash),
+        Logger::logMessage(Input_Format{"Pipeline_Cache_Manager::getOrCreatePipeline: Successfully created and cached compute pipeline for hash {:x}", code_hash},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -366,4 +312,42 @@ public:
 
         return new_pipeline;
     }
+
+    const std::unordered_map<std::size_t, VkPipeline> &getCachedPipelines() const noexcept { return cached_pipelines; }
+    const std::string &getCacheFilePath() const noexcept { return cache_file_path; }
+    const Shader_Compiler &getShaderCompiler() const noexcept { return shader_compiler; }
+    Shader_Compiler &getShaderCompiler() noexcept { return shader_compiler; }
+    const Vulkan_Context &getContext() const noexcept { return context; }
+    std::size_t getCachedPipelineCount() const noexcept
+    {
+        if (is_frozen.load(std::memory_order_relaxed))
+        {
+            return cached_pipelines.size();
+        }
+        std::lock_guard<std::mutex> lock(cache_mutex);
+        return cached_pipelines.size();
+    }
+    VkPipelineLayout getPipelineLayout() const noexcept { return pipeline_layout; }
+    VkPipelineCache getPipelineCache() const noexcept { return pipeline_cache; }
+    bool hasPipeline(std::size_t _code_hash) const noexcept
+    {
+        if (is_frozen.load(std::memory_order_relaxed))
+        {
+            return cached_pipelines.contains(_code_hash);
+        }
+        std::lock_guard<std::mutex> lock(cache_mutex);
+        return cached_pipelines.contains(_code_hash);
+    }
+    bool isFrozen() const noexcept { return is_frozen.load(std::memory_order_relaxed); }
+
+    void setCachedPipelines(const std::unordered_map<std::size_t, VkPipeline> &_pipelines)
+    {
+        std::lock_guard<std::mutex> lock(cache_mutex);
+        cached_pipelines = _pipelines;
+    }
+    void setCacheFilePath(const std::string &_cache_file_path) { cache_file_path = _cache_file_path; }
+    void setPipelineLayout(VkPipelineLayout _pipeline_layout) noexcept { pipeline_layout = _pipeline_layout; }
+    void setPipelineCache(VkPipelineCache _pipeline_cache) noexcept { pipeline_cache = _pipeline_cache; }
+    void setFrozen(bool _freeze) noexcept { is_frozen.store(_freeze, std::memory_order_release); }
+    void freezeCache(bool _freeze = true) noexcept { is_frozen.store(_freeze, std::memory_order_release); }
 };

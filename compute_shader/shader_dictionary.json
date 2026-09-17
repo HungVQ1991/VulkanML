@@ -41,14 +41,14 @@
     "input_count": 2,
     "output_count": 1,
     "supports_cooperative_matrix": false,
-    "code": "if (global_id >= {pc_0}) return; {out_0}[global_id] = {in_0}[global_id] * {in_1}[global_id];"
+    "code": "if (global_id >= {pc_0}) return; if ({pc_2} == 1) { {out_0}[global_id] = {in_0}[global_id] * {in_1}[global_id % {pc_1}]; } else { {out_0}[global_id] = {in_0}[global_id] * {in_1}[global_id]; }"
   },
   "HADAMARD_DIV": {
     "op_class": "ELEMENTWISE",
     "input_count": 2,
     "output_count": 1,
     "supports_cooperative_matrix": false,
-    "code": "if (global_id >= {pc_0}) return; {out_0}[global_id] = {in_0}[global_id] / {in_1}[global_id];"
+    "code": "if (global_id >= {pc_0}) return; if ({pc_2} == 1) { {out_0}[global_id] = {in_0}[global_id] / {in_1}[global_id % {pc_1}]; } else { {out_0}[global_id] = {in_0}[global_id] / {in_1}[global_id]; }"
   },
   "TRANSPOSE": {
     "op_class": "MATRIX_2D",
@@ -110,7 +110,7 @@
     "shared_mem_size": 32,
     "writes_multiple_elements": true,
     "index_expr": "r * {pc_1} + c",
-    "code": "uint r = gl_WorkGroupID.x; uint tid = gl_LocalInvocationID.x; uint cols = {pc_1}; float thread_max = -3.402823466e+38; uint step = gl_WorkGroupSize.x * 4; uint c = tid * 4; for (; c + 3 < cols; c += step) { vec4 v = vec4({in_0}[r * cols + c], {in_0}[r * cols + c + 1], {in_0}[r * cols + c + 2], {in_0}[r * cols + c + 3]); vec2 m2 = max(v.xy, v.zw); thread_max = max(thread_max, max(m2.x, m2.y)); } for (; c < cols; c += gl_WorkGroupSize.x) { thread_max = max(thread_max, {in_0}[r * cols + c]); } float sg_max = subgroupMax(thread_max); if (gl_SubgroupInvocationID == 0) { shared_mem_0[gl_SubgroupID] = sg_max; } barrier(); if (tid == 0) { float row_max = -3.402823466e+38; for (uint i = 0; i < gl_NumSubgroups; ++i) { row_max = max(row_max, shared_mem_0[i]); } shared_mem_0[0] = row_max; } barrier(); float final_max = shared_mem_0[0]; float thread_sum = 0.0; c = tid * 4; for (; c + 3 < cols; c += step) { vec4 v = vec4({in_0}[r * cols + c], {in_0}[r * cols + c + 1], {in_0}[r * cols + c + 2], {in_0}[r * cols + c + 3]); vec4 e = exp(v - vec4(final_max)); thread_sum += dot(e, vec4(1.0)); } for (; c < cols; c += gl_WorkGroupSize.x) { thread_sum += exp({in_0}[r * cols + c] - final_max); } float sg_sum = subgroupAdd(thread_sum); if (gl_SubgroupInvocationID == 0) { shared_mem_0[gl_SubgroupID] = sg_sum; } barrier(); if (tid == 0) { float row_sum = 0.0; for (uint i = 0; i < gl_NumSubgroups; ++i) { row_sum += shared_mem_0[i]; } shared_mem_0[0] = row_sum; } barrier(); float final_sum = shared_mem_0[0]; c = tid * 4; for (; c + 3 < cols; c += step) { vec4 v = vec4({in_0}[r * cols + c], {in_0}[r * cols + c + 1], {in_0}[r * cols + c + 2], {in_0}[r * cols + c + 3]); vec4 out_val = exp(v - vec4(final_max)) / final_sum; {out_0}[r * cols + c] = out_val.x; {out_0}[r * cols + c + 1] = out_val.y; {out_0}[r * cols + c + 2] = out_val.z; {out_0}[r * cols + c + 3] = out_val.w; } for (; c < cols; c += gl_WorkGroupSize.x) { {out_0}[r * cols + c] = exp({in_0}[r * cols + c] - final_max) / final_sum; }"
+    "code": "uint r = gl_WorkGroupID.x; if (r >= {pc_0}) return; uint tid = gl_LocalInvocationID.x; uint cols = {pc_1}; float thread_max = -3.402823466e+38; uint step = gl_WorkGroupSize.x * 4; uint c = tid * 4; for (; c + 3 < cols; c += step) { vec4 v = vec4({in_0}[r * cols + c], {in_0}[r * cols + c + 1], {in_0}[r * cols + c + 2], {in_0}[r * cols + c + 3]); vec2 m2 = max(v.xy, v.zw); thread_max = max(thread_max, max(m2.x, m2.y)); } for (; c < cols; c += gl_WorkGroupSize.x) { thread_max = max(thread_max, {in_0}[r * cols + c]); } float sg_max = subgroupMax(thread_max); if (gl_SubgroupInvocationID == 0) { shared_mem_0[gl_SubgroupID] = sg_max; } barrier(); if (tid == 0) { float row_max = -3.402823466e+38; for (uint i = 0; i < gl_NumSubgroups; ++i) { row_max = max(row_max, shared_mem_0[i]); } shared_mem_0[0] = row_max; } barrier(); float final_max = shared_mem_0[0]; float thread_sum = 0.0; c = tid * 4; for (; c + 3 < cols; c += step) { vec4 v = vec4({in_0}[r * cols + c], {in_0}[r * cols + c + 1], {in_0}[r * cols + c + 2], {in_0}[r * cols + c + 3]); vec4 e = exp(v - vec4(final_max)); thread_sum += dot(e, vec4(1.0)); } for (; c < cols; c += gl_WorkGroupSize.x) { thread_sum += exp({in_0}[r * cols + c] - final_max); } float sg_sum = subgroupAdd(thread_sum); if (gl_SubgroupInvocationID == 0) { shared_mem_0[gl_SubgroupID] = sg_sum; } barrier(); if (tid == 0) { float row_sum = 0.0; for (uint i = 0; i < gl_NumSubgroups; ++i) { row_sum += shared_mem_0[i]; } shared_mem_0[0] = row_sum; } barrier(); float final_sum = shared_mem_0[0]; c = tid * 4; for (; c + 3 < cols; c += step) { vec4 v = vec4({in_0}[r * cols + c], {in_0}[r * cols + c + 1], {in_0}[r * cols + c + 2], {in_0}[r * cols + c + 3]); vec4 out_val = exp(v - vec4(final_max)) / final_sum; {out_0}[r * cols + c] = out_val.x; {out_0}[r * cols + c + 1] = out_val.y; {out_0}[r * cols + c + 2] = out_val.z; {out_0}[r * cols + c + 3] = out_val.w; } for (; c < cols; c += gl_WorkGroupSize.x) { {out_0}[r * cols + c] = exp({in_0}[r * cols + c] - final_max) / final_sum; }"
   },
   "SOFTMAX_BACKWARD": {
     "op_class": "MATRIX_2D",
@@ -252,7 +252,7 @@
     "writes_multiple_elements": true,
     "accumulator_output_indices": [2, 3],
     "persistent_outputs": [0, 1, 2, 3],
-    "code": "uint c = gl_WorkGroupID.x; uint tid = gl_LocalInvocationID.x; uint M = {pc_2}; if (c < {pc_1}) { float thread_sum = 0.0; uint step = gl_WorkGroupSize.x * 4; uint stride = {pc_1}; uint i = tid * 4; for (; i + 3 < M; i += step) { uint idx = i * stride + c; vec4 v = vec4({in_0}[idx], {in_0}[idx + stride], {in_0}[idx + 2 * stride], {in_0}[idx + 3 * stride]); thread_sum += dot(v, vec4(1.0)); } for (; i < M; i += gl_WorkGroupSize.x) { thread_sum += {in_0}[i * stride + c]; } float sg_sum = subgroupAdd(thread_sum); if (gl_SubgroupInvocationID == 0) { shared_mem_0[gl_SubgroupID] = sg_sum; } barrier(); if (tid == 0) { float tot_sum = 0.0; for (uint s = 0; s < gl_NumSubgroups; ++s) { tot_sum += shared_mem_0[s]; } shared_mem_0[0] = tot_sum / float(M); } barrier(); float mean = shared_mem_0[0]; float thread_sq = 0.0; i = tid * 4; for (; i + 3 < M; i += step) { uint idx = i * stride + c; vec4 diff = vec4({in_0}[idx], {in_0}[idx + stride], {in_0}[idx + 2 * stride], {in_0}[idx + 3 * stride]) - vec4(mean); thread_sq += dot(diff, diff); } for (; i < M; i += gl_WorkGroupSize.x) { float diff = {in_0}[i * stride + c] - mean; thread_sq += diff * diff; } float sg_sq = subgroupAdd(thread_sq); if (gl_SubgroupInvocationID == 0) { shared_mem_0[gl_SubgroupID] = sg_sq; } barrier(); if (tid == 0) { float tot_sq = 0.0; for (uint s = 0; s < gl_NumSubgroups; ++s) { tot_sq += shared_mem_0[s]; } float var = tot_sq / float(M); {out_0}[c] = mean; {out_1}[c] = var; float mom = uintBitsToFloat({pc_3}); {out_2}[c] = (1.0 - mom) * {out_2}[c] + mom * mean; {out_3}[c] = (1.0 - mom) * {out_3}[c] + mom * var; } }"
+    "code": "uint total_elements = {pc_0}; uint c = gl_WorkGroupID.x; uint tid = gl_LocalInvocationID.x; uint M = {pc_2}; if (c < {pc_1}) { float thread_sum = 0.0; uint step = gl_WorkGroupSize.x * 4; uint stride = {pc_1}; uint i = tid * 4; for (; i + 3 < M; i += step) { uint idx = i * stride + c; vec4 v = vec4({in_0}[idx], {in_0}[idx + stride], {in_0}[idx + 2 * stride], {in_0}[idx + 3 * stride]); thread_sum += dot(v, vec4(1.0)); } for (; i < M; i += gl_WorkGroupSize.x) { thread_sum += {in_0}[i * stride + c]; } float sg_sum = subgroupAdd(thread_sum); if (gl_SubgroupInvocationID == 0) { shared_mem_0[gl_SubgroupID] = sg_sum; } barrier(); if (tid == 0) { float tot_sum = 0.0; for (uint s = 0; s < gl_NumSubgroups; ++s) { tot_sum += shared_mem_0[s]; } shared_mem_0[0] = tot_sum / float(M); } barrier(); float mean = shared_mem_0[0]; float thread_sq = 0.0; i = tid * 4; for (; i + 3 < M; i += step) { uint idx = i * stride + c; vec4 diff = vec4({in_0}[idx], {in_0}[idx + stride], {in_0}[idx + 2 * stride], {in_0}[idx + 3 * stride]) - vec4(mean); thread_sq += dot(diff, diff); } for (; i < M; i += gl_WorkGroupSize.x) { float diff = {in_0}[i * stride + c] - mean; thread_sq += diff * diff; } float sg_sq = subgroupAdd(thread_sq); if (gl_SubgroupInvocationID == 0) { shared_mem_0[gl_SubgroupID] = sg_sq; } barrier(); if (tid == 0) { float tot_sq = 0.0; for (uint s = 0; s < gl_NumSubgroups; ++s) { tot_sq += shared_mem_0[s]; } float var = tot_sq / float(M); {out_0}[c] = mean; {out_1}[c] = var; float mom = uintBitsToFloat({pc_3}); {out_2}[c] = (1.0 - mom) * {out_2}[c] + mom * mean; {out_3}[c] = (1.0 - mom) * {out_3}[c] + mom * var; } }"
   },
   "BATCH_NORM2D_TRANSFORM_FORWARD": {
     "op_class": "ELEMENTWISE",
@@ -270,7 +270,7 @@
     "shared_mem_size": 64,
     "writes_multiple_elements": true,
     "persistent_outputs": [0, 1],
-    "code": "uint c = gl_WorkGroupID.x; uint tid = gl_LocalInvocationID.x; uint M = {pc_2}; if (c < {pc_1}) { float thread_dg = 0.0; float thread_db = 0.0; uint step = gl_WorkGroupSize.x * 4; uint stride = {pc_1}; uint i = tid * 4; for (; i + 3 < M; i += step) { uint i0 = i * stride + c; uint i1 = i0 + stride; uint i2 = i1 + stride; uint i3 = i2 + stride; vec4 do_vec = vec4({in_0}[i0], {in_0}[i1], {in_0}[i2], {in_0}[i3]); vec4 xh_vec = vec4({in_1}[i0], {in_1}[i1], {in_1}[i2], {in_1}[i3]); thread_dg += dot(do_vec, xh_vec); thread_db += dot(do_vec, vec4(1.0)); } for (; i < M; i += gl_WorkGroupSize.x) { uint idx = i * stride + c; float dout = {in_0}[idx]; thread_dg += dout * {in_1}[idx]; thread_db += dout; } float sg_dg = subgroupAdd(thread_dg); float sg_db = subgroupAdd(thread_db); if (gl_SubgroupInvocationID == 0) { shared_mem_0[gl_SubgroupID] = sg_dg; shared_mem_0[32 + gl_SubgroupID] = sg_db; } barrier(); if (tid == 0) { float tot_dg = 0.0; float tot_db = 0.0; for (uint s = 0; s < gl_NumSubgroups; ++s) { tot_dg += shared_mem_0[s]; tot_db += shared_mem_0[32 + s]; } {out_0}[c] = tot_dg; {out_1}[c] = tot_db; } }"
+    "code": "uint total_elements = {pc_0}; uint c = gl_WorkGroupID.x; uint tid = gl_LocalInvocationID.x; uint M = {pc_2}; if (c < {pc_1}) { float thread_dg = 0.0; float thread_db = 0.0; uint step = gl_WorkGroupSize.x * 4; uint stride = {pc_1}; uint i = tid * 4; for (; i + 3 < M; i += step) { uint i0 = i * stride + c; uint i1 = i0 + stride; uint i2 = i1 + stride; uint i3 = i2 + stride; vec4 do_vec = vec4({in_0}[i0], {in_0}[i1], {in_0}[i2], {in_0}[i3]); vec4 xh_vec = vec4({in_1}[i0], {in_1}[i1], {in_1}[i2], {in_1}[i3]); thread_dg += dot(do_vec, xh_vec); thread_db += dot(do_vec, vec4(1.0)); } for (; i < M; i += gl_WorkGroupSize.x) { uint idx = i * stride + c; float dout = {in_0}[idx]; thread_dg += dout * {in_1}[idx]; thread_db += dout; } float sg_dg = subgroupAdd(thread_dg); float sg_db = subgroupAdd(thread_db); if (gl_SubgroupInvocationID == 0) { shared_mem_0[gl_SubgroupID] = sg_dg; shared_mem_0[32 + gl_SubgroupID] = sg_db; } barrier(); if (tid == 0) { float tot_dg = 0.0; float tot_db = 0.0; for (uint s = 0; s < gl_NumSubgroups; ++s) { tot_dg += shared_mem_0[s]; tot_db += shared_mem_0[32 + s]; } {out_0}[c] = tot_dg; {out_1}[c] = tot_db; } }"
   },
   "BATCH_NORM2D_TRANSFORM_BACKWARD": {
     "op_class": "ELEMENTWISE",
@@ -284,7 +284,7 @@
     "input_count": 2,
     "output_count": 1,
     "supports_cooperative_matrix": false,
-    "code": "if (global_id >= {pc_0}) return; float p = clamp({in_0}[global_id], 1e-7, 1.0 - 1e-7); {out_0}[global_id] = -{in_1}[global_id] * log(p);"
+    "code": "if (global_id >= {pc_0}) return; float eps = uintBitsToFloat({pc_1}); float p = clamp({in_0}[global_id], eps, 1.0 - eps); {out_0}[global_id] = -{in_1}[global_id] * log(p);"
   },
   "MSE_LOSS": {
     "op_class": "ELEMENTWISE",
@@ -305,7 +305,7 @@
     "input_count": 2,
     "output_count": 1,
     "supports_cooperative_matrix": false,
-    "code": "if (global_id >= {pc_0}) return; float p = clamp({in_0}[global_id], 1e-7, 1.0 - 1e-7); float y = {in_1}[global_id]; {out_0}[global_id] = -(y * log(p) + (1.0 - y) * log(1.0 - p));"
+    "code": "if (global_id >= {pc_0}) return; float eps = uintBitsToFloat({pc_1}); float p = clamp({in_0}[global_id], eps, 1.0 - eps); float y = {in_1}[global_id]; {out_0}[global_id] = -(y * log(p) + (1.0 - y) * log(1.0 - p));"
   },
   "HUBER_LOSS": {
     "op_class": "ELEMENTWISE",
@@ -320,14 +320,16 @@
     "output_count": 1,
     "supports_cooperative_matrix": false,
     "writes_multiple_elements": true,
-    "code": "uint b = gl_WorkGroupID.x; uint n = {pc_1}; if (b >= {pc_0}) return; for (uint i = 0; i < n; ++i) { for (uint j = 0; j < n; ++j) { {out_0}[b * n * n + i * n + j] = (i == j) ? 1.0 : 0.0; } } for (uint i = 0; i < n; ++i) { float diag = {in_0}[b * n * n + i * n + i]; for (uint j = 0; j < n; ++j) { {in_0}[b * n * n + i * n + j] /= diag; {out_0}[b * n * n + i * n + j] /= diag; } for (uint k = 0; k < n; ++k) { if (k != i) { float factor = {in_0}[b * n * n + k * n + i]; for (uint j = 0; j < n; ++j) { {in_0}[b * n * n + k * n + j] -= factor * {in_0}[b * n * n + i * n + j]; {out_0}[b * n * n + k * n + j] -= factor * {out_0}[b * n * n + i * n + j]; } } } }"
+    "code": "uint n = {pc_0}; if (n == 0) return; float aug[4096]; uint aug_cols = 2 * n; for (uint i = 0; i < n; ++i) { for (uint j = 0; j < n; ++j) { aug[i * aug_cols + j] = {in_0}[i * n + j]; aug[i * aug_cols + (n + j)] = (i == j) ? 1.0 : 0.0; } } for (uint i = 0; i < n; ++i) { uint pivot_row = i; float max_val = abs(aug[i * aug_cols + i]); for (uint k = i + 1; k < n; ++k) { float val = abs(aug[k * aug_cols + i]); if (val > max_val) { max_val = val; pivot_row = k; } } if (pivot_row != i) { for (uint j = 0; j < aug_cols; ++j) { float temp = aug[i * aug_cols + j]; aug[i * aug_cols + j] = aug[pivot_row * aug_cols + j]; aug[pivot_row * aug_cols + j] = temp; } } float pivot = aug[i * aug_cols + i]; if (abs(pivot) < 1e-7) return; for (uint j = 0; j < aug_cols; ++j) { aug[i * aug_cols + j] /= pivot; } for (uint k = 0; k < n; ++k) { if (k != i) { float factor = aug[k * aug_cols + i]; for (uint j = 0; j < aug_cols; ++j) { aug[k * aug_cols + j] -= factor * aug[i * aug_cols + j]; } } } } for (uint i = 0; i < n; ++i) { for (uint j = 0; j < n; ++j) { {out_0}[i * n + j] = aug[i * aug_cols + (n + j)]; } }"
   },
   "NORMALIZE": {
-    "op_class": "ELEMENTWISE",
+    "op_class": "STANDALONE",
     "input_count": 1,
     "output_count": 1,
     "supports_cooperative_matrix": false,
-    "code": "if (global_id >= {pc_0}) return; float mean = uintBitsToFloat({pc_1}); float std = uintBitsToFloat({pc_2}); float eps = uintBitsToFloat({pc_3}); {out_0}[global_id] = ({in_0}[global_id] - mean) / (std + eps);"
+    "shared_mem_size": 256,
+    "writes_multiple_elements": true,
+    "code": "uint local_idx = gl_LocalInvocationID.x; uint total_elements = {pc_0}; float local_sum = 0.0; for (uint i = local_idx; i < total_elements; i += gl_WorkGroupSize.x) { float val = {in_0}[i]; local_sum += val * val; } shared_mem_0[local_idx] = local_sum; barrier(); for (uint stride = gl_WorkGroupSize.x / 2; stride > 0; stride >>= 1) { if (local_idx < stride) { shared_mem_0[local_idx] += shared_mem_0[local_idx + stride]; } barrier(); } float norm = sqrt(shared_mem_0[0]); for (uint i = local_idx; i < total_elements; i += gl_WorkGroupSize.x) { if (norm < 1e-8) { {out_0}[i] = {in_0}[i]; } else { {out_0}[i] = {in_0}[i] / norm; } }"
   },
   "CONCATENATE_COLUMNS": {
     "op_class": "MATRIX_2D",

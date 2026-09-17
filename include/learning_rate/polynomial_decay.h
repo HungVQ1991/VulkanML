@@ -62,30 +62,6 @@ public:
 
     ~Polynomial_Decay() noexcept override = default;
 
-     Decay_Mode getType() const noexcept override
-    {
-        return Decay_Mode::POLYNOMIAL_DECAY;
-    }
-
-    void setMaxEpoch(int _maximum_epoch) override
-    {
-        if (_maximum_epoch <= 0)
-        {
-            Logger::logMessage("Polynomial_Decay::setMaxEpoch: maximum_epoch must be greater than 0.",
-                               Log_Level::LOG_WARNING,
-                               true,
-                               0,
-                               Log_Feature::LR_SCHEDULER);
-            return;
-        }
-        maximum_epoch = _maximum_epoch;
-        Logger::logMessage(std::format("Polynomial_Decay::setMaxEpoch: updated maximum_epoch={}", maximum_epoch),
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::LR_SCHEDULER);
-    }
-
     float updateRate() override
     {
         if (current_epoch >= maximum_epoch)
@@ -102,10 +78,10 @@ public:
             float progress = 1.0f - (static_cast<float>(current_epoch) / static_cast<float>(maximum_epoch));
             current_learning_rate = (learning_rate - minimum_learning_rate) * progress + minimum_learning_rate;
         }
-        Logger::logMessage(std::format("Polynomial_Decay::updateRate: epoch={}/{}, current_rate={}",
-                                       current_epoch,
-                                       maximum_epoch,
-                                       current_learning_rate),
+        Logger::logMessage(Input_Format{"Polynomial_Decay::updateRate: epoch={}/{}, current_rate={}",
+                                        current_epoch,
+                                        maximum_epoch,
+                                        current_learning_rate},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -117,16 +93,6 @@ public:
     {
         current_epoch++;
         updateRate();
-    }
-
-     float getLearningRate() const noexcept override
-    {
-        return learning_rate;
-    }
-
-     float getCurrentRate() const noexcept override
-    {
-        return current_learning_rate;
     }
 
     void saveCheckpoint(std::ofstream &_output_file_stream) const override
@@ -146,4 +112,34 @@ public:
         _input_file_stream.read(reinterpret_cast<char *>(&maximum_epoch), sizeof(maximum_epoch));
         _input_file_stream.read(reinterpret_cast<char *>(&current_epoch), sizeof(current_epoch));
     }
+
+    float getMinimumLearningRate() const noexcept { return minimum_learning_rate; }
+    float getCurrentRate() const noexcept override { return current_learning_rate; }
+    float getLearningRate() const noexcept override { return learning_rate; }
+    Decay_Mode getType() const noexcept override { return Decay_Mode::POLYNOMIAL_DECAY; }
+    int getMaximumEpoch() const noexcept { return maximum_epoch; }
+    int getCurrentEpoch() const noexcept { return current_epoch; }
+
+    void setMaxEpoch(int _maximum_epoch) override
+    {
+        if (_maximum_epoch <= 0)
+        {
+            Logger::logMessage("Polynomial_Decay::setMaxEpoch: maximum_epoch must be greater than 0.",
+                               Log_Level::LOG_WARNING,
+                               true,
+                               0,
+                               Log_Feature::LR_SCHEDULER);
+            return;
+        }
+        maximum_epoch = _maximum_epoch;
+        Logger::logMessage(Input_Format{"Polynomial_Decay::setMaxEpoch: updated maximum_epoch={}", maximum_epoch},
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::LR_SCHEDULER);
+    }
+    void setMinimumLearningRate(float _minimum_learning_rate) noexcept { minimum_learning_rate = _minimum_learning_rate; }
+    void setCurrentRate(float _current_rate) noexcept { current_learning_rate = _current_rate; }
+    void setLearningRate(float _learning_rate) noexcept { learning_rate = _learning_rate; }
+    void setCurrentEpoch(int _current_epoch) noexcept { current_epoch = _current_epoch; }
 };

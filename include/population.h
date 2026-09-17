@@ -47,7 +47,7 @@ struct Population_Layer_Adapter
     std::vector<bool> param_evolvable;
     std::vector<std::size_t> param_numel;
     std::vector<Tensor> batched_params;
-    std::vector<std::vector<float>> host_params;
+    mutable std::vector<std::vector<float>> host_params;
 };
 
 class Population
@@ -84,6 +84,7 @@ private:
         syncHostToDevice();
     }
 
+public:
     void syncHostToDevice()
     {
         for (auto &adapter : layer_adapters)
@@ -95,9 +96,9 @@ private:
         }
     }
 
-    void syncDeviceToHost()
+    void syncDeviceToHost() const
     {
-        for (auto &adapter : layer_adapters)
+        for (const auto &adapter : layer_adapters)
         {
             for (std::size_t p = 0; p < adapter.batched_params.size(); ++p)
             {
@@ -105,8 +106,6 @@ private:
             }
         }
     }
-
-public:
     Population(std::size_t _population_size,
                const Neural_Network &_template_net,
                std::size_t _state_dimension,
@@ -172,10 +171,31 @@ public:
 
         Neural_Network individual_net = getIndividual(individual_index);
         std::vector<float> input_vector(state_data, state_data + state_dimension);
-        Matrix input_matrix(1, state_dimension, std::move(input_vector), execution_target);
-        Matrix output_matrix = individual_net.forward(input_matrix);
+        Tensor input_tensor(1, state_dimension, std::move(input_vector), execution_target);
+        Tensor output_tensor = individual_net.forward(input_tensor);
 
-        const auto &output_data = output_matrix.getData();
+        const auto &output_data = output_tensor.getData();
+        if (output_data.empty())
+        {
+            return 0;
+        }
+
+        return static_cast<std::size_t>(std::distance(
+            output_data.begin(),
+            std::max_element(output_data.begin(), output_data.end())));
+    }
+
+    std::size_t selectAction(std::size_t individual_index, const Tensor &state_tensor) const
+    {
+        if (individual_index >= population_size)
+        {
+            throw std::out_of_range("Individual index out of range in selectAction");
+        }
+
+        Neural_Network individual_net = getIndividual(individual_index);
+        Tensor output_tensor = individual_net.forward(state_tensor);
+
+        const auto &output_data = output_tensor.getData();
         if (output_data.empty())
         {
             return 0;
@@ -357,6 +377,11 @@ public:
             throw std::out_of_range("Individual index out of range in getIndividual");
         }
 
+        if (execution_target == Execution_Target::VULKAN_GPU)
+        {
+            syncDeviceToHost();
+        }
+
         Neural_Network individual_net(Execution_Target::CPU);
         for (const auto &adapter : layer_adapters)
         {
@@ -374,8 +399,55 @@ public:
         return individual_net;
     }
 
-    Neural_Network getBestIndividual(const float *fitness_scores) const
+    void setIndividual(std::size_t index, const Neural_Network &network)
     {
+        if (index >= population_size)
+        {
+            throw std::out_of_range("Individual index out of range in setIndividual");
+        }
+
+        const auto &net_layers = network.getLayers();
+        if (net_layers.size() != layer_adapters.size())
+        {
+            throw std::invalid_argument("Layer count mismatch between Neural_Network and Population");
+        }
+
+        for (std::size_t l = 0; l < layer_adapters.size(); ++l)
+        {
+            auto &adapter = layer_adapters[l];
+            const auto &net_layer = net_layers[l];
+
+            if (net_layer->getLayerType() != adapter.template_layer->getLayerType())
+            {
+                throw std::invalid_argument(std::format("Layer type mismatch at layer {}: expected {}, got {}",
+                                                        l,
+                                                        magic_enum::enum_name(adapter.template_layer->getLayerType()),
+                                                        magic_enum::enum_name(net_layer->getLayerType())));
+            }
+
+            for (std::size_t p = 0; p < adapter.param_shapes.size(); ++p)
+            {
+                std::vector<float> param_data = net_layer->getPopulationParameter(p);
+                std::size_t len = adapter.param_numel[p];
+                if (param_data.size() != len)
+                {
+                    throw std::invalid_argument(std::format("Parameter size mismatch at layer {}, param {}: expected {}, got {}",
+                                                            l, p, len, param_data.size()));
+                }
+
+                std::copy(param_data.begin(), param_data.end(), adapter.host_params[p].begin() + index * len);
+            }
+        }
+
+        syncHostToDevice();
+    }
+
+    std::size_t getBestIndividualIndex(const float *fitness_scores) const noexcept
+    {
+        if (population_size == 0 || fitness_scores == nullptr)
+        {
+            return 0;
+        }
         std::size_t best_idx = 0;
         float max_fitness = fitness_scores[0];
         for (std::size_t i = 1; i < population_size; ++i)
@@ -386,7 +458,12 @@ public:
                 best_idx = i;
             }
         }
-        return getIndividual(best_idx);
+        return best_idx;
+    }
+
+    Neural_Network getBestIndividual(const float *fitness_scores) const
+    {
+        return getIndividual(getBestIndividualIndex(fitness_scores));
     }
 
     bool saveIndividual(std::size_t individual_index, const std::string &file_path) const
@@ -395,6 +472,12 @@ public:
         {
             return false;
         }
+
+        if (execution_target == Execution_Target::VULKAN_GPU)
+        {
+            syncDeviceToHost();
+        }
+
         std::ofstream out_file(file_path, std::ios::binary);
         if (!out_file.is_open())
         {
@@ -437,17 +520,35 @@ public:
 
     bool saveBestIndividual(const std::string &file_path, const float *fitness_scores) const
     {
-        std::size_t best_idx = 0;
-        float max_fitness = fitness_scores[0];
-        for (std::size_t i = 1; i < population_size; ++i)
+        return saveIndividual(getBestIndividualIndex(fitness_scores), file_path);
+    }
+
+    bool saveIndividualAsInference(std::size_t individual_index, const std::string &file_path) const
+    {
+        if (individual_index >= population_size)
         {
-            if (fitness_scores[i] > max_fitness)
-            {
-                max_fitness = fitness_scores[i];
-                best_idx = i;
-            }
+            return false;
         }
-        return saveIndividual(best_idx, file_path);
+        try
+        {
+            Neural_Network individual_net = getIndividual(individual_index);
+            individual_net.saveInference(file_path);
+            return true;
+        }
+        catch (const std::exception &e)
+        {
+            Logger::logMessage(Input_Format{"Population::saveIndividualAsInference failed: {}", e.what()},
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::MODEL_SERIALIZATION);
+            return false;
+        }
+    }
+
+    bool saveBestIndividualAsInference(const std::string &file_path, const float *fitness_scores) const
+    {
+        return saveIndividualAsInference(getBestIndividualIndex(fitness_scores), file_path);
     }
 
     bool loadIndividual(std::size_t individual_index, const std::string &file_path)
@@ -530,6 +631,11 @@ public:
 
     bool saveCheckpoint(const std::string &file_path, std::uint64_t generation = 0, const float *fitness_scores = nullptr) const
     {
+        if (execution_target == Execution_Target::VULKAN_GPU)
+        {
+            syncDeviceToHost();
+        }
+
         std::ofstream out_file(file_path, std::ios::binary);
         if (!out_file.is_open())
         {
@@ -670,23 +776,22 @@ public:
         return true;
     }
 
-    std::size_t getPopulationSize() const noexcept
-    {
-        return population_size;
-    }
+    const Tensor &getBatchedInputTensor() const noexcept { return batched_input_tensor; }
+    Tensor &getBatchedInputTensor() noexcept { return batched_input_tensor; }
+    const std::vector<Population_Layer_Adapter> &getLayerAdapters() const noexcept { return layer_adapters; }
+    std::vector<Population_Layer_Adapter> &getLayerAdapters() noexcept { return layer_adapters; }
+    const std::vector<float> &getBatchedInputHost() const noexcept { return batched_input_host; }
+    std::vector<float> &getBatchedInputHost() noexcept { return batched_input_host; }
+    std::size_t getActionSpaceSize() const noexcept { return action_space_size; }
+    std::size_t getPopulationSize() const noexcept { return population_size; }
+    std::size_t getStateDimension() const noexcept { return state_dimension; }
+    Execution_Target getExecutionTarget() const noexcept { return execution_target; }
 
-    std::size_t getStateDimension() const noexcept
-    {
-        return state_dimension;
-    }
-
-    std::size_t getActionSpaceSize() const noexcept
-    {
-        return action_space_size;
-    }
-
-    Execution_Target getExecutionTarget() const noexcept
-    {
-        return execution_target;
-    }
+    void setBatchedInputTensor(Tensor _tensor) noexcept { batched_input_tensor = std::move(_tensor); }
+    void setLayerAdapters(std::vector<Population_Layer_Adapter> _adapters) noexcept { layer_adapters = std::move(_adapters); }
+    void setBatchedInputHost(std::vector<float> _host) noexcept { batched_input_host = std::move(_host); }
+    void setActionSpaceSize(std::size_t _size) noexcept { action_space_size = _size; }
+    void setPopulationSize(std::size_t _size) noexcept { population_size = _size; }
+    void setStateDimension(std::size_t _dimension) noexcept { state_dimension = _dimension; }
+    void setExecutionTarget(Execution_Target _target) noexcept { execution_target = _target; }
 };

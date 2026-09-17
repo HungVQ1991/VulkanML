@@ -93,11 +93,6 @@ public:
 
     ~Multi_Step_Decay() noexcept override = default;
 
-     Decay_Mode getType() const noexcept override
-    {
-        return Decay_Mode::MULTI_STEP_DECAY;
-    }
-
     float updateRate() override
     {
         int milestone_count = 0;
@@ -118,10 +113,10 @@ public:
                                Log_Feature::LR_SCHEDULER);
         }
         current_learning_rate = std::max(minimum_learning_rate, calculated_rate);
-        Logger::logMessage(std::format("Multi_Step_Decay::updateRate: epoch={}, milestones_hit={}, current_rate={}",
-                                       current_epoch,
-                                       milestone_count,
-                                       current_learning_rate),
+        Logger::logMessage(Input_Format{"Multi_Step_Decay::updateRate: epoch={}, milestones_hit={}, current_rate={}",
+                                        current_epoch,
+                                        milestone_count,
+                                        current_learning_rate},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -133,16 +128,6 @@ public:
     {
         current_epoch++;
         updateRate();
-    }
-
-     float getCurrentRate() const noexcept override
-    {
-        return current_learning_rate;
-    }
-
-     float getLearningRate() const noexcept override
-    {
-        return learning_rate;
     }
 
     void saveCheckpoint(std::ofstream &_output_file_stream) const override
@@ -177,4 +162,24 @@ public:
             _input_file_stream.read(reinterpret_cast<char *>(decay_epochs.data()), vector_size * sizeof(float));
         }
     }
+
+    const std::vector<float> &getDecayEpochs() const noexcept { return decay_epochs; }
+    float getCurrentLearningRate() const noexcept { return current_learning_rate; }
+    float getMinimumLearningRate() const noexcept { return minimum_learning_rate; }
+    float getCurrentRate() const noexcept override { return current_learning_rate; }
+    float getLearningRate() const noexcept override { return learning_rate; }
+    Decay_Mode getType() const noexcept override { return Decay_Mode::MULTI_STEP_DECAY; }
+    float getDecayRate() const noexcept { return decay_rate; }
+    int getCurrentEpoch() const noexcept { return current_epoch; }
+
+    void setDecayEpochs(std::vector<float> _decay_epochs)
+    {
+        decay_epochs = std::move(_decay_epochs);
+        validateParameters();
+    }
+    void setMinimumLearningRate(float _min_lr) noexcept { minimum_learning_rate = _min_lr; }
+    void setCurrentLearningRate(float _rate) noexcept { current_learning_rate = _rate; }
+    void setLearningRate(float _learning_rate) noexcept { learning_rate = _learning_rate; }
+    void setCurrentEpoch(int _epoch) noexcept { current_epoch = _epoch; }
+    void setDecayRate(float _decay_rate) noexcept { decay_rate = _decay_rate; }
 };

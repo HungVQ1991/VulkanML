@@ -37,8 +37,8 @@ private:
             throw std::runtime_error("Input stream is not open");
         }
 
-        Logger::logMessage(std::format("Training_Context::createCostFunction: Cost type = {}",
-                                       magic_enum::enum_name(_cost_type)),
+        Logger::logMessage(Input_Format{"Training_Context::createCostFunction: Cost type = {}",
+                                        magic_enum::enum_name(_cost_type)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -84,8 +84,8 @@ private:
             throw std::runtime_error("Input stream is not open");
         }
 
-        Logger::logMessage(std::format("Training_Context::createLearningRateScheduler: Decay mode = {}",
-                                       magic_enum::enum_name(_decay_mode)),
+        Logger::logMessage(Input_Format{"Training_Context::createLearningRateScheduler: Decay mode = {}",
+                                        magic_enum::enum_name(_decay_mode)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -123,8 +123,8 @@ private:
             throw std::runtime_error("Unknown decay mode");
         }
         learning_rate_scheduler->loadCheckpoint(_input_file_stream);
-        Logger::logMessage(std::format("Training_Context::createLearningRateScheduler: Learning rate: {}",
-                                       learning_rate_scheduler->getCurrentRate()),
+        Logger::logMessage(Input_Format{"Training_Context::createLearningRateScheduler: Learning rate: {}",
+                                        learning_rate_scheduler->getCurrentRate()},
                            Log_Level::LOG_INFO,
                            true,
                            0,
@@ -153,8 +153,8 @@ private:
             throw std::runtime_error("Learning rate scheduler must be created before optimizer");
         }
 
-        Logger::logMessage(std::format("Training_Context::createOptimizer: Optimizer type = {}",
-                                       magic_enum::enum_name(_optimizer_type)),
+        Logger::logMessage(Input_Format{"Training_Context::createOptimizer: Optimizer type = {}",
+                                        magic_enum::enum_name(_optimizer_type)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -188,100 +188,6 @@ public:
     Training_Context(Training_Context &&) noexcept = default;
     Training_Context &operator=(Training_Context &&) noexcept = default;
 
-    std::size_t getCurrentEpoch() const noexcept
-    {
-        return current_epoch;
-    }
-
-    void setCurrentEpoch(std::size_t _epoch) noexcept
-    {
-        current_epoch = _epoch;
-    }
-
-    ICost_Function &getCostFunction()
-    {
-        return *cost_function;
-    }
-
-    const ICost_Function &getCostFunction() const
-    {
-        return *cost_function;
-    }
-
-    ILearning_Rate &getLearningRate()
-    {
-        return *learning_rate_scheduler;
-    }
-
-    const ILearning_Rate &getLearningRate() const
-    {
-        return *learning_rate_scheduler;
-    }
-
-    ILearning_Rate &getLearningRateScheduler()
-    {
-        return *learning_rate_scheduler;
-    }
-
-    const ILearning_Rate &getLearningRateScheduler() const
-    {
-        return *learning_rate_scheduler;
-    }
-
-    IOptimizer &getOptimizer()
-    {
-        return *optimizer;
-    }
-
-    const IOptimizer &getOptimizer() const
-    {
-        return *optimizer;
-    }
-
-    void setLearningRate(std::unique_ptr<ILearning_Rate> _learning_rate_scheduler)
-    {
-        if (!_learning_rate_scheduler)
-        {
-            Logger::logMessage("Training_Context::setLearningRate: Attempted to set null learning rate scheduler",
-                               Log_Level::LOG_WARNING,
-                               true,
-                               0,
-                               Log_Feature::TRAINING);
-        }
-        learning_rate_scheduler = std::move(_learning_rate_scheduler);
-    }
-
-    void setLearningRateScheduler(std::unique_ptr<ILearning_Rate> _learning_rate_scheduler)
-    {
-        setLearningRate(std::move(_learning_rate_scheduler));
-    }
-
-    void setOptimizer(std::unique_ptr<IOptimizer> _optimizer)
-    {
-        if (!_optimizer)
-        {
-            Logger::logMessage("Training_Context::setOptimizer: Attempted to set null optimizer",
-                               Log_Level::LOG_WARNING,
-                               true,
-                               0,
-                               Log_Feature::TRAINING);
-        }
-        optimizer = std::move(_optimizer);
-    }
-
-    void setCostFunction(std::unique_ptr<ICost_Function> _cost_function)
-    {
-        if (!_cost_function)
-        {
-            Logger::logMessage("Training_Context::setCostFunction: Attempted to set null cost function",
-                               Log_Level::LOG_WARNING,
-                               true,
-                               0,
-                               Log_Feature::TRAINING);
-        }
-        cost_function = std::move(_cost_function);
-    }
-
     static std::unique_ptr<ILayer> constructLayerFromConfig(std::ifstream &_input_file_stream, Layer_Type _layer_type, Execution_Target _execution_target)
     {
         if (!_input_file_stream.is_open())
@@ -294,8 +200,8 @@ public:
             throw std::runtime_error("Input stream is not open");
         }
 
-        Logger::logMessage(std::format("Training_Context::constructLayerFromConfig: Constructing layer type = {}",
-                                       magic_enum::enum_name(_layer_type)),
+        Logger::logMessage(Input_Format{"Training_Context::constructLayerFromConfig: Constructing layer type = {}",
+                                        magic_enum::enum_name(_layer_type)},
                            Log_Level::LOG_INFO,
                            true,
                            0,
@@ -389,17 +295,57 @@ public:
         }
         case Layer_Type::RES_NET_BLOCK_2D:
         {
-            std::uint32_t input_height = 0;
-            std::uint32_t input_width = 0;
-            std::uint32_t input_channels = 0;
-            std::uint32_t output_channels = 0;
-            std::uint32_t stride = 0;
-            _input_file_stream.read(reinterpret_cast<char *>(&input_height), sizeof(input_height));
-            _input_file_stream.read(reinterpret_cast<char *>(&input_width), sizeof(input_width));
-            _input_file_stream.read(reinterpret_cast<char *>(&input_channels), sizeof(input_channels));
-            _input_file_stream.read(reinterpret_cast<char *>(&output_channels), sizeof(output_channels));
-            _input_file_stream.read(reinterpret_cast<char *>(&stride), sizeof(stride));
-            return std::make_unique<Res_Net_Block_2d_Layer>(input_height, input_width, input_channels, output_channels, stride, _execution_target);
+            std::uint64_t main_count = 0;
+            std::uint64_t shortcut_count = 0;
+            std::uint8_t has_post_act = 0;
+            _input_file_stream.read(reinterpret_cast<char *>(&main_count), sizeof(main_count));
+            _input_file_stream.read(reinterpret_cast<char *>(&shortcut_count), sizeof(shortcut_count));
+            _input_file_stream.read(reinterpret_cast<char *>(&has_post_act), sizeof(has_post_act));
+
+            auto block = std::make_unique<Res_Net_Block_2d_Layer>(_execution_target);
+            for (std::uint64_t i = 0; i < main_count; ++i)
+            {
+                Layer_Type sub_type;
+                _input_file_stream.read(reinterpret_cast<char *>(&sub_type), sizeof(sub_type));
+                block->addMainLayer(constructLayerFromConfig(_input_file_stream, sub_type, _execution_target));
+            }
+            for (std::uint64_t i = 0; i < shortcut_count; ++i)
+            {
+                Layer_Type sub_type;
+                _input_file_stream.read(reinterpret_cast<char *>(&sub_type), sizeof(sub_type));
+                block->addShortcutLayer(constructLayerFromConfig(_input_file_stream, sub_type, _execution_target));
+            }
+            if (has_post_act != 0)
+            {
+                Layer_Type sub_type;
+                _input_file_stream.read(reinterpret_cast<char *>(&sub_type), sizeof(sub_type));
+                block->setPostActivation(constructLayerFromConfig(_input_file_stream, sub_type, _execution_target));
+            }
+            return block;
+        }
+        case Layer_Type::PPO_ACTOR_CRITIC:
+        {
+            std::uint64_t actor_output_dimension = 0;
+            std::uint64_t actor_count = 0;
+            std::uint64_t critic_count = 0;
+            _input_file_stream.read(reinterpret_cast<char *>(&actor_output_dimension), sizeof(actor_output_dimension));
+            _input_file_stream.read(reinterpret_cast<char *>(&actor_count), sizeof(actor_count));
+            _input_file_stream.read(reinterpret_cast<char *>(&critic_count), sizeof(critic_count));
+
+            auto ppo_layer = std::make_unique<PPO_Actor_Critic_Layer>(actor_output_dimension, _execution_target);
+            for (std::uint64_t i = 0; i < actor_count; ++i)
+            {
+                Layer_Type sub_type;
+                _input_file_stream.read(reinterpret_cast<char *>(&sub_type), sizeof(sub_type));
+                ppo_layer->addActorLayer(constructLayerFromConfig(_input_file_stream, sub_type, _execution_target));
+            }
+            for (std::uint64_t i = 0; i < critic_count; ++i)
+            {
+                Layer_Type sub_type;
+                _input_file_stream.read(reinterpret_cast<char *>(&sub_type), sizeof(sub_type));
+                ppo_layer->addCriticLayer(constructLayerFromConfig(_input_file_stream, sub_type, _execution_target));
+            }
+            return ppo_layer;
         }
         case Layer_Type::RES_NET_20:
         {
@@ -465,7 +411,7 @@ public:
         std::uint32_t epoch_value = 0;
         _input_file_stream.read(reinterpret_cast<char *>(&epoch_value), sizeof(epoch_value));
         current_epoch = static_cast<std::size_t>(epoch_value);
-        Logger::logMessage(std::format("Training_Context::loadHeader: Current epoch = {}", current_epoch),
+        Logger::logMessage(Input_Format{"Training_Context::loadHeader: Current epoch = {}", current_epoch},
                            Log_Level::LOG_INFO,
                            true,
                            0,
@@ -473,8 +419,8 @@ public:
 
         Cost_Type cost_type;
         _input_file_stream.read(reinterpret_cast<char *>(&cost_type), sizeof(cost_type));
-        Logger::logMessage(std::format("Training_Context::loadHeader: Cost function type = {}",
-                                       magic_enum::enum_name(cost_type)),
+        Logger::logMessage(Input_Format{"Training_Context::loadHeader: Cost function type = {}",
+                                        magic_enum::enum_name(cost_type)},
                            Log_Level::LOG_INFO,
                            true,
                            0,
@@ -483,8 +429,8 @@ public:
 
         Decay_Mode decay_mode;
         _input_file_stream.read(reinterpret_cast<char *>(&decay_mode), sizeof(decay_mode));
-        Logger::logMessage(std::format("Training_Context::loadHeader: Decay mode = {}",
-                                       magic_enum::enum_name(decay_mode)),
+        Logger::logMessage(Input_Format{"Training_Context::loadHeader: Decay mode = {}",
+                                        magic_enum::enum_name(decay_mode)},
                            Log_Level::LOG_INFO,
                            true,
                            0,
@@ -493,8 +439,8 @@ public:
 
         Optimizer_Type optimizer_type;
         _input_file_stream.read(reinterpret_cast<char *>(&optimizer_type), sizeof(optimizer_type));
-        Logger::logMessage(std::format("Training_Context::loadHeader: Optimizer type = {}",
-                                       magic_enum::enum_name(optimizer_type)),
+        Logger::logMessage(Input_Format{"Training_Context::loadHeader: Optimizer type = {}",
+                                        magic_enum::enum_name(optimizer_type)},
                            Log_Level::LOG_INFO,
                            true,
                            0,
@@ -503,4 +449,57 @@ public:
 
         return true;
     }
+
+    const ILearning_Rate &getLearningRateScheduler() const noexcept { return *learning_rate_scheduler; }
+    ILearning_Rate &getLearningRateScheduler() noexcept { return *learning_rate_scheduler; }
+    const ICost_Function &getCostFunction() const noexcept { return *cost_function; }
+    ICost_Function &getCostFunction() noexcept { return *cost_function; }
+    const ILearning_Rate &getLearningRate() const noexcept { return *learning_rate_scheduler; }
+    ILearning_Rate &getLearningRate() noexcept { return *learning_rate_scheduler; }
+    const IOptimizer &getOptimizer() const noexcept { return *optimizer; }
+    IOptimizer &getOptimizer() noexcept { return *optimizer; }
+    std::size_t getCurrentEpoch() const noexcept { return current_epoch; }
+    bool hasCostFunction() const noexcept { return cost_function != nullptr; }
+
+    void setLearningRate(std::unique_ptr<ILearning_Rate> _learning_rate_scheduler)
+    {
+        if (!_learning_rate_scheduler)
+        {
+            Logger::logMessage("Training_Context::setLearningRate: Attempted to set null learning rate scheduler",
+                               Log_Level::LOG_WARNING,
+                               true,
+                               0,
+                               Log_Feature::TRAINING);
+        }
+        learning_rate_scheduler = std::move(_learning_rate_scheduler);
+    }
+
+    void setOptimizer(std::unique_ptr<IOptimizer> _optimizer)
+    {
+        if (!_optimizer)
+        {
+            Logger::logMessage("Training_Context::setOptimizer: Attempted to set null optimizer",
+                               Log_Level::LOG_WARNING,
+                               true,
+                               0,
+                               Log_Feature::TRAINING);
+        }
+        optimizer = std::move(_optimizer);
+    }
+
+    void setCostFunction(std::unique_ptr<ICost_Function> _cost_function)
+    {
+        if (!_cost_function)
+        {
+            Logger::logMessage("Training_Context::setCostFunction: Attempted to set null cost function",
+                               Log_Level::LOG_WARNING,
+                               true,
+                               0,
+                               Log_Feature::TRAINING);
+        }
+        cost_function = std::move(_cost_function);
+    }
+
+    void setLearningRateScheduler(std::unique_ptr<ILearning_Rate> _learning_rate_scheduler) { setLearningRate(std::move(_learning_rate_scheduler)); }
+    void setCurrentEpoch(std::size_t _epoch) noexcept { current_epoch = _epoch; }
 };

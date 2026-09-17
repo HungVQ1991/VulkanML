@@ -30,14 +30,9 @@ public:
 
     ~No_Decay() noexcept override = default;
 
-     Decay_Mode getType() const noexcept override
-    {
-        return Decay_Mode::NO_DECAY;
-    }
-
     float updateRate() override
     {
-        Logger::logMessage(std::format("No_Decay::updateRate: current_rate={}", learning_rate),
+        Logger::logMessage(Input_Format{"No_Decay::updateRate: current_rate={}", learning_rate},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -49,16 +44,6 @@ public:
     {
     }
 
-     float getCurrentRate() const noexcept override
-    {
-        return learning_rate;
-    }
-
-     float getLearningRate() const noexcept override
-    {
-        return learning_rate;
-    }
-
     void saveCheckpoint(std::ofstream &_output_file_stream) const override
     {
         _output_file_stream.write(reinterpret_cast<const char *>(&learning_rate), sizeof(learning_rate));
@@ -68,4 +53,10 @@ public:
     {
         _input_file_stream.read(reinterpret_cast<char *>(&learning_rate), sizeof(learning_rate));
     }
+
+    float getCurrentRate() const noexcept override { return learning_rate; }
+    float getLearningRate() const noexcept override { return learning_rate; }
+    Decay_Mode getType() const noexcept override { return Decay_Mode::NO_DECAY; }
+
+    void setLearningRate(float _learning_rate) noexcept { learning_rate = _learning_rate; }
 };

@@ -42,6 +42,28 @@ private:
         std::size_t graph_signature_hash = nodes.size();
         graph_signature_hash ^= static_cast<std::size_t>(is_coop ? 1 : 0) + 0x9e3779b9 + (graph_signature_hash << 6) + (graph_signature_hash >> 2);
 
+        std::unordered_map<VkBuffer, std::size_t> buffer_to_id;
+        buffer_to_id.reserve(nodes.size() * 2);
+        std::size_t next_id = 0;
+
+        auto getCanonicalBufferId = [&](const std::shared_ptr<gpu::vector> &buf) -> std::size_t {
+            if (!buf)
+            {
+                return static_cast<std::size_t>(-1);
+            }
+            VkBuffer handle = buf->getBuffer();
+            if (handle == VK_NULL_HANDLE)
+            {
+                handle = reinterpret_cast<VkBuffer>(buf.get());
+            }
+            auto [it, inserted] = buffer_to_id.try_emplace(handle, next_id);
+            if (inserted)
+            {
+                ++next_id;
+            }
+            return it->second;
+        };
+
         for (std::size_t i = 0; i < nodes.size(); ++i)
         {
             graph_signature_hash ^= static_cast<std::size_t>(nodes[i].pipeline_id) + 0x9e3779b9 + (graph_signature_hash << 6) + (graph_signature_hash >> 2);
@@ -50,33 +72,10 @@ private:
             graph_signature_hash ^= static_cast<std::size_t>(nodes[i].workgroup_count_z) + 0x9e3779b9 + (graph_signature_hash << 6) + (graph_signature_hash >> 2);
             graph_signature_hash ^= nodes[i].push_constants_data.size() + 0x9e3779b9 + (graph_signature_hash << 6) + (graph_signature_hash >> 2);
 
-            if (i > 0)
+            for (const auto &buffer : nodes[i].buffers)
             {
-                bool is_sharing_buffer = false;
-                for (const auto &buffer_a : nodes[i - 1].buffers)
-                {
-                    if (!buffer_a)
-                    {
-                        continue;
-                    }
-                    for (const auto &buffer_b : nodes[i].buffers)
-                    {
-                        if (!buffer_b)
-                        {
-                            continue;
-                        }
-                        if (buffer_a == buffer_b || (buffer_a->getBuffer() != VK_NULL_HANDLE && buffer_a->getBuffer() == buffer_b->getBuffer()))
-                        {
-                            is_sharing_buffer = true;
-                            break;
-                        }
-                    }
-                    if (is_sharing_buffer)
-                    {
-                        break;
-                    }
-                }
-                graph_signature_hash ^= static_cast<std::size_t>(is_sharing_buffer ? 1 : 0) + 0x9e3779b9 + (graph_signature_hash << 6) + (graph_signature_hash >> 2);
+                std::size_t canon_id = getCanonicalBufferId(buffer);
+                graph_signature_hash ^= canon_id + 0x9e3779b9 + (graph_signature_hash << 6) + (graph_signature_hash >> 2);
             }
         }
         return graph_signature_hash;
@@ -92,6 +91,10 @@ private:
                 fused_node.fused_glsl_code = graph_executor->generateFusedGlsl(fused_node);
                 fused_node.cached_pipeline = pipeline_cache_manager->getOrCreatePipeline(fused_node.fused_glsl_code);
             }
+        }
+        for (std::uint32_t frame_index = 0; frame_index < MAX_FRAMES_IN_FLIGHT; ++frame_index)
+        {
+            _template.instantiated_graphs[frame_index].setNodes(_template.fused_nodes);
         }
     }
 
@@ -153,130 +156,6 @@ public:
         return instance;
     }
 
-    const Vulkan_Context &getContext() const noexcept
-    {
-        return *context;
-    }
-
-    Vulkan_Context &getContext() noexcept
-    {
-        return *context;
-    }
-
-    const Vulkan_Network &getNetwork() const noexcept
-    {
-        return *network;
-    }
-
-    Vulkan_Network &getNetwork() noexcept
-    {
-        return *network;
-    }
-
-    const Pipeline_Cache_Manager &getPipelineCacheManager() const noexcept
-    {
-        return *pipeline_cache_manager;
-    }
-
-    Pipeline_Cache_Manager &getPipelineCacheManager() noexcept
-    {
-        return *pipeline_cache_manager;
-    }
-
-    const Shader_Dictionary &getShaderDictionary() const noexcept
-    {
-        return *shader_dictionary;
-    }
-
-    Shader_Dictionary &getShaderDictionary() noexcept
-    {
-        return *shader_dictionary;
-    }
-
-    const Graph_Executor &getGraphExecutor() const noexcept
-    {
-        return *graph_executor;
-    }
-
-    Graph_Executor &getGraphExecutor() noexcept
-    {
-        return *graph_executor;
-    }
-
-    const Compute_Graph &getCurrentGraph() const noexcept
-    {
-        return current_graph;
-    }
-
-    Compute_Graph &getCurrentGraph() noexcept
-    {
-        return current_graph;
-    }
-
-    const std::string &getShaderFolderPath() const noexcept
-    {
-        return shader_folder_path;
-    }
-
-    const std::unordered_map<std::size_t, Cached_Graph_Template> &getCachedGraphTemplates() const noexcept
-    {
-        return cached_graph_templates;
-    }
-
-    bool isGraphCacheEnabled() const noexcept
-    {
-        return is_graph_cache_enabled;
-    }
-
-    bool isCooperativeMatrixSupported() const noexcept
-    {
-        return context && context->isCooperativeMatrixSupported();
-    }
-
-    bool isCooperativeMatrixEnabled() const noexcept
-    {
-        return is_coop;
-    }
-
-    void setCooperativeMatrixEnabled(bool _enable)
-    {
-        if (_enable && (!context || !context->isCooperativeMatrixSupported()))
-        {
-            Logger::logMessage("Execution_Engine::setCooperativeMatrixEnabled: Device does not support Cooperative Matrix",
-                               Log_Level::LOG_WARNING,
-                               true,
-                               0,
-                               Log_Feature::DEVICE_MANAGEMENT);
-            return;
-        }
-
-        if (is_coop == _enable)
-        {
-            return;
-        }
-
-        waitIdle();
-        is_coop = _enable;
-        if (context)
-        {
-            context->setCooperativeMatrixEnabled(_enable);
-        }
-        invalidateGraphCache();
-    }
-
-    void setGraphCachingEnabled(bool _is_enabled)
-    {
-        is_graph_cache_enabled = _is_enabled;
-        if (!_is_enabled)
-        {
-            cached_graph_templates.clear();
-        }
-    }
-
-    void enableGraphCaching(bool _is_enabled)
-    {
-        setGraphCachingEnabled(_is_enabled);
-    }
 
     void invalidateGraphCache()
     {
@@ -303,12 +182,13 @@ public:
             precompileTemplatePipelines(template_iterator->second);
         }
 
-        Compute_Graph optimized_graph;
-        Graph_Optimizer::applyCachedTemplate(_raw_graph, template_iterator->second, optimized_graph);
-        graph_executor->warmupPipelineCache(optimized_graph);
+        std::uint32_t current_frame_index = context->getCurrentFrame();
+        auto &cached_graph = template_iterator->second.instantiated_graphs[current_frame_index];
+        Graph_Optimizer::applyCachedTemplateInPlace(_raw_graph, template_iterator->second, cached_graph);
+        graph_executor->warmupPipelineCache(cached_graph);
 
         pipeline_cache_manager->savePipelineCache();
-        Logger::logMessage(std::format("Execution_Engine::warmCache: Warmed cache for signature {}", graph_signature),
+        Logger::logMessage(Input_Format{"Execution_Engine::warmCache: Warmed cache for signature {}", graph_signature},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -328,7 +208,7 @@ public:
                                Log_Feature::DISPATCH_EXECUTION);
         }
 
-        Logger::logMessage(std::format("Execution_Engine::executeGraph: Executing compute graph for frame {}", current_frame_index),
+        Logger::logMessage(Input_Format{"Execution_Engine::executeGraph: Executing compute graph for frame {}", current_frame_index},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -345,9 +225,9 @@ public:
                 precompileTemplatePipelines(template_iterator->second);
             }
 
-            Compute_Graph optimized_graph;
-            Graph_Optimizer::applyCachedTemplate(current_graph, template_iterator->second, optimized_graph);
-            graph_executor->compileAndExecute(optimized_graph, context->getTransferTasks(), current_frame_index, _external_fence);
+            auto &cached_graph = template_iterator->second.instantiated_graphs[current_frame_index];
+            Graph_Optimizer::applyCachedTemplateInPlace(current_graph, template_iterator->second, cached_graph);
+            graph_executor->compileAndExecute(cached_graph, context->getTransferTasks(), current_frame_index, _external_fence);
         }
         else
         {
@@ -398,4 +278,58 @@ public:
     {
         Graph_Optimizer::optimize(current_graph);
     }
+
+    const std::unordered_map<std::size_t, Cached_Graph_Template> &getCachedGraphTemplates() const noexcept { return cached_graph_templates; }
+    const std::string &getShaderFolderPath() const noexcept { return shader_folder_path; }
+    const Pipeline_Cache_Manager &getPipelineCacheManager() const noexcept { return *pipeline_cache_manager; }
+    Pipeline_Cache_Manager &getPipelineCacheManager() noexcept { return *pipeline_cache_manager; }
+    const Shader_Dictionary &getShaderDictionary() const noexcept { return *shader_dictionary; }
+    Shader_Dictionary &getShaderDictionary() noexcept { return *shader_dictionary; }
+    const Graph_Executor &getGraphExecutor() const noexcept { return *graph_executor; }
+    Graph_Executor &getGraphExecutor() noexcept { return *graph_executor; }
+    const Vulkan_Network &getNetwork() const noexcept { return *network; }
+    Vulkan_Network &getNetwork() noexcept { return *network; }
+    const Vulkan_Context &getContext() const noexcept { return *context; }
+    Vulkan_Context &getContext() noexcept { return *context; }
+    const Compute_Graph &getCurrentGraph() const noexcept { return current_graph; }
+    Compute_Graph &getCurrentGraph() noexcept { return current_graph; }
+    bool isCooperativeMatrixSupported() const noexcept { return context && context->isCooperativeMatrixSupported(); }
+    bool isCooperativeMatrixEnabled() const noexcept { return is_coop; }
+    bool isGraphCacheEnabled() const noexcept { return is_graph_cache_enabled; }
+
+    void setShaderFolderPath(const std::string &_path) { shader_folder_path = _path; }
+    void setCooperativeMatrixEnabled(bool _enable)
+    {
+        if (_enable && (!context || !context->isCooperativeMatrixSupported()))
+        {
+            Logger::logMessage("Execution_Engine::setCooperativeMatrixEnabled: Device does not support Cooperative Matrix",
+                               Log_Level::LOG_WARNING,
+                               true,
+                               0,
+                               Log_Feature::DEVICE_MANAGEMENT);
+            return;
+        }
+
+        if (is_coop == _enable)
+        {
+            return;
+        }
+
+        waitIdle();
+        is_coop = _enable;
+        if (context)
+        {
+            context->setCooperativeMatrixEnabled(_enable);
+        }
+        invalidateGraphCache();
+    }
+    void setGraphCachingEnabled(bool _is_enabled)
+    {
+        is_graph_cache_enabled = _is_enabled;
+        if (!_is_enabled)
+        {
+            cached_graph_templates.clear();
+        }
+    }
+    void enableGraphCaching(bool _is_enabled) { setGraphCachingEnabled(_is_enabled); }
 };

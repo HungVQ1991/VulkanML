@@ -23,23 +23,22 @@ private:
     float momentum = 0.1f;
     bool is_training = true;
 
-    Matrix gamma;
-    Matrix beta;
-    Matrix gamma_gradient;
-    Matrix beta_gradient;
+    Tensor gamma;
+    Tensor beta;
+    Tensor gamma_gradient_tensor;
+    Tensor beta_gradient_tensor;
 
-    Matrix running_mean;
-    Matrix running_variance;
-    Matrix batch_mean;
-    Matrix batch_variance;
-    Matrix normalized_input;
+    Tensor running_mean;
+    Tensor running_variance;
+    Tensor batch_mean;
+    Tensor batch_variance;
+    Tensor normalized_input;
 
-    Matrix input_matrix;
-    Matrix output_matrix;
-    Matrix input_gradient;
+    Tensor input_tensor;
+    Tensor output_tensor;
+    Tensor input_gradient_tensor;
 
     bool is_forward_completed = false;
-    bool is_accumulated = false;
     Execution_Target execution_target = Execution_Target::CPU;
 
     void initializeParameters()
@@ -49,16 +48,16 @@ private:
         std::vector<float> mean_data(input_dimension, 0.0f);
         std::vector<float> variance_data(input_dimension, 1.0f);
 
-        gamma = Matrix(1, input_dimension, std::move(gamma_data), execution_target);
-        beta = Matrix(1, input_dimension, std::move(beta_data), execution_target);
-        gamma_gradient = Matrix(1, input_dimension, execution_target);
-        beta_gradient = Matrix(1, input_dimension, execution_target);
+        gamma = Tensor(1, input_dimension, std::move(gamma_data), execution_target);
+        beta = Tensor(1, input_dimension, std::move(beta_data), execution_target);
+        gamma_gradient_tensor = Tensor(1, input_dimension, execution_target);
+        beta_gradient_tensor = Tensor(1, input_dimension, execution_target);
 
-        running_mean = Matrix(1, input_dimension, std::move(mean_data), execution_target);
-        running_variance = Matrix(1, input_dimension, std::move(variance_data), execution_target);
+        running_mean = Tensor(1, input_dimension, std::move(mean_data), execution_target);
+        running_variance = Tensor(1, input_dimension, std::move(variance_data), execution_target);
 
-        batch_mean = Matrix(1, input_dimension, execution_target);
-        batch_variance = Matrix(1, input_dimension, execution_target);
+        batch_mean = Tensor(1, input_dimension, execution_target);
+        batch_variance = Tensor(1, input_dimension, execution_target);
     }
 
 public:
@@ -73,18 +72,17 @@ public:
           is_training(true),
           gamma(0, 0, _execution_target),
           beta(0, 0, _execution_target),
-          gamma_gradient(0, 0, _execution_target),
-          beta_gradient(0, 0, _execution_target),
+          gamma_gradient_tensor(0, 0, _execution_target),
+          beta_gradient_tensor(0, 0, _execution_target),
           running_mean(0, 0, _execution_target),
           running_variance(0, 0, _execution_target),
           batch_mean(0, 0, _execution_target),
           batch_variance(0, 0, _execution_target),
           normalized_input(0, 0, _execution_target),
-          input_matrix(0, 0, _execution_target),
-          output_matrix(0, 0, _execution_target),
-          input_gradient(0, 0, _execution_target),
+          input_tensor(0, 0, _execution_target),
+          output_tensor(0, 0, _execution_target),
+          input_gradient_tensor(0, 0, _execution_target),
           is_forward_completed(false),
-          is_accumulated(false),
           execution_target(_execution_target)
     {
         initializeParameters();
@@ -92,14 +90,9 @@ public:
 
     ~Batch_Norm_Layer() noexcept override = default;
 
-    void setTrainingMode(bool _is_training) override
+    Tensor forward(const Tensor &_input_tensor) override
     {
-        is_training = _is_training;
-    }
-
-    Matrix forward(const Matrix &_input_matrix) override
-    {
-        if (_input_matrix.getColumns() != input_dimension)
+        if (_input_tensor.getColumns() != input_dimension)
         {
             Logger::logMessage(Input_Format{"Batch_Norm_Layer::forward: Input dimension mismatch"},
                                Log_Level::LOG_ERROR,
@@ -117,13 +110,13 @@ public:
                            1,
                            Log_Feature::NORMALIZATION_COMPUTE | Log_Feature::FORWARD_EVALUATION);
 
-        input_matrix = _input_matrix;
-        if (input_matrix.getExecutionTarget() != execution_target)
+        input_tensor = _input_tensor;
+        if (input_tensor.getExecutionTarget() != execution_target)
         {
-            input_matrix.setExecutionTarget(execution_target);
+            input_tensor.setExecutionTarget(execution_target);
         }
 
-        input_matrix.batchNormForward(
+        input_tensor.batchNormForward(
             gamma,
             beta,
             running_mean,
@@ -131,13 +124,13 @@ public:
             batch_mean,
             batch_variance,
             normalized_input,
-            output_matrix,
+            output_tensor,
             epsilon,
             momentum,
             is_training);
 
         is_forward_completed = true;
-        return output_matrix;
+        return output_tensor;
     }
 
     Tensor forward(const Tensor& _batched_input, const std::vector<Tensor>& _batched_params) const override
@@ -145,7 +138,7 @@ public:
         if (_batched_params.size() != getPopulationParameterDims().size())
         {
             Logger::logMessage(Input_Format{ "Batch_Norm_Layer::forward: expected {} batched parameter tensors (gamma, beta, running_mean, running_variance), got {}",
-                                            getPopulationParameterDims().size(), _batched_params.size() },
+                                             getPopulationParameterDims().size(), _batched_params.size() },
                 Log_Level::LOG_ERROR,
                 true,
                 0,
@@ -155,7 +148,7 @@ public:
         Tensor batch_mean_tensor(getExecutionTarget());
         Tensor batch_variance_tensor(getExecutionTarget());
         Tensor normalized_input_tensor(getExecutionTarget());
-        Tensor output_tensor(getExecutionTarget());
+        Tensor output_tensor_result(getExecutionTarget());
 
         _batched_input.batchNormForward(
             _batched_params[0],
@@ -165,15 +158,15 @@ public:
             batch_mean_tensor,
             batch_variance_tensor,
             normalized_input_tensor,
-            output_tensor,
+            output_tensor_result,
             epsilon,
             momentum,
             is_training);
 
-        return output_tensor;
+        return output_tensor_result;
     }
 
-    Matrix backward(const Matrix &_output_gradient) override
+    Tensor backward(const Tensor &_output_gradient) override
     {
         if (!is_forward_completed)
         {
@@ -193,18 +186,42 @@ public:
                            1,
                            Log_Feature::NORMALIZATION_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
-        input_matrix.batchNormBackward(
-            _output_gradient,
-            gamma,
-            batch_variance,
-            normalized_input,
-            gamma_gradient,
-            beta_gradient,
-            input_gradient,
-            epsilon);
+        if (!is_accumulated)
+        {
+            input_tensor.batchNormBackward(
+                _output_gradient,
+                gamma,
+                batch_variance,
+                normalized_input,
+                gamma_gradient_tensor,
+                beta_gradient_tensor,
+                input_gradient_tensor,
+                epsilon);
+        }
+        else
+        {
+            Tensor step_gamma_grad(gamma_gradient_tensor.getShape(), execution_target);
+            Tensor step_beta_grad(beta_gradient_tensor.getShape(), execution_target);
+            input_tensor.batchNormBackward(
+                _output_gradient,
+                gamma,
+                batch_variance,
+                normalized_input,
+                step_gamma_grad,
+                step_beta_grad,
+                input_gradient_tensor,
+                epsilon);
+            gamma_gradient_tensor = gamma_gradient_tensor + step_gamma_grad;
+            beta_gradient_tensor = beta_gradient_tensor + step_beta_grad;
+        }
 
-        logBufferAddress(&input_matrix, "input_matrix (Backward)");
-        return input_gradient;
+        logBufferAddress(&input_tensor, "input_tensor (Backward)");
+        return input_gradient_tensor;
+    }
+
+    std::unique_ptr<ILayer> clone() const override
+    {
+        return std::make_unique<Batch_Norm_Layer>(input_dimension, epsilon, momentum, execution_target);
     }
 
     void resetGradient() override
@@ -212,61 +229,55 @@ public:
         is_forward_completed = false;
     }
 
-    const Matrix &getWeights() const override
+    void resetGradients() override
     {
-        return gamma;
+        resetGradient();
+        gamma_gradient_tensor.zero();
+        beta_gradient_tensor.zero();
     }
 
-    const Matrix &getBiases() const override
+    void saveConfiguration(std::ofstream &_output_file_stream) const override
     {
-        return beta;
+        std::uint32_t feature_count = static_cast<std::uint32_t>(input_dimension);
+        _output_file_stream.write(reinterpret_cast<const char *>(&feature_count), sizeof(feature_count));
+        _output_file_stream.write(reinterpret_cast<const char *>(&epsilon), sizeof(epsilon));
+        _output_file_stream.write(reinterpret_cast<const char *>(&momentum), sizeof(momentum));
     }
 
-    const Matrix &getWeightsGradient() const override
+    void saveInference(std::ofstream &_output_file_stream) const override
     {
-        return gamma_gradient;
+        gamma.saveTensor(_output_file_stream);
+        beta.saveTensor(_output_file_stream);
+        running_mean.saveTensor(_output_file_stream);
+        running_variance.saveTensor(_output_file_stream);
     }
 
-    const Matrix &getInput() const override
+    void loadInference(std::ifstream &_input_file_stream) override
     {
-        return input_matrix;
+        gamma = Tensor::loadTensor(_input_file_stream, execution_target);
+        beta = Tensor::loadTensor(_input_file_stream, execution_target);
+        running_mean = Tensor::loadTensor(_input_file_stream, execution_target);
+        running_variance = Tensor::loadTensor(_input_file_stream, execution_target);
     }
 
-    const Matrix &getOutput() const override
+    void saveCheckpoint(std::ofstream &_output_file_stream) const override
     {
-        return output_matrix;
+        gamma.saveTensor(_output_file_stream);
+        beta.saveTensor(_output_file_stream);
+        running_mean.saveTensor(_output_file_stream);
+        running_variance.saveTensor(_output_file_stream);
+        gamma_gradient_tensor.saveTensor(_output_file_stream);
+        beta_gradient_tensor.saveTensor(_output_file_stream);
     }
 
-    Execution_Target getExecutionTarget() const override { return execution_target; }
-
-    bool hasParameters() const noexcept override
+    void loadCheckpoint(std::ifstream &_input_file_stream) override
     {
-        return true;
-    }
-
-    bool supportsPopulationBatch() const noexcept override
-    {
-        return true;
-    }
-
-    Layer_Type getLayerType() const noexcept override
-    {
-        return Layer_Type::BATCH_NORM;
-    }
-
-    std::vector<Shape> getPopulationParameterDims() const override
-    {
-        return { Shape{ 1, input_dimension }, Shape{ 1, input_dimension }, Shape{ 1, input_dimension }, Shape{ 1, input_dimension } };
-    }
-
-    std::vector<bool> getPopulationParameterIsEvolvable() const override
-    {
-        return {true, true, false, false};
-    }
-
-    std::unique_ptr<ILayer> clone() const override
-    {
-        return std::make_unique<Batch_Norm_Layer>(input_dimension, epsilon, momentum, execution_target);
+        gamma = Tensor::loadTensor(_input_file_stream, execution_target);
+        beta = Tensor::loadTensor(_input_file_stream, execution_target);
+        running_mean = Tensor::loadTensor(_input_file_stream, execution_target);
+        running_variance = Tensor::loadTensor(_input_file_stream, execution_target);
+        gamma_gradient_tensor = Tensor::loadTensor(_input_file_stream, execution_target);
+        beta_gradient_tensor = Tensor::loadTensor(_input_file_stream, execution_target);
     }
 
     std::function<float(std::mt19937&)> getPopulationParameterInitializer(std::size_t param_index) const override
@@ -291,6 +302,49 @@ public:
                 return 0.0f;
             };
     }
+    std::vector<float> getPopulationParameter(std::size_t param_index) const override
+    {
+        switch (param_index)
+        {
+        case 0:
+            return gamma.getData();
+        case 1:
+            return beta.getData();
+        case 2:
+            return running_mean.getData();
+        case 3:
+            return running_variance.getData();
+        default:
+            throw std::out_of_range("Batch_Norm_Layer::getPopulationParameter: Parameter index out of range");
+        }
+    }
+    std::vector<Shape> getPopulationParameterDims() const override { return { Shape{ 1, input_dimension }, Shape{ 1, input_dimension }, Shape{ 1, input_dimension }, Shape{ 1, input_dimension } }; }
+    std::vector<bool> getPopulationParameterIsEvolvable() const override { return {true, true, false, false}; }
+    std::vector<std::pair<Tensor *, Tensor *>> getParametersAndGradients() override { return {{&gamma, &gamma_gradient_tensor}, {&beta, &beta_gradient_tensor}}; }
+    const Tensor &getWeightsGradient() const override { return gamma_gradient_tensor; }
+    const Tensor &getGammaGradient() const noexcept { return gamma_gradient_tensor; }
+    const Tensor &getBetaGradient() const noexcept { return beta_gradient_tensor; }
+    const Tensor &getRunningVariance() const noexcept { return running_variance; }
+    const Tensor &getInputGradient() const noexcept { return input_gradient_tensor; }
+    const Tensor &getNormalizedInput() const noexcept { return normalized_input; }
+    const Tensor &getBatchVariance() const noexcept { return batch_variance; }
+    const Tensor &getRunningMean() const noexcept { return running_mean; }
+    const Tensor &getBatchMean() const noexcept { return batch_mean; }
+    const Tensor &getWeights() const override { return gamma; }
+    const Tensor &getOutput() const override { return output_tensor; }
+    const Tensor &getBiases() const override { return beta; }
+    const Tensor &getInput() const override { return input_tensor; }
+    const Tensor &getGamma() const noexcept { return gamma; }
+    const Tensor &getBeta() const noexcept { return beta; }
+    std::size_t getInputDimension() const noexcept { return input_dimension; }
+    Execution_Target getExecutionTarget() const override { return execution_target; }
+    Layer_Type getLayerType() const noexcept override { return Layer_Type::BATCH_NORM; }
+    float getMomentum() const noexcept { return momentum; }
+    float getEpsilon() const noexcept { return epsilon; }
+    bool supportsPopulationBatch() const noexcept override { return true; }
+    bool isForwardCompleted() const noexcept { return is_forward_completed; }
+    bool hasParameters() const noexcept override { return true; }
+    bool isTraining() const noexcept { return is_training; }
 
     void setPopulationParameter(std::size_t param_index, std::vector<float> flat_data) override
     {
@@ -302,96 +356,34 @@ public:
         switch (param_index)
         {
         case 0:
-            gamma = Matrix(1, input_dimension, std::move(flat_data), execution_target);
+            gamma = Tensor(1, input_dimension, std::move(flat_data), execution_target);
             break;
         case 1:
-            beta = Matrix(1, input_dimension, std::move(flat_data), execution_target);
+            beta = Tensor(1, input_dimension, std::move(flat_data), execution_target);
             break;
         case 2:
-            running_mean = Matrix(1, input_dimension, std::move(flat_data), execution_target);
+            running_mean = Tensor(1, input_dimension, std::move(flat_data), execution_target);
             break;
         case 3:
-            running_variance = Matrix(1, input_dimension, std::move(flat_data), execution_target);
+            running_variance = Tensor(1, input_dimension, std::move(flat_data), execution_target);
             break;
         default:
             throw std::out_of_range("Batch_Norm_Layer::setPopulationParameter: Parameter index out of range");
         }
     }
-
-    bool isAccumulated() const noexcept
-    {
-        return is_accumulated;
-    }
-
-    void setAccumulated(bool _is_accumulated) noexcept
-    {
-        is_accumulated = _is_accumulated;
-    }
-
-    std::size_t getInputDimension() const noexcept
-    {
-        return input_dimension;
-    }
-
-    float getEpsilon() const noexcept
-    {
-        return epsilon;
-    }
-
-    float getMomentum() const noexcept
-    {
-        return momentum;
-    }
-
-    void saveConfiguration(std::ofstream &_output_file_stream) const override
-    {
-        std::uint32_t feature_count = static_cast<std::uint32_t>(input_dimension);
-        _output_file_stream.write(reinterpret_cast<const char *>(&feature_count), sizeof(feature_count));
-        _output_file_stream.write(reinterpret_cast<const char *>(&epsilon), sizeof(epsilon));
-        _output_file_stream.write(reinterpret_cast<const char *>(&momentum), sizeof(momentum));
-    }
-
-    void saveInference(std::ofstream &_output_file_stream) const override
-    {
-        gamma.saveMatrix(_output_file_stream);
-        beta.saveMatrix(_output_file_stream);
-        running_mean.saveMatrix(_output_file_stream);
-        running_variance.saveMatrix(_output_file_stream);
-    }
-
-    void loadInference(std::ifstream &_input_file_stream) override
-    {
-        gamma = Matrix::loadMatrix(_input_file_stream, execution_target);
-        beta = Matrix::loadMatrix(_input_file_stream, execution_target);
-        running_mean = Matrix::loadMatrix(_input_file_stream, execution_target);
-        running_variance = Matrix::loadMatrix(_input_file_stream, execution_target);
-    }
-
-    void saveCheckpoint(std::ofstream &_output_file_stream) const override
-    {
-        gamma.saveMatrix(_output_file_stream);
-        beta.saveMatrix(_output_file_stream);
-        running_mean.saveMatrix(_output_file_stream);
-        running_variance.saveMatrix(_output_file_stream);
-        gamma_gradient.saveMatrix(_output_file_stream);
-        beta_gradient.saveMatrix(_output_file_stream);
-    }
-
-    void loadCheckpoint(std::ifstream &_input_file_stream) override
-    {
-        gamma = Matrix::loadMatrix(_input_file_stream, execution_target);
-        beta = Matrix::loadMatrix(_input_file_stream, execution_target);
-        running_mean = Matrix::loadMatrix(_input_file_stream, execution_target);
-        running_variance = Matrix::loadMatrix(_input_file_stream, execution_target);
-        gamma_gradient = Matrix::loadMatrix(_input_file_stream, execution_target);
-        beta_gradient = Matrix::loadMatrix(_input_file_stream, execution_target);
-    }
-
-    std::vector<std::pair<Matrix *, Matrix *>> getParametersAndGradients() override
-    {
-        return {{&gamma, &gamma_gradient}, {&beta, &beta_gradient}};
-    }
-
+    void setGammaGradient(const Tensor &_tensor) { gamma_gradient_tensor = _tensor; }
+    void setBetaGradient(const Tensor &_tensor) { beta_gradient_tensor = _tensor; }
+    void setRunningVariance(const Tensor &_tensor) { running_variance = _tensor; }
+    void setInputGradient(const Tensor &_tensor) { input_gradient_tensor = _tensor; }
+    void setNormalizedInput(const Tensor &_tensor) { normalized_input = _tensor; }
+    void setBatchVariance(const Tensor &_tensor) { batch_variance = _tensor; }
+    void setRunningMean(const Tensor &_tensor) { running_mean = _tensor; }
+    void setBatchMean(const Tensor &_tensor) { batch_mean = _tensor; }
+    void setOutput(const Tensor &_tensor) { output_tensor = _tensor; }
+    void setGamma(const Tensor &_tensor) { gamma = _tensor; }
+    void setInput(const Tensor &_tensor) { input_tensor = _tensor; }
+    void setBeta(const Tensor &_tensor) { beta = _tensor; }
+    void setInputDimension(std::size_t _dimension) noexcept { input_dimension = _dimension; }
     void setExecutionTarget(Execution_Target _new_execution_target) override
     {
         if (execution_target == _new_execution_target)
@@ -404,15 +396,20 @@ public:
         execution_target = _new_execution_target;
         gamma.setExecutionTarget(_new_execution_target);
         beta.setExecutionTarget(_new_execution_target);
-        gamma_gradient.setExecutionTarget(_new_execution_target);
-        beta_gradient.setExecutionTarget(_new_execution_target);
+        gamma_gradient_tensor.setExecutionTarget(_new_execution_target);
+        beta_gradient_tensor.setExecutionTarget(_new_execution_target);
         running_mean.setExecutionTarget(_new_execution_target);
         running_variance.setExecutionTarget(_new_execution_target);
         batch_mean.setExecutionTarget(_new_execution_target);
         batch_variance.setExecutionTarget(_new_execution_target);
         normalized_input.setExecutionTarget(_new_execution_target);
-        input_matrix.setExecutionTarget(_new_execution_target);
-        output_matrix.setExecutionTarget(_new_execution_target);
-        input_gradient.setExecutionTarget(_new_execution_target);
+        input_tensor.setExecutionTarget(_new_execution_target);
+        output_tensor.setExecutionTarget(_new_execution_target);
+        input_gradient_tensor.setExecutionTarget(_new_execution_target);
     }
+    void setMomentum(float _momentum) noexcept { momentum = _momentum; }
+    void setEpsilon(float _epsilon) noexcept { epsilon = _epsilon; }
+    void setIsForwardCompleted(bool _is_completed) noexcept { is_forward_completed = _is_completed; }
+    void setTrainingMode(bool _is_training) override { is_training = _is_training; }
+    void setIsTraining(bool _is_training) noexcept { is_training = _is_training; }
 };

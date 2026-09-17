@@ -47,7 +47,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
 {
     if (_callback_data && _callback_data->pMessage)
     {
-        Logger::logMessage(std::format("debugCallback: Vulkan Validation Layer: {}", _callback_data->pMessage),
+        Logger::logMessage(Input_Format{"debugCallback: Vulkan Validation Layer: {}", _callback_data->pMessage},
                            Log_Level::LOG_WARNING,
                            true,
                            0,
@@ -109,7 +109,7 @@ private:
         {
             if (vkCreateFence(device, &fence_create_information, nullptr, &fences[i]) != VK_SUCCESS)
             {
-                Logger::logMessage(std::format("Vulkan_Context::initializeFences: Failed to create fence for frame {}", i),
+                Logger::logMessage(Input_Format{"Vulkan_Context::initializeFences: Failed to create fence for frame {}", i},
                                    Log_Level::LOG_ERROR,
                                    true,
                                    0,
@@ -180,8 +180,8 @@ private:
 
         if (limits.maxPerStageDescriptorStorageBuffers < REQUIRED_STORAGE_BUFFERS)
         {
-            Logger::logMessage(std::format("Vulkan_Context::hasRequiredDeviceLimits: Device lacks required maxPerStageDescriptorStorageBuffers ({} < {})",
-                                           limits.maxPerStageDescriptorStorageBuffers, REQUIRED_STORAGE_BUFFERS),
+            Logger::logMessage(Input_Format{"Vulkan_Context::hasRequiredDeviceLimits: Device lacks required maxPerStageDescriptorStorageBuffers ({} < {})",
+                                           limits.maxPerStageDescriptorStorageBuffers, REQUIRED_STORAGE_BUFFERS},
                                Log_Level::LOG_WARNING,
                                true,
                                0,
@@ -191,8 +191,8 @@ private:
 
         if (limits.maxDescriptorSetStorageBuffers < REQUIRED_STORAGE_BUFFERS)
         {
-            Logger::logMessage(std::format("Vulkan_Context::hasRequiredDeviceLimits: Device lacks required maxDescriptorSetStorageBuffers ({} < {})",
-                                           limits.maxDescriptorSetStorageBuffers, REQUIRED_STORAGE_BUFFERS),
+            Logger::logMessage(Input_Format{"Vulkan_Context::hasRequiredDeviceLimits: Device lacks required maxDescriptorSetStorageBuffers ({} < {})",
+                                           limits.maxDescriptorSetStorageBuffers, REQUIRED_STORAGE_BUFFERS},
                                Log_Level::LOG_WARNING,
                                true,
                                0,
@@ -202,8 +202,8 @@ private:
 
         if (limits.maxPushConstantsSize < REQUIRED_PUSH_CONSTANTS)
         {
-            Logger::logMessage(std::format("Vulkan_Context::hasRequiredDeviceLimits: Device lacks required maxPushConstantsSize ({} < {})",
-                                           limits.maxPushConstantsSize, REQUIRED_PUSH_CONSTANTS),
+            Logger::logMessage(Input_Format{"Vulkan_Context::hasRequiredDeviceLimits: Device lacks required maxPushConstantsSize ({} < {})",
+                                           limits.maxPushConstantsSize, REQUIRED_PUSH_CONSTANTS},
                                Log_Level::LOG_WARNING,
                                true,
                                0,
@@ -591,31 +591,6 @@ public:
         }
     }
 
-     VkInstance getInstance() const noexcept { return instance; }
-     VkPhysicalDevice getPhysicalDevice() const noexcept { return physical_device; }
-     VkDevice getDevice() const noexcept { return device; }
-     VkQueue getComputeQueue() const noexcept { return compute_queue; }
-     VkCommandPool getCommandPool() const noexcept { return command_pool; }
-     std::uint32_t getComputeQueueFamilyIndex() const noexcept { return compute_queue_family_index; }
-     VkPipelineCache getPipelineCache() const noexcept { return pipeline_cache; }
-     Vulkan_Sub_Allocator &getAllocator() const noexcept { return *allocator; }
-     VkFence getFrameFence(std::uint32_t _frame_index) const noexcept { return fences[_frame_index]; }
-     std::uint32_t getCurrentFrame() const noexcept { return current_frame; }
-     bool isFrameReady(std::uint32_t _frame_index) const noexcept { return is_frame_ready[_frame_index]; }
-     VkBuffer getStagingBuffer(std::uint32_t _frame_index) const noexcept { return staging_buffers[_frame_index]; }
-     VkDeviceSize getStagingCapacity(std::uint32_t _frame_index) const noexcept { return staging_capacities[_frame_index]; }
-     VkDeviceSize getCurrentStagingOffset(std::uint32_t _frame_index) const noexcept { return current_offsets[_frame_index]; }
-     bool isCooperativeMatrixSupported() const noexcept { return is_cooperative_matrix_supported; }
-     bool isCooperativeMatrixEnabled() const noexcept { return is_cooperative_matrix_supported && is_cooperative_matrix_enabled; }
-     const VkCooperativeMatrixPropertiesKHR &getCooperativeMatrixProperties() const noexcept { return cooperative_matrix_properties; }
-
-    void setCooperativeMatrixEnabled(bool _enable) noexcept
-    {
-        if (is_cooperative_matrix_supported)
-        {
-            is_cooperative_matrix_enabled = _enable;
-        }
-    }
 
     std::uint32_t findMemoryType(std::uint32_t _type_filter, VkMemoryPropertyFlags _memory_properties) const
     {
@@ -642,7 +617,7 @@ public:
 
         if (_frame_index >= MAX_FRAMES_IN_FLIGHT)
         {
-            Logger::logMessage(std::format("Vulkan_Context::allocateStagingSpace: frame_index out of bounds ({})", _frame_index),
+            Logger::logMessage(Input_Format{"Vulkan_Context::allocateStagingSpace: frame_index out of bounds ({})", _frame_index},
                                Log_Level::LOG_WARNING,
                                true,
                                0,
@@ -656,7 +631,7 @@ public:
             VkDeviceSize calculated_size = std::max(staging_capacities[_frame_index] * 2, current_offsets[_frame_index] + _size + 1024 * 1024);
             VkDeviceSize new_capacity = std::max(INITIAL_STAGING_CAPACITY, calculated_size);
 
-            Logger::logMessage(std::format("Vulkan_Context::allocateStagingSpace: Reallocating staging buffer for frame {} to new capacity {} bytes", _frame_index, new_capacity),
+            Logger::logMessage(Input_Format{"Vulkan_Context::allocateStagingSpace: Reallocating staging buffer for frame {} to new capacity {} bytes", _frame_index, new_capacity},
                                Log_Level::LOG_WARNING,
                                false,
                                0,
@@ -745,7 +720,7 @@ public:
         void *target_pointer = static_cast<char *>(staging_mapped_pointers[_frame_index]) + _out_offset;
         current_offsets[_frame_index] += _size;
 
-        Logger::logMessage(std::format("Vulkan_Context::allocateStagingSpace: Allocated {} bytes in staging buffer for frame {}", _size, _frame_index),
+        Logger::logMessage(Input_Format{"Vulkan_Context::allocateStagingSpace: Allocated {} bytes in staging buffer for frame {}", _size, _frame_index},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -758,7 +733,7 @@ public:
     {
         if (_frame_index >= MAX_FRAMES_IN_FLIGHT)
         {
-            Logger::logMessage(std::format("Vulkan_Context::resetFrameFence: frame_index out of bounds ({})", _frame_index),
+            Logger::logMessage(Input_Format{"Vulkan_Context::resetFrameFence: frame_index out of bounds ({})", _frame_index},
                                Log_Level::LOG_WARNING,
                                true,
                                0,
@@ -766,11 +741,6 @@ public:
             return;
         }
         vkResetFences(device, 1, &fences[_frame_index]);
-    }
-
-    void registerFlushCallback(std::function<void(VkFence)> _callback) const
-    {
-        flush_callback = _callback;
     }
 
     void flush(VkFence _fence = VK_NULL_HANDLE) const
@@ -798,7 +768,7 @@ public:
     {
         if (_frame_index >= MAX_FRAMES_IN_FLIGHT)
         {
-            Logger::logMessage(std::format("Vulkan_Context::resetStagingOffset: frame_index out of bounds ({})", _frame_index),
+            Logger::logMessage(Input_Format{"Vulkan_Context::resetStagingOffset: frame_index out of bounds ({})", _frame_index},
                                Log_Level::LOG_WARNING,
                                true,
                                0,
@@ -815,11 +785,6 @@ public:
         pending_transfer_tasks.push_back(_task);
     }
 
-    const std::vector<Buffer_Transfer_Task> &getTransferTasks() const
-    {
-        std::lock_guard<std::mutex> lock(context_mutex);
-        return pending_transfer_tasks;
-    }
 
     void clearTransferTasks() const
     {
@@ -942,7 +907,7 @@ public:
     {
         if (_frame_index >= MAX_FRAMES_IN_FLIGHT)
         {
-            Logger::logMessage(std::format("Vulkan_Context::cleanGarbage: frame_index out of bounds ({})", _frame_index),
+            Logger::logMessage(Input_Format{"Vulkan_Context::cleanGarbage: frame_index out of bounds ({})", _frame_index},
                                Log_Level::LOG_WARNING,
                                true,
                                0,
@@ -974,7 +939,7 @@ public:
 
         if (!local_bin.empty())
         {
-            Logger::logMessage(std::format("Vulkan_Context::cleanGarbage: Cleaning {} garbage items for frame {}", local_bin.size(), _frame_index),
+            Logger::logMessage(Input_Format{"Vulkan_Context::cleanGarbage: Cleaning {} garbage items for frame {}", local_bin.size(), _frame_index},
                                Log_Level::LOG_DEBUG,
                                true,
                                0,
@@ -1003,7 +968,7 @@ public:
 
         if (device == VK_NULL_HANDLE || fences[current_frame] == VK_NULL_HANDLE)
         {
-            Logger::logMessage(std::format("Vulkan_Context::prepareFrame: Invalid device or fence handle for frame {}", current_frame),
+            Logger::logMessage(Input_Format{"Vulkan_Context::prepareFrame: Invalid device or fence handle for frame {}", current_frame},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -1025,7 +990,7 @@ public:
     {
         is_frame_ready[current_frame] = false;
         current_frame = (current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
-        Logger::logMessage(std::format("Vulkan_Context::advanceFrame: Advanced current frame to {}", current_frame),
+        Logger::logMessage(Input_Format{"Vulkan_Context::advanceFrame: Advanced current frame to {}", current_frame},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -1056,10 +1021,45 @@ public:
             .size = _size};
 
         addTransferTask(transfer_task);
-        Logger::logMessage(std::format("Vulkan_Context::copyBuffer: Enqueued transfer task of size {} bytes", _size),
+        Logger::logMessage(Input_Format{"Vulkan_Context::copyBuffer: Enqueued transfer task of size {} bytes", _size},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
                            Log_Feature::MEMORY_TRANSFER);
+    }
+
+    Vulkan_Sub_Allocator &getAllocator() const noexcept { return *allocator; }
+    const VkCooperativeMatrixPropertiesKHR &getCooperativeMatrixProperties() const noexcept { return cooperative_matrix_properties; }
+    const std::vector<Buffer_Transfer_Task> &getTransferTasks() const
+    {
+        std::lock_guard<std::mutex> lock(context_mutex);
+        return pending_transfer_tasks;
+    }
+    VkDeviceSize getCurrentStagingOffset(std::uint32_t _frame_index) const noexcept { return current_offsets[_frame_index]; }
+    VkDeviceSize getStagingCapacity(std::uint32_t _frame_index) const noexcept { return staging_capacities[_frame_index]; }
+    VkBuffer getStagingBuffer(std::uint32_t _frame_index) const noexcept { return staging_buffers[_frame_index]; }
+    VkFence getFrameFence(std::uint32_t _frame_index) const noexcept { return fences[_frame_index]; }
+    VkPhysicalDevice getPhysicalDevice() const noexcept { return physical_device; }
+    VkPipelineCache getPipelineCache() const noexcept { return pipeline_cache; }
+    VkCommandPool getCommandPool() const noexcept { return command_pool; }
+    VkQueue getComputeQueue() const noexcept { return compute_queue; }
+    VkInstance getInstance() const noexcept { return instance; }
+    VkDevice getDevice() const noexcept { return device; }
+    std::uint32_t getComputeQueueFamilyIndex() const noexcept { return compute_queue_family_index; }
+    std::uint32_t getCurrentFrame() const noexcept { return current_frame; }
+    bool isCooperativeMatrixEnabled() const noexcept { return is_cooperative_matrix_supported && is_cooperative_matrix_enabled; }
+    bool isCooperativeMatrixSupported() const noexcept { return is_cooperative_matrix_supported; }
+    bool isFrameReady(std::uint32_t _frame_index) const noexcept { return is_frame_ready[_frame_index]; }
+
+    void setCooperativeMatrixProperties(const VkCooperativeMatrixPropertiesKHR &_properties) noexcept { cooperative_matrix_properties = _properties; }
+    void registerFlushCallback(std::function<void(VkFence)> _callback) const { flush_callback = _callback; }
+    void setComputeQueueFamilyIndex(std::uint32_t _index) noexcept { compute_queue_family_index = _index; }
+    void setCurrentFrame(std::uint32_t _frame) const noexcept { current_frame = _frame; }
+    void setCooperativeMatrixEnabled(bool _enable) noexcept
+    {
+        if (is_cooperative_matrix_supported)
+        {
+            is_cooperative_matrix_enabled = _enable;
+        }
     }
 };

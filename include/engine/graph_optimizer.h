@@ -30,6 +30,14 @@ struct Buffer_Binding_Mapping
     std::uint32_t raw_node_index = 0;
     std::uint32_t raw_buffer_index = 0;
     std::uint32_t fused_buffer_index = 0;
+
+    std::uint32_t getFusedBufferIndex() const noexcept { return fused_buffer_index; }
+    std::uint32_t getRawBufferIndex() const noexcept { return raw_buffer_index; }
+    std::uint32_t getRawNodeIndex() const noexcept { return raw_node_index; }
+
+    void setFusedBufferIndex(std::uint32_t _index) noexcept { fused_buffer_index = _index; }
+    void setRawBufferIndex(std::uint32_t _index) noexcept { raw_buffer_index = _index; }
+    void setRawNodeIndex(std::uint32_t _index) noexcept { raw_node_index = _index; }
 };
 
 struct Push_Constant_Mapping
@@ -37,6 +45,14 @@ struct Push_Constant_Mapping
     std::uint32_t raw_node_index = 0;
     std::uint32_t fused_push_constants_offset = 0;
     std::uint32_t push_constants_size = 0;
+
+    std::uint32_t getFusedPushConstantsOffset() const noexcept { return fused_push_constants_offset; }
+    std::uint32_t getPushConstantsSize() const noexcept { return push_constants_size; }
+    std::uint32_t getRawNodeIndex() const noexcept { return raw_node_index; }
+
+    void setFusedPushConstantsOffset(std::uint32_t _offset) noexcept { fused_push_constants_offset = _offset; }
+    void setPushConstantsSize(std::uint32_t _size) noexcept { push_constants_size = _size; }
+    void setRawNodeIndex(std::uint32_t _index) noexcept { raw_node_index = _index; }
 };
 
 struct Cached_Graph_Template
@@ -45,34 +61,10 @@ struct Cached_Graph_Template
     std::vector<std::vector<Buffer_Binding_Mapping>> buffer_mappings;
     std::vector<std::vector<Push_Constant_Mapping>> push_constants_mappings;
     std::vector<std::vector<std::uint32_t>> raw_node_indices;
+    mutable std::array<Compute_Graph, MAX_FRAMES_IN_FLIGHT> instantiated_graphs;
     std::size_t total_buffer_mappings = 0;
     mutable bool is_mapping_log_enabled = true;
     bool is_valid = false;
-
-     const std::vector<Compute_Node> &getFusedNodes() const noexcept
-    {
-        return fused_nodes;
-    }
-
-     const std::vector<std::vector<Buffer_Binding_Mapping>> &getBufferMappings() const noexcept
-    {
-        return buffer_mappings;
-    }
-
-     const std::vector<std::vector<Push_Constant_Mapping>> &getPushConstantsMappings() const noexcept
-    {
-        return push_constants_mappings;
-    }
-
-     const std::vector<std::vector<std::uint32_t>> &getRawNodeIndices() const noexcept
-    {
-        return raw_node_indices;
-    }
-
-     bool isValid() const noexcept
-    {
-        return is_valid;
-    }
 
     void clear() noexcept
     {
@@ -80,10 +72,33 @@ struct Cached_Graph_Template
         buffer_mappings.clear();
         push_constants_mappings.clear();
         raw_node_indices.clear();
+        for (auto &graph : instantiated_graphs)
+        {
+            graph.clear();
+        }
         total_buffer_mappings = 0;
         is_mapping_log_enabled = true;
         is_valid = false;
     }
+
+    const std::vector<std::vector<Push_Constant_Mapping>> &getPushConstantsMappings() const noexcept { return push_constants_mappings; }
+    const std::vector<std::vector<Buffer_Binding_Mapping>> &getBufferMappings() const noexcept { return buffer_mappings; }
+    const std::array<Compute_Graph, MAX_FRAMES_IN_FLIGHT> &getInstantiatedGraphs() const noexcept { return instantiated_graphs; }
+    std::array<Compute_Graph, MAX_FRAMES_IN_FLIGHT> &getInstantiatedGraphs() noexcept { return instantiated_graphs; }
+    const std::vector<std::vector<std::uint32_t>> &getRawNodeIndices() const noexcept { return raw_node_indices; }
+    const std::vector<Compute_Node> &getFusedNodes() const noexcept { return fused_nodes; }
+    std::size_t getTotalBufferMappings() const noexcept { return total_buffer_mappings; }
+    bool isMappingLogEnabled() const noexcept { return is_mapping_log_enabled; }
+    bool isValid() const noexcept { return is_valid; }
+
+    void setInstantiatedGraphs(const std::array<Compute_Graph, MAX_FRAMES_IN_FLIGHT> &_graphs) { instantiated_graphs = _graphs; }
+    void setPushConstantsMappings(const std::vector<std::vector<Push_Constant_Mapping>> &_mappings) { push_constants_mappings = _mappings; }
+    void setBufferMappings(const std::vector<std::vector<Buffer_Binding_Mapping>> &_mappings) { buffer_mappings = _mappings; }
+    void setRawNodeIndices(const std::vector<std::vector<std::uint32_t>> &_indices) { raw_node_indices = _indices; }
+    void setFusedNodes(const std::vector<Compute_Node> &_nodes) { fused_nodes = _nodes; }
+    void setTotalBufferMappings(std::size_t _total) noexcept { total_buffer_mappings = _total; }
+    void setMappingLogEnabled(bool _enabled) noexcept { is_mapping_log_enabled = _enabled; }
+    void setValid(bool _valid) noexcept { is_valid = _valid; }
 };
 
 class Graph_Optimizer
@@ -797,41 +812,52 @@ public:
 #endif
     }
 
-    static void applyCachedTemplate(
+    static void applyCachedTemplateInPlace(
         const Compute_Graph &_raw_graph,
         const Cached_Graph_Template &_graph_template,
-        Compute_Graph &_output_graph)
+        Compute_Graph &_cached_graph)
     {
 #if !ENABLE_SHADER_FUSION
-        _output_graph = _raw_graph;
-        auto nodes = _output_graph.getNodes();
+        _cached_graph = _raw_graph;
+        auto &nodes = _cached_graph.getNodes();
         assignPipelineBarriers(nodes);
-        _output_graph.clear();
-        for (const auto &node : nodes)
-        {
-            _output_graph.addNode(node);
-        }
+        return;
 #else
         if (!_graph_template.is_valid)
         {
-            _output_graph = _raw_graph;
-            auto nodes = _output_graph.getNodes();
+            _cached_graph = _raw_graph;
+            auto &nodes = _cached_graph.getNodes();
             assignPipelineBarriers(nodes);
-            _output_graph.clear();
-            for (const auto &node : nodes)
-            {
-                _output_graph.addNode(node);
-            }
             return;
+        }
+
+        bool needs_init = (_cached_graph.getNodeCount() != _graph_template.fused_nodes.size());
+        if (!needs_init)
+        {
+            for (std::size_t i = 0; i < _graph_template.fused_nodes.size(); ++i)
+            {
+                if (_cached_graph.getNodes()[i].pipeline_id != _graph_template.fused_nodes[i].pipeline_id ||
+                    _cached_graph.getNodes()[i].is_fused != _graph_template.fused_nodes[i].is_fused ||
+                    _cached_graph.getNodes()[i].buffers.size() != _graph_template.fused_nodes[i].buffers.size())
+                {
+                    needs_init = true;
+                    break;
+                }
+            }
+        }
+
+        if (needs_init)
+        {
+            _cached_graph.setNodes(_graph_template.fused_nodes);
         }
 
         const auto &raw_nodes = _raw_graph.getNodes();
         const Shader_Dictionary &shader_dictionary = Shader_Dictionary::getInstance();
-        _output_graph.clear();
+        auto &cached_nodes = _cached_graph.getNodes();
 
         for (std::size_t node_index = 0; node_index < _graph_template.fused_nodes.size(); ++node_index)
         {
-            Compute_Node node = _graph_template.fused_nodes[node_index];
+            Compute_Node &node = cached_nodes[node_index];
 
             for (const auto &buffer_binding_mapping : _graph_template.buffer_mappings[node_index])
             {
@@ -844,21 +870,21 @@ public:
                     if (_graph_template.is_mapping_log_enabled)
                     {
                         _graph_template.is_mapping_log_enabled = Logger::logMessage(
-                            std::format(
+                            Input_Format{
                                 "Graph_Optimizer::applyCachedTemplate: Fused Node {} | Binding buffer_{} <- Raw Node {}[Buffer {}] (Old ID: {}, New ID: {})",
                                 node_index,
                                 buffer_binding_mapping.fused_buffer_index,
                                 buffer_binding_mapping.raw_node_index,
                                 buffer_binding_mapping.raw_buffer_index,
                                 old_buffer ? old_buffer->getId() : 0,
-                                new_buffer ? new_buffer->getId() : 0),
+                                new_buffer ? new_buffer->getId() : 0},
                             Log_Level::LOG_DEBUG,
                             true,
                             _graph_template.total_buffer_mappings,
                             Log_Feature::OPERATOR_FUSION);
                     }
 
-                    node.buffers[buffer_binding_mapping.fused_buffer_index] = raw_nodes[buffer_binding_mapping.raw_node_index].buffers[buffer_binding_mapping.raw_buffer_index];
+                    node.buffers[buffer_binding_mapping.fused_buffer_index] = new_buffer;
                 }
             }
 
@@ -910,9 +936,19 @@ public:
                     }
                 }
             }
-
-            _output_graph.addNode(std::move(node));
         }
 #endif
     }
+
+    static void applyCachedTemplate(
+        const Compute_Graph &_raw_graph,
+        const Cached_Graph_Template &_graph_template,
+        Compute_Graph &_output_graph)
+    {
+        applyCachedTemplateInPlace(_raw_graph, _graph_template, _output_graph);
+    }
+
+    static constexpr std::size_t getMaxPushConstantsBytes() noexcept { return MAX_PUSH_CONSTANTS_BYTES; }
+    static constexpr std::size_t getMaxStorageBufferBindings() noexcept { return MAX_STORAGE_BUFFER_BINDINGS; }
+    static constexpr std::size_t getMaxFusedOperations() noexcept { return MAX_FUSED_OPERATIONS; }
 };

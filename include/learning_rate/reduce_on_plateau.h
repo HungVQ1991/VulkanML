@@ -83,11 +83,6 @@ public:
 
     ~Reduce_On_Plateau() noexcept override = default;
 
-     Decay_Mode getType() const noexcept override
-    {
-        return Decay_Mode::REDUCE_ON_PLATEAU;
-    }
-
     float updateRate() override
     {
         float calculated_rate = learning_rate * std::pow(decay_rate, static_cast<float>(reductions_count));
@@ -100,19 +95,14 @@ public:
                                Log_Feature::LR_SCHEDULER);
         }
         current_learning_rate = std::max(minimum_learning_rate, calculated_rate);
-        Logger::logMessage(std::format("Reduce_On_Plateau::updateRate: reductions_count={}, current_rate={}",
-                                       reductions_count,
-                                       current_learning_rate),
+        Logger::logMessage(Input_Format{"Reduce_On_Plateau::updateRate: reductions_count={}, current_rate={}",
+                                        reductions_count,
+                                        current_learning_rate},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
                            Log_Feature::LR_SCHEDULER);
         return current_learning_rate;
-    }
-
-     float getLearningRate() const noexcept override
-    {
-        return learning_rate;
     }
 
     void step(float _current_value = 0.0f) override
@@ -133,9 +123,9 @@ public:
             else
             {
                 bad_epochs_count++;
-                Logger::logMessage(std::format("Reduce_On_Plateau::step: Plateau detected, bad_epochs_count={}/{}",
-                                               bad_epochs_count,
-                                               patience),
+                Logger::logMessage(Input_Format{"Reduce_On_Plateau::step: Plateau detected, bad_epochs_count={}/{}",
+                                                bad_epochs_count,
+                                                patience},
                                    Log_Level::LOG_WARNING,
                                    false,
                                    0,
@@ -144,8 +134,8 @@ public:
                 {
                     reductions_count++;
                     bad_epochs_count = 0;
-                    Logger::logMessage(std::format("Reduce_On_Plateau::step: Patience exhausted, triggering learning rate reduction #{}",
-                                                   reductions_count),
+                    Logger::logMessage(Input_Format{"Reduce_On_Plateau::step: Patience exhausted, triggering learning rate reduction #{}",
+                                                    reductions_count},
                                        Log_Level::LOG_WARNING,
                                        true,
                                        0,
@@ -155,19 +145,14 @@ public:
             }
         }
         current_epoch++;
-        Logger::logMessage(std::format("Reduce_On_Plateau::step: epoch={}, current_value={}, best_metric={}",
-                                       current_epoch,
-                                       _current_value,
-                                       best_metric),
+        Logger::logMessage(Input_Format{"Reduce_On_Plateau::step: epoch={}, current_value={}, best_metric={}",
+                                        current_epoch,
+                                        _current_value,
+                                        best_metric},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
                            Log_Feature::LR_SCHEDULER);
-    }
-
-     float getCurrentRate() const noexcept override
-    {
-        return current_learning_rate;
     }
 
     void saveCheckpoint(std::ofstream &_output_file_stream) const override
@@ -199,4 +184,29 @@ public:
         _input_file_stream.read(reinterpret_cast<char *>(&is_higher_better), sizeof(is_higher_better));
         _input_file_stream.read(reinterpret_cast<char *>(&is_first_step), sizeof(is_first_step));
     }
+
+    float getMinimumLearningRate() const noexcept { return minimum_learning_rate; }
+    float getCurrentRate() const noexcept override { return current_learning_rate; }
+    float getLearningRate() const noexcept override { return learning_rate; }
+    float getDecayRate() const noexcept { return decay_rate; }
+    float getBestMetric() const noexcept { return best_metric; }
+    Decay_Mode getType() const noexcept override { return Decay_Mode::REDUCE_ON_PLATEAU; }
+    int getBadEpochsCount() const noexcept { return bad_epochs_count; }
+    int getReductionsCount() const noexcept { return reductions_count; }
+    int getCurrentEpoch() const noexcept { return current_epoch; }
+    int getPatience() const noexcept { return patience; }
+    bool isHigherBetter() const noexcept { return is_higher_better; }
+    bool isFirstStep() const noexcept { return is_first_step; }
+
+    void setMinimumLearningRate(float _minimum_learning_rate) noexcept { minimum_learning_rate = _minimum_learning_rate; }
+    void setCurrentRate(float _current_rate) noexcept { current_learning_rate = _current_rate; }
+    void setLearningRate(float _learning_rate) noexcept { learning_rate = _learning_rate; }
+    void setDecayRate(float _decay_rate) noexcept { decay_rate = _decay_rate; }
+    void setBestMetric(float _best_metric) noexcept { best_metric = _best_metric; }
+    void setBadEpochsCount(int _bad_epochs_count) noexcept { bad_epochs_count = _bad_epochs_count; }
+    void setReductionsCount(int _reductions_count) noexcept { reductions_count = _reductions_count; }
+    void setCurrentEpoch(int _current_epoch) noexcept { current_epoch = _current_epoch; }
+    void setPatience(int _patience) noexcept { patience = _patience; }
+    void setIsHigherBetter(bool _is_higher_better) noexcept { is_higher_better = _is_higher_better; }
+    void setIsFirstStep(bool _is_first_step) noexcept { is_first_step = _is_first_step; }
 };

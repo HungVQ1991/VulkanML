@@ -28,10 +28,11 @@ class Neural_Network
 {
 private:
     std::vector<std::unique_ptr<ILayer>> layers;
-    Matrix last_prediction;
+    Tensor last_prediction;
     Execution_Target execution_target = Execution_Target::CPU;
     Training_Context training_context;
     bool is_target_synchronized = false;
+    bool is_gradient_accumulation_enabled = false;
 
 public:
     explicit Neural_Network(Execution_Target _execution_target = Execution_Target::CPU)
@@ -65,8 +66,9 @@ public:
             throw std::invalid_argument("Cannot add null layer pointer");
         }
         _layer->setExecutionTarget(execution_target);
-        Logger::logMessage(std::format("Neural_Network::addLayer: Added layer type {}",
-                                       magic_enum::enum_name<Layer_Type>(_layer->getLayerType())),
+        _layer->setAccumulated(is_gradient_accumulation_enabled);
+        Logger::logMessage(Input_Format{"Neural_Network::addLayer: Added layer type {}",
+                                        magic_enum::enum_name<Layer_Type>(_layer->getLayerType())},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -83,47 +85,15 @@ public:
         return layer_reference;
     }
 
-    void setExecutionTarget(Execution_Target _new_execution_target)
+    void zeroGradients()
     {
-        if (execution_target != _new_execution_target)
-        {
-            Logger::logMessage(std::format("Neural_Network::setExecutionTarget: Changing network execution target from {} to {}",
-                                           magic_enum::enum_name(execution_target),
-                                           magic_enum::enum_name(_new_execution_target)),
-                               Log_Level::LOG_WARNING,
-                               true,
-                               1,
-                               Log_Feature::DEVICE_MANAGEMENT);
-        }
-        execution_target = _new_execution_target;
-        last_prediction.setExecutionTarget(_new_execution_target);
         for (auto &layer : layers)
         {
-            layer->setExecutionTarget(_new_execution_target);
-        }
-        is_target_synchronized = true;
-    }
-
-    void setTarget(Execution_Target _new_execution_target)
-    {
-        setExecutionTarget(_new_execution_target);
-    }
-
-    void setTrainingMode(bool _is_training_mode)
-    {
-        Logger::logMessage(std::format("Neural_Network::setTrainingMode: Setting training mode to {}",
-                                       _is_training_mode ? "true" : "false"),
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::TRAINING);
-        for (auto &layer : layers)
-        {
-            layer->setTrainingMode(_is_training_mode);
+            layer->resetGradients();
         }
     }
 
-    Matrix forward(const Matrix &_input_matrix)
+    Tensor forward(const Tensor &_input_tensor)
     {
         if (layers.empty())
         {
@@ -135,7 +105,7 @@ public:
             throw std::logic_error("Neural network has no layers to execute forward pass");
         }
 
-        Matrix current_output = _input_matrix;
+        Tensor current_output = _input_tensor;
         for (const auto &layer : layers)
         {
             current_output = layer->forward(current_output);
@@ -144,7 +114,7 @@ public:
         return current_output;
     }
 
-    Matrix backward(const Matrix &_target_matrix)
+    Tensor backward(const Tensor &_target_tensor)
     {
         if (layers.empty())
         {
@@ -155,21 +125,29 @@ public:
                                Log_Feature::BACKWARD_PROPAGATION);
             throw std::runtime_error("Network has no layers");
         }
-        const ICost_Function &cost_function = training_context.getCostFunction();
-
-        Matrix last_prediction_output = layers.back()->getOutput();
-        Matrix gradient_matrix = cost_function.computeGradient(last_prediction_output, _target_matrix);
-        for (std::size_t i = layers.size(); i > 0; --i)
+        Tensor gradient_tensor;
+        if (training_context.hasCostFunction())
         {
-            gradient_matrix = layers[i - 1]->backward(gradient_matrix);
+            const ICost_Function &cost_function = training_context.getCostFunction();
+            Tensor last_prediction_output = layers.back()->getOutput();
+            gradient_tensor = cost_function.computeGradient(last_prediction_output, _target_tensor);
+        }
+        else
+        {
+            gradient_tensor = _target_tensor;
         }
 
-        return gradient_matrix;
+        for (std::size_t i = layers.size(); i > 0; --i)
+        {
+            gradient_tensor = layers[i - 1]->backward(gradient_tensor);
+        }
+
+        return gradient_tensor;
     }
 
-    std::vector<std::pair<Matrix *, Matrix *>> getParametersAndGradients()
+    std::vector<std::pair<Tensor *, Tensor *>> getParametersAndGradients()
     {
-        std::vector<std::pair<Matrix *, Matrix *>> parameter_gradient_pairs;
+        std::vector<std::pair<Tensor *, Tensor *>> parameter_gradient_pairs;
         for (auto &layer : layers)
         {
             if (layer->hasParameters())
@@ -181,7 +159,7 @@ public:
         return parameter_gradient_pairs;
     }
 
-    std::vector<std::pair<Matrix *, Matrix *>> getParamsAndGrads()
+    std::vector<std::pair<Tensor *, Tensor *>> getParamsAndGrads()
     {
         return getParametersAndGradients();
     }
@@ -206,7 +184,7 @@ public:
 
     void resetGradients()
     {
-        reset();
+        zeroGradients();
     }
 
     void compileAndWarmup(std::size_t _batch_size, std::size_t _input_dimension, std::size_t _output_dimension)
@@ -221,8 +199,8 @@ public:
             return;
         }
 
-        Matrix dummy_input(_batch_size, _input_dimension, execution_target);
-        Matrix dummy_target(_batch_size, _output_dimension, execution_target);
+        Tensor dummy_input(_batch_size, _input_dimension, execution_target);
+        Tensor dummy_target(_batch_size, _output_dimension, execution_target);
 
         forward(dummy_input);
         backward(dummy_target);
@@ -249,9 +227,9 @@ public:
         auto parameter_gradient_pairs = getParametersAndGradients();
         std::size_t parameter_index = 0;
 
-        auto compute_l2_norm = [](const Matrix &_matrix) -> float
+        auto compute_l2_norm = [](const Tensor &_tensor) -> float
         {
-            const auto &data = _matrix.getData();
+            const auto &data = _tensor.getData();
             float sum_of_squares = 0.0f;
             for (float value : data)
             {
@@ -284,22 +262,22 @@ public:
         Logger::logMessage(inspection_result, Log_Level::LOG_DEBUG, true, 0, Log_Feature::LAYER_INSPECTION);
     }
 
-    void trainStep(Matrix &_input_matrix, Matrix &_target_matrix, VkFence _fence = VK_NULL_HANDLE)
+    void trainStep(Tensor &_input_tensor, Tensor &_target_tensor, VkFence _fence = VK_NULL_HANDLE)
     {
         Execution_Engine &engine = Execution_Engine::getInstance();
 
-        if (_input_matrix.getExecutionTarget() != execution_target)
+        if (_input_tensor.getExecutionTarget() != execution_target)
         {
-            _input_matrix.setExecutionTarget(execution_target);
+            _input_tensor.setExecutionTarget(execution_target);
         }
 
-        if (_target_matrix.getExecutionTarget() != execution_target)
+        if (_target_tensor.getExecutionTarget() != execution_target)
         {
-            _target_matrix.setExecutionTarget(execution_target);
+            _target_tensor.setExecutionTarget(execution_target);
         }
 
-        forward(_input_matrix);
-        backward(_target_matrix);
+        forward(_input_tensor);
+        backward(_target_tensor);
 
         // printL2Norms();
 
@@ -400,7 +378,7 @@ public:
         std::ofstream output_file_stream(_file_path, std::ios::binary);
         if (!output_file_stream.is_open())
         {
-            Logger::logMessage(std::format("Neural_Network::saveInference: Failed to open file: {}", _file_path),
+            Logger::logMessage(Input_Format{"Neural_Network::saveInference: Failed to open file: {}", _file_path},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -408,7 +386,7 @@ public:
             throw std::runtime_error("Failed to open file for saving inference model");
         }
 
-        Logger::logMessage(std::format("Neural_Network::saveInference: Saving inference model to {}", _file_path),
+        Logger::logMessage(Input_Format{"Neural_Network::saveInference: Saving inference model to {}", _file_path},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -434,7 +412,7 @@ public:
                 layer->saveInference(output_file_stream);
             }
         }
-        Logger::logMessage("Inference saved to " + _file_path, Log_Level::LOG_INFO, 1, true);
+        Logger::logMessage(Input_Format{"Neural_Network::saveInference: Inference saved to {}", _file_path}, Log_Level::LOG_INFO, true, 1);
     }
 
     void loadInference(const std::string &_file_path, Execution_Target _execution_target = Execution_Target::CPU)
@@ -442,7 +420,7 @@ public:
         std::ifstream input_file_stream(_file_path, std::ios::binary);
         if (!input_file_stream.is_open())
         {
-            Logger::logMessage(std::format("Neural_Network::loadInference: Failed to open file: {}", _file_path),
+            Logger::logMessage(Input_Format{"Neural_Network::loadInference: Failed to open file: {}", _file_path},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -465,9 +443,9 @@ public:
         std::uint32_t total_layer_count = 0;
         input_file_stream.read(reinterpret_cast<char *>(&total_layer_count), sizeof(total_layer_count));
 
-        Logger::logMessage(std::format("Neural_Network::loadInference: Loading inference model from {}, total_layers={}",
-                                       _file_path,
-                                       total_layer_count),
+        Logger::logMessage(Input_Format{"Neural_Network::loadInference: Loading inference model from {}, total_layers={}",
+                                        _file_path,
+                                        total_layer_count},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -480,9 +458,9 @@ public:
         {
             Layer_Type layer_type;
             input_file_stream.read(reinterpret_cast<char *>(&layer_type), sizeof(layer_type));
-            Logger::logMessage(std::format("Neural_Network::loadInference: Layer {} type = {}",
-                                           i,
-                                           magic_enum::enum_name(layer_type)),
+            Logger::logMessage(Input_Format{"Neural_Network::loadInference: Layer {} type = {}",
+                                            i,
+                                            magic_enum::enum_name(layer_type)},
                                Log_Level::LOG_INFO,
                                true,
                                0,
@@ -499,7 +477,7 @@ public:
         }
 
         setExecutionTarget(_execution_target);
-        Logger::logMessage("Inference loaded from {}" + _file_path, Log_Level::LOG_INFO, true, 1);
+        Logger::logMessage(Input_Format{"Neural_Network::loadInference: Inference loaded from {}", _file_path}, Log_Level::LOG_INFO, true, 1);
     }
 
     void saveTrainingCheckpoint(const std::string &_file_path, std::size_t _current_epoch) const
@@ -507,7 +485,7 @@ public:
         std::ofstream output_file_stream(_file_path, std::ios::binary);
         if (!output_file_stream.is_open())
         {
-            Logger::logMessage(std::format("Neural_Network::saveTrainingCheckpoint: Failed to open file: {}", _file_path),
+            Logger::logMessage(Input_Format{"Neural_Network::saveTrainingCheckpoint: Failed to open file: {}", _file_path},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -515,9 +493,9 @@ public:
             throw std::runtime_error("Failed to open file for saving training checkpoint");
         }
 
-        Logger::logMessage(std::format("Neural_Network::saveTrainingCheckpoint: Saving checkpoint to {}, epoch={}",
-                                       _file_path,
-                                       _current_epoch),
+        Logger::logMessage(Input_Format{"Neural_Network::saveTrainingCheckpoint: Saving checkpoint to {}, epoch={}",
+                                        _file_path,
+                                        _current_epoch},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -569,7 +547,7 @@ public:
         std::ifstream input_file_stream(_file_path, std::ios::binary);
         if (!input_file_stream.is_open())
         {
-            Logger::logMessage(std::format("Neural_Network::loadTrainingCheckpoint: Failed to open file: {}", _file_path),
+            Logger::logMessage(Input_Format{"Neural_Network::loadTrainingCheckpoint: Failed to open file: {}", _file_path},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -590,9 +568,9 @@ public:
         std::uint32_t total_layer_count = 0;
         input_file_stream.read(reinterpret_cast<char *>(&total_layer_count), sizeof(total_layer_count));
 
-        Logger::logMessage(std::format("Neural_Network::loadTrainingCheckpoint: Loading checkpoint from {}, total_layers={}",
-                                       _file_path,
-                                       total_layer_count),
+        Logger::logMessage(Input_Format{"Neural_Network::loadTrainingCheckpoint: Loading checkpoint from {}, total_layers={}",
+                                        _file_path,
+                                        total_layer_count},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -629,90 +607,29 @@ public:
         setExecutionTarget(_execution_target);
     }
 
-    const Matrix &getLastPrediction() const noexcept
-    {
-        return last_prediction;
-    }
+    const ILearning_Rate &getLearningRate() const { return training_context.getLearningRate(); }
+    ILearning_Rate &getLearningRate() { return training_context.getLearningRate(); }
+    const ICost_Function &getCostFunction() const { return training_context.getCostFunction(); }
+    ICost_Function &getCostFunction() { return training_context.getCostFunction(); }
+    std::size_t getCurrentEpoch() const noexcept { return training_context.getCurrentEpoch(); }
+    const IOptimizer &getOptimizer() const { return training_context.getOptimizer(); }
+    IOptimizer &getOptimizer() { return training_context.getOptimizer(); }
+    const ILayer &getLayer(std::size_t _index) const { return *layers.at(_index); }
+    ILayer &getLayer(std::size_t _index) { return *layers.at(_index); }
+    const Training_Context &getTrainingContext() const noexcept { return training_context; }
+    Training_Context &getTrainingContext() noexcept { return training_context; }
+    const Training_Context &getContext() const noexcept { return training_context; }
+    Training_Context &getContext() noexcept { return training_context; }
+    const Tensor &getLastPrediction() const noexcept { return last_prediction; }
+    Tensor &getLastPrediction() noexcept { return last_prediction; }
+    std::size_t getLayerCount() const noexcept { return layers.size(); }
+    const std::vector<std::unique_ptr<ILayer>> &getLayers() const noexcept { return layers; }
+    std::vector<std::unique_ptr<ILayer>> &getLayers() noexcept { return layers; }
+    Execution_Target getExecutionTarget() const noexcept { return execution_target; }
+    bool isGradientAccumulationEnabled() const noexcept { return is_gradient_accumulation_enabled; }
+    bool isTargetSynchronized() const noexcept { return is_target_synchronized; }
 
-    const ILayer &getLayer(std::size_t _index) const
-    {
-        return *layers.at(_index);
-    }
-
-    ILayer &getLayer(std::size_t _index)
-    {
-        return *layers.at(_index);
-    }
-
-    std::size_t getLayerCount() const noexcept
-    {
-        return layers.size();
-    }
-
-    Training_Context &getContext() noexcept
-    {
-        return training_context;
-    }
-
-    const Training_Context &getContext() const noexcept
-    {
-        return training_context;
-    }
-
-    Training_Context &getTrainingContext() noexcept
-    {
-        return training_context;
-    }
-
-    const Training_Context &getTrainingContext() const noexcept
-    {
-        return training_context;
-    }
-
-    std::size_t getCurrentEpoch() const noexcept
-    {
-        return training_context.getCurrentEpoch();
-    }
-
-    IOptimizer &getOptimizer()
-    {
-        return training_context.getOptimizer();
-    }
-
-    const IOptimizer &getOptimizer() const
-    {
-        return training_context.getOptimizer();
-    }
-
-    ICost_Function &getCostFunction()
-    {
-        return training_context.getCostFunction();
-    }
-
-    const ICost_Function &getCostFunction() const
-    {
-        return training_context.getCostFunction();
-    }
-
-    ILearning_Rate &getLearningRate()
-    {
-        return training_context.getLearningRate();
-    }
-
-    const ILearning_Rate &getLearningRate() const
-    {
-        return training_context.getLearningRate();
-    }
-
-    Execution_Target getExecutionTarget() const noexcept
-    {
-        return execution_target;
-    }
-
-    const std::vector<std::unique_ptr<ILayer>> &getLayers() const noexcept
-    {
-        return layers;
-    }
+    void setTrainingContext(Training_Context _training_context) noexcept { training_context = std::move(_training_context); }
 
     void setCostFunction(std::unique_ptr<ICost_Function> _cost_function)
     {
@@ -782,4 +699,56 @@ public:
         setOptimizer(std::move(opt));
         return opt_reference;
     }
+
+    void setCurrentEpoch(std::size_t _epoch) noexcept { training_context.setCurrentEpoch(_epoch); }
+    void setLastPrediction(const Tensor &_prediction) { last_prediction = _prediction; }
+
+    void setExecutionTarget(Execution_Target _new_execution_target)
+    {
+        if (execution_target != _new_execution_target)
+        {
+            Logger::logMessage(Input_Format{"Neural_Network::setExecutionTarget: Changing network execution target from {} to {}",
+                                            magic_enum::enum_name(execution_target),
+                                            magic_enum::enum_name(_new_execution_target)},
+                               Log_Level::LOG_WARNING,
+                               true,
+                               1,
+                               Log_Feature::DEVICE_MANAGEMENT);
+        }
+        execution_target = _new_execution_target;
+        last_prediction.setExecutionTarget(_new_execution_target);
+        for (auto &layer : layers)
+        {
+            layer->setExecutionTarget(_new_execution_target);
+        }
+        is_target_synchronized = true;
+    }
+
+    void setTarget(Execution_Target _new_execution_target) { setExecutionTarget(_new_execution_target); }
+
+    void setTrainingMode(bool _is_training_mode)
+    {
+        Logger::logMessage(Input_Format{"Neural_Network::setTrainingMode: Setting training mode to {}",
+                                        _is_training_mode ? "true" : "false"},
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::TRAINING);
+        for (auto &layer : layers)
+        {
+            layer->setTrainingMode(_is_training_mode);
+        }
+    }
+
+    void setGradientAccumulation(bool _enable) noexcept
+    {
+        is_gradient_accumulation_enabled = _enable;
+        for (auto &layer : layers)
+        {
+            layer->setAccumulated(_enable);
+        }
+    }
+
+    void setGradientAccumulationEnabled(bool _enable) noexcept { setGradientAccumulation(_enable); }
+    void setTargetSynchronized(bool _synced) noexcept { is_target_synchronized = _synced; }
 };

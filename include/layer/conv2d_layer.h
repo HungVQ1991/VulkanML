@@ -29,16 +29,15 @@ private:
     std::uint32_t output_height = 0;
     std::uint32_t output_width = 0;
 
-    Matrix weights;
-    Matrix biases;
-    Matrix weights_gradient;
-    Matrix biases_gradient;
-    Matrix input_matrix;
-    Matrix output_matrix;
-    Matrix input_gradient;
+    Tensor weights;
+    Tensor biases;
+    Tensor weights_gradient_tensor;
+    Tensor biases_gradient_tensor;
+    Tensor input_tensor;
+    Tensor output_tensor;
+    Tensor input_gradient_tensor;
 
     bool is_forward_completed = false;
-    bool is_accumulated = false;
     Execution_Target execution_target = Execution_Target::CPU;
 
     void initializeWeights()
@@ -58,10 +57,10 @@ private:
             host_weights[i] = normal_distribution(generator);
         }
 
-        weights = Matrix(1, weight_count, host_weights, execution_target);
-        biases = Matrix(1, output_channels, host_biases, execution_target);
-        weights_gradient = Matrix(1, weight_count, execution_target);
-        biases_gradient = Matrix(1, output_channels, execution_target);
+        weights = Tensor(1, weight_count, host_weights, execution_target);
+        biases = Tensor(1, output_channels, host_biases, execution_target);
+        weights_gradient_tensor = Tensor(1, weight_count, execution_target);
+        biases_gradient_tensor = Tensor(1, output_channels, execution_target);
     }
 
 public:
@@ -84,13 +83,12 @@ public:
           execution_target(_execution_target),
           weights(0, 0, _execution_target),
           biases(0, 0, _execution_target),
-          weights_gradient(0, 0, _execution_target),
-          biases_gradient(0, 0, _execution_target),
-          input_matrix(0, 0, _execution_target),
-          output_matrix(0, 0, _execution_target),
-          input_gradient(0, 0, _execution_target),
-          is_forward_completed(false),
-          is_accumulated(false)
+          weights_gradient_tensor(0, 0, _execution_target),
+          biases_gradient_tensor(0, 0, _execution_target),
+          input_tensor(0, 0, _execution_target),
+          output_tensor(0, 0, _execution_target),
+          input_gradient_tensor(0, 0, _execution_target),
+          is_forward_completed(false)
     {
         output_height = (input_height + 2 * padding - kernel_size) / stride + 1;
         output_width = (input_width + 2 * padding - kernel_size) / stride + 1;
@@ -99,7 +97,7 @@ public:
 
     ~Conv2d_Layer() noexcept override = default;
 
-    Matrix forward(const Matrix &_input_matrix) override
+    Tensor forward(const Tensor &_input_tensor) override
     {
         Logger::logMessage(Input_Format{"Conv2d_Layer::forward: input_height={}, input_width={}, input_channels={}, output_channels={}",
                                         input_height, input_width, input_channels, output_channels},
@@ -108,10 +106,10 @@ public:
                            1,
                            Log_Feature::CONV2D_COMPUTE | Log_Feature::FORWARD_EVALUATION);
 
-        input_matrix = _input_matrix;
-        input_matrix.conv2d(weights, biases, output_matrix, input_height, input_width, input_channels, output_channels, kernel_size, stride, padding);
+        input_tensor = _input_tensor;
+        input_tensor.conv2d(weights, biases, output_tensor, input_height, input_width, input_channels, output_channels, kernel_size, stride, padding);
         is_forward_completed = true;
-        return output_matrix;
+        return output_tensor;
     }
 
     Tensor forward(const Tensor& _batched_input, const std::vector<Tensor>& _batched_params) const override
@@ -141,7 +139,7 @@ public:
         return output;
     }
 
-    Matrix backward(const Matrix &_output_gradient) override
+    Tensor backward(const Tensor &_output_gradient) override
     {
         if (!is_forward_completed)
         {
@@ -161,10 +159,21 @@ public:
                            1,
                            Log_Feature::CONV2D_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
-        input_matrix.conv2dBackwardWeight(_output_gradient, weights_gradient, biases_gradient, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding);
-        logBufferAddress(&input_matrix, "input_matrix (Backward)");
-        _output_gradient.conv2dBackwardInput(weights, input_gradient, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding);
-        return input_gradient;
+        if (!is_accumulated)
+        {
+            input_tensor.conv2dBackwardWeight(_output_gradient, weights_gradient_tensor, biases_gradient_tensor, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding);
+        }
+        else
+        {
+            Tensor step_weights_grad(weights_gradient_tensor.getShape(), execution_target);
+            Tensor step_biases_grad(biases_gradient_tensor.getShape(), execution_target);
+            input_tensor.conv2dBackwardWeight(_output_gradient, step_weights_grad, step_biases_grad, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding);
+            weights_gradient_tensor = weights_gradient_tensor + step_weights_grad;
+            biases_gradient_tensor = biases_gradient_tensor + step_biases_grad;
+        }
+        logBufferAddress(&input_tensor, "input_tensor (Backward)");
+        _output_gradient.conv2dBackwardInput(weights, input_gradient_tensor, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding);
+        return input_gradient_tensor;
     }
 
     void resetGradient() override
@@ -172,56 +181,56 @@ public:
         is_forward_completed = false;
     }
 
-    const Matrix &getWeights() const override
+    void resetGradients() override
     {
-        return weights;
+        resetGradient();
+        weights_gradient_tensor.zero();
+        biases_gradient_tensor.zero();
     }
 
-    const Matrix &getBiases() const override
+    std::unique_ptr<ILayer> clone() const override
     {
-        return biases;
+        return std::make_unique<Conv2d_Layer>(
+            input_height, input_width, input_channels, output_channels, kernel_size, stride, padding, execution_target);
     }
 
-    const Matrix &getWeightsGradient() const override
+    void saveConfiguration(std::ofstream &_output_file_stream) const override
     {
-        return weights_gradient;
+        _output_file_stream.write(reinterpret_cast<const char *>(&input_height), sizeof(input_height));
+        _output_file_stream.write(reinterpret_cast<const char *>(&input_width), sizeof(input_width));
+        _output_file_stream.write(reinterpret_cast<const char *>(&input_channels), sizeof(input_channels));
+        _output_file_stream.write(reinterpret_cast<const char *>(&output_channels), sizeof(output_channels));
+        _output_file_stream.write(reinterpret_cast<const char *>(&kernel_size), sizeof(kernel_size));
+        _output_file_stream.write(reinterpret_cast<const char *>(&stride), sizeof(stride));
+        _output_file_stream.write(reinterpret_cast<const char *>(&padding), sizeof(padding));
     }
 
-    const Matrix &getInput() const override
+    void saveInference(std::ofstream &_output_file_stream) const override
     {
-        return input_matrix;
+        weights.saveTensor(_output_file_stream);
+        biases.saveTensor(_output_file_stream);
     }
 
-    const Matrix &getOutput() const override
+    void loadInference(std::ifstream &_input_file_stream) override
     {
-        return output_matrix;
+        weights = Tensor::loadTensor(_input_file_stream, execution_target);
+        biases = Tensor::loadTensor(_input_file_stream, execution_target);
     }
 
-    Execution_Target getExecutionTarget() const override { return execution_target; }
-
-    bool hasParameters() const noexcept override
+    void saveCheckpoint(std::ofstream &_output_file_stream) const override
     {
-        return true;
+        weights.saveTensor(_output_file_stream);
+        biases.saveTensor(_output_file_stream);
+        weights_gradient_tensor.saveTensor(_output_file_stream);
+        biases_gradient_tensor.saveTensor(_output_file_stream);
     }
 
-    Layer_Type getLayerType() const noexcept override
+    void loadCheckpoint(std::ifstream &_input_file_stream) override
     {
-        return Layer_Type::CONV2D;
-    }
-
-    std::vector<Shape> getPopulationParameterDims() const override
-    {
-        return { Shape{ output_channels, input_channels, kernel_size, kernel_size }, Shape{ 1, output_channels } };
-    }
-
-    bool supportsPopulationBatch() const noexcept override
-    {
-        return true;
-    }
-
-    std::vector<bool> getPopulationParameterIsEvolvable() const override
-    {
-        return { true, true };
+        weights = Tensor::loadTensor(_input_file_stream, execution_target);
+        biases = Tensor::loadTensor(_input_file_stream, execution_target);
+        weights_gradient_tensor = Tensor::loadTensor(_input_file_stream, execution_target);
+        biases_gradient_tensor = Tensor::loadTensor(_input_file_stream, execution_target);
     }
 
     std::function<float(std::mt19937&)> getPopulationParameterInitializer(std::size_t param_index) const override
@@ -249,12 +258,42 @@ public:
                 return 0.0f;
             };
     }
-
-    std::unique_ptr<ILayer> clone() const override
+    std::vector<float> getPopulationParameter(std::size_t param_index) const override
     {
-        return std::make_unique<Conv2d_Layer>(
-            input_height, input_width, input_channels, output_channels, kernel_size, stride, padding, execution_target);
+        if (param_index == 0)
+        {
+            return weights.getData();
+        }
+        if (param_index == 1)
+        {
+            return biases.getData();
+        }
+        throw std::out_of_range("Conv2d_Layer::getPopulationParameter: Parameter index out of range");
     }
+    std::vector<Shape> getPopulationParameterDims() const override { return { Shape{ output_channels, input_channels, kernel_size, kernel_size }, Shape{ 1, output_channels } }; }
+    std::vector<bool> getPopulationParameterIsEvolvable() const override { return { true, true }; }
+    std::vector<std::pair<Tensor *, Tensor *>> getParametersAndGradients() override { return {{&weights, &weights_gradient_tensor}, {&biases, &biases_gradient_tensor}}; }
+    const Tensor &getWeightsGradient() const override { return weights_gradient_tensor; }
+    const Tensor &getBiasesGradient() const noexcept { return biases_gradient_tensor; }
+    const Tensor &getInputGradient() const noexcept { return input_gradient_tensor; }
+    const Tensor &getWeights() const override { return weights; }
+    const Tensor &getBiases() const override { return biases; }
+    const Tensor &getInput() const override { return input_tensor; }
+    const Tensor &getOutput() const override { return output_tensor; }
+    std::uint32_t getOutputChannels() const noexcept { return output_channels; }
+    std::uint32_t getInputChannels() const noexcept { return input_channels; }
+    std::uint32_t getOutputHeight() const noexcept { return output_height; }
+    std::uint32_t getOutputWidth() const noexcept { return output_width; }
+    std::uint32_t getInputHeight() const noexcept { return input_height; }
+    std::uint32_t getInputWidth() const noexcept { return input_width; }
+    std::uint32_t getKernelSize() const noexcept { return kernel_size; }
+    Execution_Target getExecutionTarget() const override { return execution_target; }
+    std::uint32_t getPadding() const noexcept { return padding; }
+    Layer_Type getLayerType() const noexcept override { return Layer_Type::CONV2D; }
+    std::uint32_t getStride() const noexcept { return stride; }
+    bool supportsPopulationBatch() const noexcept override { return true; }
+    bool isForwardCompleted() const noexcept { return is_forward_completed; }
+    bool hasParameters() const noexcept override { return true; }
 
     void setPopulationParameter(std::size_t param_index, std::vector<float> flat_data) override
     {
@@ -265,7 +304,7 @@ public:
             {
                 throw std::invalid_argument("Conv2d_Layer::setPopulationParameter: Weight size mismatch");
             }
-            weights = Matrix(1, weight_count, std::move(flat_data), execution_target);
+            weights = Tensor(1, weight_count, std::move(flat_data), execution_target);
         }
         else if (param_index == 1)
         {
@@ -273,113 +312,20 @@ public:
             {
                 throw std::invalid_argument("Conv2d_Layer::setPopulationParameter: Bias size mismatch");
             }
-            biases = Matrix(1, output_channels, std::move(flat_data), execution_target);
+            biases = Tensor(1, output_channels, std::move(flat_data), execution_target);
         }
         else
         {
             throw std::out_of_range("Conv2d_Layer::setPopulationParameter: Parameter index out of range");
         }
     }
-
-    bool isAccumulated() const noexcept
-    {
-        return is_accumulated;
-    }
-
-    void setAccumulated(bool _is_accumulated) noexcept
-    {
-        is_accumulated = _is_accumulated;
-    }
-
-    std::uint32_t getInputHeight() const noexcept
-    {
-        return input_height;
-    }
-
-    std::uint32_t getInputWidth() const noexcept
-    {
-        return input_width;
-    }
-
-    std::uint32_t getInputChannels() const noexcept
-    {
-        return input_channels;
-    }
-
-    std::uint32_t getOutputChannels() const noexcept
-    {
-        return output_channels;
-    }
-
-    std::uint32_t getKernelSize() const noexcept
-    {
-        return kernel_size;
-    }
-
-    std::uint32_t getStride() const noexcept
-    {
-        return stride;
-    }
-
-    std::uint32_t getPadding() const noexcept
-    {
-        return padding;
-    }
-
-    std::uint32_t getOutputHeight() const noexcept
-    {
-        return output_height;
-    }
-
-    std::uint32_t getOutputWidth() const noexcept
-    {
-        return output_width;
-    }
-
-    void saveConfiguration(std::ofstream &_output_file_stream) const override
-    {
-        _output_file_stream.write(reinterpret_cast<const char *>(&input_height), sizeof(input_height));
-        _output_file_stream.write(reinterpret_cast<const char *>(&input_width), sizeof(input_width));
-        _output_file_stream.write(reinterpret_cast<const char *>(&input_channels), sizeof(input_channels));
-        _output_file_stream.write(reinterpret_cast<const char *>(&output_channels), sizeof(output_channels));
-        _output_file_stream.write(reinterpret_cast<const char *>(&kernel_size), sizeof(kernel_size));
-        _output_file_stream.write(reinterpret_cast<const char *>(&stride), sizeof(stride));
-        _output_file_stream.write(reinterpret_cast<const char *>(&padding), sizeof(padding));
-    }
-
-    void saveInference(std::ofstream &_output_file_stream) const override
-    {
-        weights.saveMatrix(_output_file_stream);
-        biases.saveMatrix(_output_file_stream);
-    }
-
-    void loadInference(std::ifstream &_input_file_stream) override
-    {
-        weights = Matrix::loadMatrix(_input_file_stream, execution_target);
-        biases = Matrix::loadMatrix(_input_file_stream, execution_target);
-    }
-
-    void saveCheckpoint(std::ofstream &_output_file_stream) const override
-    {
-        weights.saveMatrix(_output_file_stream);
-        biases.saveMatrix(_output_file_stream);
-        weights_gradient.saveMatrix(_output_file_stream);
-        biases_gradient.saveMatrix(_output_file_stream);
-    }
-
-    void loadCheckpoint(std::ifstream &_input_file_stream) override
-    {
-        weights = Matrix::loadMatrix(_input_file_stream, execution_target);
-        biases = Matrix::loadMatrix(_input_file_stream, execution_target);
-        weights_gradient = Matrix::loadMatrix(_input_file_stream, execution_target);
-        biases_gradient = Matrix::loadMatrix(_input_file_stream, execution_target);
-    }
-
-    std::vector<std::pair<Matrix *, Matrix *>> getParametersAndGradients() override
-    {
-        return {{&weights, &weights_gradient}, {&biases, &biases_gradient}};
-    }
-
+    void setWeightsGradient(const Tensor &_tensor) { weights_gradient_tensor = _tensor; }
+    void setBiasesGradient(const Tensor &_tensor) { biases_gradient_tensor = _tensor; }
+    void setInputGradient(const Tensor &_tensor) { input_gradient_tensor = _tensor; }
+    void setWeights(const Tensor &_new_weights) { weights = _new_weights; }
+    void setBiases(const Tensor &_new_biases) { biases = _new_biases; }
+    void setInput(const Tensor &_tensor) { input_tensor = _tensor; }
+    void setOutput(const Tensor &_tensor) { output_tensor = _tensor; }
     void setExecutionTarget(Execution_Target _new_execution_target) override
     {
         if (execution_target == _new_execution_target)
@@ -392,10 +338,20 @@ public:
         execution_target = _new_execution_target;
         weights.setExecutionTarget(_new_execution_target);
         biases.setExecutionTarget(_new_execution_target);
-        weights_gradient.setExecutionTarget(_new_execution_target);
-        biases_gradient.setExecutionTarget(_new_execution_target);
-        input_matrix.setExecutionTarget(_new_execution_target);
-        output_matrix.setExecutionTarget(_new_execution_target);
-        input_gradient.setExecutionTarget(_new_execution_target);
+        weights_gradient_tensor.setExecutionTarget(_new_execution_target);
+        biases_gradient_tensor.setExecutionTarget(_new_execution_target);
+        input_tensor.setExecutionTarget(_new_execution_target);
+        output_tensor.setExecutionTarget(_new_execution_target);
+        input_gradient_tensor.setExecutionTarget(_new_execution_target);
     }
+    void setOutputChannels(std::uint32_t _channels) noexcept { output_channels = _channels; }
+    void setInputChannels(std::uint32_t _channels) noexcept { input_channels = _channels; }
+    void setOutputHeight(std::uint32_t _height) noexcept { output_height = _height; }
+    void setOutputWidth(std::uint32_t _width) noexcept { output_width = _width; }
+    void setInputHeight(std::uint32_t _height) noexcept { input_height = _height; }
+    void setKernelSize(std::uint32_t _size) noexcept { kernel_size = _size; }
+    void setInputWidth(std::uint32_t _width) noexcept { input_width = _width; }
+    void setPadding(std::uint32_t _padding) noexcept { padding = _padding; }
+    void setStride(std::uint32_t _stride) noexcept { stride = _stride; }
+    void setIsForwardCompleted(bool _is_completed) noexcept { is_forward_completed = _is_completed; }
 };

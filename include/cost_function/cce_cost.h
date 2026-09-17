@@ -58,9 +58,9 @@ public:
             return 0.0f;
         }
 
-        Logger::logMessage(std::format("Cce_Cost::computeLoss: batch_size={}, columns={}",
-                                       batch_size,
-                                       _prediction_matrix.getColumns()),
+        Logger::logMessage(Input_Format{"Cce_Cost::computeLoss: batch_size={}, columns={}",
+                                        batch_size,
+                                        _prediction_matrix.getColumns()},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -75,18 +75,17 @@ public:
         return loss_matrix.getScalar() / static_cast<float>(batch_size);
     }
 
-     Matrix computeGradient(const Matrix &_prediction_matrix, const Matrix &_target_matrix) const override
+    Matrix computeGradient(const Matrix &_prediction_matrix, const Matrix &_target_matrix) const override
     {
         if (_prediction_matrix.getRows() != _target_matrix.getRows() || _prediction_matrix.getColumns() != _target_matrix.getColumns())
         {
-            std::string error_message = std::format(
-                "Cce_Cost::computeGradient: Dimensions mismatch! Prediction: ({}x{}), Target: ({}x{})",
-                _prediction_matrix.getRows(),
-                _prediction_matrix.getColumns(),
-                _target_matrix.getRows(),
-                _target_matrix.getColumns());
-            Logger::logMessage(error_message, Log_Level::LOG_ERROR, true, 0, Log_Feature::LOSS_COMPUTE);
-            throw std::invalid_argument(error_message);
+            Logger::logMessage(Input_Format{"Cce_Cost::computeGradient: Dimensions mismatch! Prediction: ({}x{}), Target: ({}x{})",
+                                            _prediction_matrix.getRows(),
+                                            _prediction_matrix.getColumns(),
+                                            _target_matrix.getRows(),
+                                            _target_matrix.getColumns()},
+                               Log_Level::LOG_ERROR, true, 0, Log_Feature::LOSS_COMPUTE);
+            throw std::invalid_argument("Cce_Cost::computeGradient: Dimensions mismatch");
         }
 
         std::size_t batch_size = _prediction_matrix.getRows();
@@ -100,9 +99,9 @@ public:
             return Matrix(0, 0, _prediction_matrix.getExecutionTarget());
         }
 
-        Logger::logMessage(std::format("Cce_Cost::computeGradient: batch_size={}, columns={}",
-                                       batch_size,
-                                       _prediction_matrix.getColumns()),
+        Logger::logMessage(Input_Format{"Cce_Cost::computeGradient: batch_size={}, columns={}",
+                                        batch_size,
+                                        _prediction_matrix.getColumns()},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -134,11 +133,6 @@ public:
         return gradient_matrix;
     }
 
-     Cost_Type getType() const noexcept override
-    {
-        return Cost_Type::CCE;
-    }
-
     void saveCheckpoint(std::ofstream &_output_file_stream) const override
     {
         _output_file_stream.write(reinterpret_cast<const char *>(&epsilon), sizeof(epsilon));
@@ -148,6 +142,19 @@ public:
     {
         _input_file_stream.read(reinterpret_cast<char *>(&epsilon), sizeof(epsilon));
     }
+
+    const Matrix &getDifferenceMatrix() const noexcept { return difference_matrix; }
+    const Matrix &getSyncedTargetMatrix() const noexcept { return synced_target_matrix; }
+    const Matrix &getGradientMatrix() const noexcept { return gradient_matrix; }
+    const Matrix &getLossMatrix() const noexcept { return loss_matrix; }
+    Cost_Type getType() const noexcept override { return Cost_Type::CCE; }
+    float getEpsilon() const noexcept { return epsilon; }
+
+    void setSyncedTargetMatrix(const Matrix &_matrix) { synced_target_matrix = _matrix; }
+    void setDifferenceMatrix(const Matrix &_matrix) { difference_matrix = _matrix; }
+    void setGradientMatrix(const Matrix &_matrix) { gradient_matrix = _matrix; }
+    void setLossMatrix(const Matrix &_matrix) { loss_matrix = _matrix; }
+    void setEpsilon(float _epsilon) noexcept { epsilon = _epsilon; }
 };
 
 using CCE_Cost = Cce_Cost;

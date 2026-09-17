@@ -51,11 +51,6 @@ public:
 
     ~Sgd_Optimizer() noexcept override = default;
 
-     Optimizer_Type getType() const noexcept override
-    {
-        return Optimizer_Type::SGD_OPTIMIZER;
-    }
-
     void step(const std::vector<std::pair<Matrix *, Matrix *>> &_parameter_gradient_pairs) override
     {
         if (learning_rate_scheduler != nullptr)
@@ -63,9 +58,9 @@ public:
             learning_rate = learning_rate_scheduler->getCurrentRate();
         }
 
-        Logger::logMessage(std::format("Sgd_Optimizer::step: learning_rate={}, pairs_count={}",
-                                       learning_rate,
-                                       _parameter_gradient_pairs.size()),
+        Logger::logMessage(Input_Format{"Sgd_Optimizer::step: learning_rate={}, pairs_count={}",
+                                        learning_rate,
+                                        _parameter_gradient_pairs.size()},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -95,37 +90,6 @@ public:
                            true,
                            0,
                            Log_Feature::OPTIMIZER_STEP);
-    }
-
-     float getLearningRate() const noexcept
-    {
-        return learning_rate;
-    }
-
-     float getMaxGradient() const noexcept
-    {
-        return max_gradient;
-    }
-
-    void setLearningRate(float _learning_rate) override
-    {
-        if (_learning_rate <= 0.0f)
-        {
-            Logger::logMessage("Sgd_Optimizer::setLearningRate: learning_rate is non-positive",
-                               Log_Level::LOG_WARNING,
-                               true,
-                               0,
-                               Log_Feature::OPTIMIZER_STEP);
-        }
-        Logger::logMessage(std::format("Sgd_Optimizer::setLearningRate: old_learning_rate={}, new_learning_rate={}",
-                                       learning_rate,
-                                       _learning_rate),
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::OPTIMIZER_STEP);
-        learning_rate = _learning_rate;
-        learning_rate_scheduler = nullptr;
     }
 
     void saveCheckpoint(std::ofstream &_output_file_stream) const override
@@ -165,14 +129,42 @@ public:
         _input_file_stream.read(reinterpret_cast<char *>(&learning_rate), sizeof(learning_rate));
         _input_file_stream.read(reinterpret_cast<char *>(&max_gradient), sizeof(max_gradient));
 
-        Logger::logMessage(std::format("Sgd_Optimizer::loadCheckpoint: Loaded learning_rate={}, max_gradient={}",
-                                       learning_rate,
-                                       max_gradient),
+        Logger::logMessage(Input_Format{"Sgd_Optimizer::loadCheckpoint: Loaded learning_rate={}, max_gradient={}",
+                                        learning_rate,
+                                        max_gradient},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
                            Log_Feature::MODEL_SERIALIZATION);
     }
+
+    ILearning_Rate *getLearningRateScheduler() const noexcept { return learning_rate_scheduler; }
+    Optimizer_Type getType() const noexcept override { return Optimizer_Type::SGD_OPTIMIZER; }
+    float getLearningRate() const noexcept override { return learning_rate; }
+    float getMaxGradient() const noexcept { return max_gradient; }
+
+    void setLearningRateScheduler(ILearning_Rate *_learning_rate_scheduler) noexcept { learning_rate_scheduler = _learning_rate_scheduler; }
+    void setLearningRate(float _learning_rate) override
+    {
+        if (_learning_rate <= 0.0f)
+        {
+            Logger::logMessage("Sgd_Optimizer::setLearningRate: learning_rate is non-positive",
+                               Log_Level::LOG_WARNING,
+                               true,
+                               0,
+                               Log_Feature::OPTIMIZER_STEP);
+        }
+        Logger::logMessage(Input_Format{"Sgd_Optimizer::setLearningRate: old_learning_rate={}, new_learning_rate={}",
+                                        learning_rate,
+                                        _learning_rate},
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::OPTIMIZER_STEP);
+        learning_rate = _learning_rate;
+        learning_rate_scheduler = nullptr;
+    }
+    void setMaxGradient(float _max_gradient) noexcept { max_gradient = _max_gradient; }
 };
 
 using SGD_Optimizer = Sgd_Optimizer;

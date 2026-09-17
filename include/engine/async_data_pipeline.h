@@ -25,6 +25,14 @@ struct Batch_Data
     Matrix *input_matrix = nullptr;
     Matrix *target_matrix = nullptr;
     VkFence fence = VK_NULL_HANDLE;
+
+    Matrix *getInputMatrix() const noexcept { return input_matrix; }
+    Matrix *getTargetMatrix() const noexcept { return target_matrix; }
+    VkFence getFence() const noexcept { return fence; }
+
+    void setInputMatrix(Matrix *_matrix) noexcept { input_matrix = _matrix; }
+    void setTargetMatrix(Matrix *_matrix) noexcept { target_matrix = _matrix; }
+    void setFence(VkFence _fence) noexcept { fence = _fence; }
 };
 
 class Async_Data_Pipeline
@@ -149,8 +157,8 @@ private:
                 auto end_preparation_time = std::chrono::high_resolution_clock::now();
 
                 double preparation_time_in_milliseconds = std::chrono::duration<double, std::milli>(end_preparation_time - start_preparation_time).count();
-                Logger::logMessage(std::format("Async_Data_Pipeline::workerLoop: Step {}: Slot {} host batch prepared in {:.3f} ms",
-                                               current_batch_step, slot_index, preparation_time_in_milliseconds),
+                Logger::logMessage(Input_Format{"Async_Data_Pipeline::workerLoop: Step {}: Slot {} host batch prepared in {:.3f} ms",
+                                               current_batch_step, slot_index, preparation_time_in_milliseconds},
                                    Log_Level::LOG_DEBUG,
                                    true,
                                    0,
@@ -167,7 +175,7 @@ private:
             }
             catch (const std::exception &exception)
             {
-                Logger::logMessage(std::format("Async_Data_Pipeline::workerLoop: Exception in prepareBatchHost: {}", exception.what()),
+                Logger::logMessage(Input_Format{"Async_Data_Pipeline::workerLoop: Exception in prepareBatchHost: {}", exception.what()},
                                    Log_Level::LOG_ERROR,
                                    true,
                                    0,
@@ -222,26 +230,6 @@ public:
             buffer_slots[i].input_matrix = Matrix(batch_size, input_dimension, execution_target);
             buffer_slots[i].target_matrix = Matrix(batch_size, output_dimension, execution_target);
         }
-    }
-
-    void setDevice(VkDevice _device)
-    {
-        Logger::logMessage("Async_Data_Pipeline::setDevice: Updating Vulkan device handle",
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::DEVICE_MANAGEMENT | Log_Feature::DATA_PIPELINE);
-        destroyFences();
-        device = _device;
-        if (device != VK_NULL_HANDLE)
-        {
-            createFences();
-        }
-    }
-
-    void setExecutionTarget(Execution_Target _execution_target) noexcept
-    {
-        execution_target = _execution_target;
     }
 
     void start()
@@ -388,8 +376,8 @@ public:
             }
         }
 
-        Logger::logMessage(std::format("Async_Data_Pipeline::nextBatch: Step {}: Slot {} | gpu_fence_wait={:.3f}ms | cpu_data_wait={:.3f}ms | input_buffer={} | target_buffer={}",
-                                       consumer_index, slot_index, fence_wait_time_in_milliseconds, condition_variable_wait_time_in_milliseconds, input_buffer_handle, target_buffer_handle),
+        Logger::logMessage(Input_Format{"Async_Data_Pipeline::nextBatch: Step {}: Slot {} | gpu_fence_wait={:.3f}ms | cpu_data_wait={:.3f}ms | input_buffer={} | target_buffer={}",
+                                       consumer_index, slot_index, fence_wait_time_in_milliseconds, condition_variable_wait_time_in_milliseconds, input_buffer_handle, target_buffer_handle},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -411,35 +399,30 @@ public:
         return batch_data;
     }
 
-     VkDevice getDevice() const noexcept
-    {
-        return device;
-    }
+    virtual std::size_t getBatchSize() const = 0;
+    std::size_t getBufferSlotsCount() const noexcept { return BUFFER_SLOTS_COUNT; }
+    std::size_t getProducerIndex() const noexcept { return producer_index; }
+    std::size_t getConsumerIndex() const noexcept { return consumer_index; }
+    VkDevice getDevice() const noexcept { return device; }
+    Execution_Target getExecutionTarget() const noexcept { return execution_target; }
+    bool isRunning() const noexcept { return is_running.load(); }
 
-     Execution_Target getExecutionTarget() const noexcept
+    void setDevice(VkDevice _device)
     {
-        return execution_target;
+        Logger::logMessage("Async_Data_Pipeline::setDevice: Updating Vulkan device handle",
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::DEVICE_MANAGEMENT | Log_Feature::DATA_PIPELINE);
+        destroyFences();
+        device = _device;
+        if (device != VK_NULL_HANDLE)
+        {
+            createFences();
+        }
     }
-
-     bool isRunning() const noexcept
-    {
-        return is_running.load();
-    }
-
-     std::size_t getProducerIndex() const noexcept
-    {
-        return producer_index;
-    }
-
-     std::size_t getConsumerIndex() const noexcept
-    {
-        return consumer_index;
-    }
-
-     std::size_t getBufferSlotsCount() const noexcept
-    {
-        return BUFFER_SLOTS_COUNT;
-    }
-
-     virtual std::size_t getBatchSize() const = 0;
+    void setProducerIndex(std::size_t _index) noexcept { producer_index = _index; }
+    void setConsumerIndex(std::size_t _index) noexcept { consumer_index = _index; }
+    void setExecutionTarget(Execution_Target _execution_target) noexcept { execution_target = _execution_target; }
+    void setRunning(bool _running) noexcept { is_running.store(_running); }
 };

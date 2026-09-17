@@ -28,26 +28,6 @@ public:
         compile_options.SetTargetSpirv(shaderc_spirv_version_1_5);
     }
 
-     const shaderc::Compiler &getCompiler() const noexcept
-    {
-        return compiler;
-    }
-
-     shaderc::Compiler &getCompiler() noexcept
-    {
-        return compiler;
-    }
-
-     const shaderc::CompileOptions &getCompileOptions() const noexcept
-    {
-        return compile_options;
-    }
-
-     shaderc::CompileOptions &getCompileOptions() noexcept
-    {
-        return compile_options;
-    }
-
     std::vector<std::uint32_t> compileGlslToSpirv(const std::string &_glsl_code, const std::string &_shader_name = "compute_shader") const
     {
         shaderc::SpvCompilationResult compilation_result = compiler.CompileGlslToSpv(
@@ -58,7 +38,7 @@ public:
 
         if (compilation_result.GetCompilationStatus() != shaderc_compilation_status_success)
         {
-            Logger::logMessage(std::format("Shader_Compiler::compileGlslToSpirv: {}", compilation_result.GetErrorMessage()),
+            Logger::logMessage(Input_Format{"Shader_Compiler::compileGlslToSpirv: {}", compilation_result.GetErrorMessage()},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -67,5 +47,16 @@ public:
         }
 
         return {compilation_result.cbegin(), compilation_result.cend()};
+    }
+
+    const shaderc::CompileOptions &getCompileOptions() const noexcept { return compile_options; }
+    shaderc::CompileOptions &getCompileOptions() noexcept { return compile_options; }
+    const shaderc::Compiler &getCompiler() const noexcept { return compiler; }
+    shaderc::Compiler &getCompiler() noexcept { return compiler; }
+
+    void setCompileOptions(const shaderc::CompileOptions &_options)
+    {
+        compile_options.~CompileOptions();
+        ::new (&compile_options) shaderc::CompileOptions(_options);
     }
 };

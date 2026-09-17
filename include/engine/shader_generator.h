@@ -26,6 +26,16 @@ struct Specialization_Constant_Entry
     std::string name;
     std::string type_name;
     std::string default_val;
+
+    const std::string &getDefaultVal() const noexcept { return default_val; }
+    const std::string &getTypeName() const noexcept { return type_name; }
+    const std::string &getName() const noexcept { return name; }
+    std::uint32_t getConstantId() const noexcept { return constant_id; }
+
+    void setDefaultVal(const std::string &_default_val) { default_val = _default_val; }
+    void setTypeName(const std::string &_type_name) { type_name = _type_name; }
+    void setName(const std::string &_name) { name = _name; }
+    void setConstantId(std::uint32_t _constant_id) noexcept { constant_id = _constant_id; }
 };
 
 class Specialization_Map_Builder
@@ -50,7 +60,7 @@ public:
         data.insert(data.end(), byte_pointer, byte_pointer + size);
     }
 
-     VkSpecializationInfo build() const noexcept
+    VkSpecializationInfo build() const noexcept
     {
         return VkSpecializationInfo{
             .mapEntryCount = static_cast<std::uint32_t>(entries.size()),
@@ -59,7 +69,7 @@ public:
             .pData = data.data()};
     }
 
-     bool empty() const noexcept
+    bool empty() const noexcept
     {
         return entries.empty();
     }
@@ -69,6 +79,12 @@ public:
         entries.clear();
         data.clear();
     }
+
+    const std::vector<VkSpecializationMapEntry> &getEntries() const noexcept { return entries; }
+    const std::vector<std::uint8_t> &getData() const noexcept { return data; }
+
+    void setEntries(const std::vector<VkSpecializationMapEntry> &_entries) { entries = _entries; }
+    void setData(const std::vector<std::uint8_t> &_data) { data = _data; }
 };
 
 class Shader_Generator
@@ -95,21 +111,11 @@ public:
     Shader_Generator(std::uint32_t _group_x, std::uint32_t _group_y = 1, std::uint32_t _group_z = 1, const std::string &_default_data_type = "float")
         : group_x(_group_x), group_y(_group_y), group_z(_group_z), default_data_type(_default_data_type)
     {
-        Logger::logMessage(std::format("Shader_Generator::Shader_Generator: Initializing generator with local_size ({}, {}, {}) and default type '{}'", _group_x, _group_y, _group_z, _default_data_type),
+        Logger::logMessage(Input_Format{"Shader_Generator::Shader_Generator: Initializing generator with local_size ({}, {}, {}) and default type '{}'", _group_x, _group_y, _group_z, _default_data_type},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
                            Log_Feature::SHADER_GENERATION);
-    }
-
-    void setDefaultDataType(const std::string &_type_name) noexcept
-    {
-        default_data_type = _type_name;
-    }
-
-     const std::string &getDefaultDataType() const noexcept
-    {
-        return default_data_type;
     }
 
     void enableSubgroupOperations()
@@ -137,8 +143,8 @@ public:
                                    const std::string &_type_name = "uint",
                                    const std::string &_default_value = "0")
     {
-        Logger::logMessage(std::format("Shader_Generator::addSpecializationConstant: Added constant_id {} with name '{}' type '{}' default '{}'",
-                                       _constant_id, _name, _type_name, _default_value),
+        Logger::logMessage(Input_Format{"Shader_Generator::addSpecializationConstant: Added constant_id {} with name '{}' type '{}' default '{}'",
+                                        _constant_id, _name, _type_name, _default_value},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -151,11 +157,6 @@ public:
 
         specialization_stream << std::format("layout(constant_id = {}) const {} {} = {};\n",
                                              _constant_id, _type_name, _name, _default_value);
-    }
-
-     const std::vector<Specialization_Constant_Entry> &getSpecializationConstants() const noexcept
-    {
-        return spec_constants;
     }
 
     std::string addBuffer(std::uint32_t _binding_index,
@@ -185,8 +186,8 @@ public:
 
         std::string resolved_type = _type_name.empty() ? default_data_type : _type_name;
         std::string name = _buffer_name.empty() ? std::format("buf_{}", _binding_index) : _buffer_name;
-        Logger::logMessage(std::format("Shader_Generator::addBuffer: Added buffer binding {} with name '{}' of type '{}' and access '{}'",
-                                       _binding_index, name, resolved_type, qualifier),
+        Logger::logMessage(Input_Format{"Shader_Generator::addBuffer: Added buffer binding {} with name '{}' of type '{}' and access '{}'",
+                                        _binding_index, name, resolved_type, qualifier},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -208,7 +209,7 @@ public:
     {
         std::string resolved_type = _type_name.empty() ? default_data_type : _type_name;
         std::string name = std::format("{}_{}", _prefix, var_counter++);
-        Logger::logMessage(std::format("Shader_Generator::addSharedMemory: Added shared memory array '{}' of size {} of type '{}'", name, _size, resolved_type),
+        Logger::logMessage(Input_Format{"Shader_Generator::addSharedMemory: Added shared memory array '{}' of size {} of type '{}'", name, _size, resolved_type},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -285,4 +286,24 @@ public:
 
         return final_shader.str();
     }
+
+    const std::string &getDefaultDataType() const noexcept { return default_data_type; }
+    const std::vector<Specialization_Constant_Entry> &getSpecializationConstants() const noexcept { return spec_constants; }
+    std::uint32_t getCurrentBinding() const noexcept { return current_binding; }
+    std::uint32_t getVarCounter() const noexcept { return var_counter; }
+    std::uint32_t getGroupX() const noexcept { return group_x; }
+    std::uint32_t getGroupY() const noexcept { return group_y; }
+    std::uint32_t getGroupZ() const noexcept { return group_z; }
+    bool isControlFlowEnabled() const noexcept { return is_control_flow_enabled; }
+    bool isSubgroupEnabled() const noexcept { return is_subgroup_enabled; }
+
+    void setDefaultDataType(const std::string &_type_name) noexcept { default_data_type = _type_name; }
+    void setSpecializationConstants(const std::vector<Specialization_Constant_Entry> &_constants) { spec_constants = _constants; }
+    void setCurrentBinding(std::uint32_t _binding) noexcept { current_binding = _binding; }
+    void setVarCounter(std::uint32_t _counter) noexcept { var_counter = _counter; }
+    void setGroupX(std::uint32_t _group_x) noexcept { group_x = _group_x; }
+    void setGroupY(std::uint32_t _group_y) noexcept { group_y = _group_y; }
+    void setGroupZ(std::uint32_t _group_z) noexcept { group_z = _group_z; }
+    void setControlFlowEnabled(bool _enabled) noexcept { is_control_flow_enabled = _enabled; }
+    void setSubgroupEnabled(bool _enabled) noexcept { is_subgroup_enabled = _enabled; }
 };

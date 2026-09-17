@@ -33,6 +33,12 @@ private:
               second_moment_matrix(std::move(_second_moment))
         {
         }
+
+        const Matrix &getSecondMomentMatrix() const noexcept { return second_moment_matrix; }
+        const Matrix &getFirstMomentMatrix() const noexcept { return first_moment_matrix; }
+
+        void setSecondMomentMatrix(const Matrix &_matrix) { second_moment_matrix = _matrix; }
+        void setFirstMomentMatrix(const Matrix &_matrix) { first_moment_matrix = _matrix; }
     };
 
     float learning_rate = 0.001f;
@@ -68,12 +74,12 @@ public:
                                0,
                                Log_Feature::OPTIMIZER_STEP);
         }
-        Logger::logMessage(std::format("Adam_Optimizer::Adam_Optimizer: learning_rate={}, beta1={}, beta2={}, epsilon={}, max_gradient={}",
-                                       learning_rate,
-                                       beta1,
-                                       beta2,
-                                       epsilon,
-                                       max_gradient),
+        Logger::logMessage(Input_Format{"Adam_Optimizer::Adam_Optimizer: learning_rate={}, beta1={}, beta2={}, epsilon={}, max_gradient={}",
+                                        learning_rate,
+                                        beta1,
+                                        beta2,
+                                        epsilon,
+                                        max_gradient},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -100,12 +106,12 @@ public:
                                0,
                                Log_Feature::OPTIMIZER_STEP);
         }
-        Logger::logMessage(std::format("Adam_Optimizer::Adam_Optimizer (ILearning_Rate): learning_rate={}, beta1={}, beta2={}, epsilon={}, max_gradient={}",
-                                       learning_rate,
-                                       beta1,
-                                       beta2,
-                                       epsilon,
-                                       max_gradient),
+        Logger::logMessage(Input_Format{"Adam_Optimizer::Adam_Optimizer (ILearning_Rate): learning_rate={}, beta1={}, beta2={}, epsilon={}, max_gradient={}",
+                                        learning_rate,
+                                        beta1,
+                                        beta2,
+                                        epsilon,
+                                        max_gradient},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -113,11 +119,6 @@ public:
     }
 
     ~Adam_Optimizer() noexcept override = default;
-
-     Optimizer_Type getType() const noexcept override
-    {
-        return Optimizer_Type::ADAM_OPTIMIZER;
-    }
 
     void step(const std::vector<std::pair<Matrix *, Matrix *>> &_parameter_gradient_pairs) override
     {
@@ -200,57 +201,6 @@ public:
         timestep = 0;
     }
 
-     float getLearningRate() const noexcept
-    {
-        return learning_rate;
-    }
-
-     float getMaxGradient() const noexcept
-    {
-        return max_gradient;
-    }
-
-     float getBeta1() const noexcept
-    {
-        return beta1;
-    }
-
-     float getBeta2() const noexcept
-    {
-        return beta2;
-    }
-
-     float getEpsilon() const noexcept
-    {
-        return epsilon;
-    }
-
-     std::size_t getTimestep() const noexcept
-    {
-        return timestep;
-    }
-
-    void setLearningRate(float _learning_rate) override
-    {
-        if (_learning_rate <= 0.0f)
-        {
-            Logger::logMessage("Adam_Optimizer::setLearningRate: learning_rate is non-positive",
-                               Log_Level::LOG_WARNING,
-                               true,
-                               0,
-                               Log_Feature::OPTIMIZER_STEP);
-        }
-        Logger::logMessage(std::format("Adam_Optimizer::setLearningRate: old_learning_rate={}, new_learning_rate={}",
-                                       learning_rate,
-                                       _learning_rate),
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::OPTIMIZER_STEP);
-        learning_rate = _learning_rate;
-        learning_rate_scheduler = nullptr;
-    }
-
     void saveCheckpoint(std::ofstream &_output_file_stream) const override
     {
         if (!_output_file_stream.is_open())
@@ -263,9 +213,9 @@ public:
             return;
         }
 
-        Logger::logMessage(std::format("Adam_Optimizer::saveCheckpoint: Saving checkpoint at timestep={}, learning_rate={}",
-                                       timestep,
-                                       learning_rate),
+        Logger::logMessage(Input_Format{"Adam_Optimizer::saveCheckpoint: Saving checkpoint at timestep={}, learning_rate={}",
+                                        timestep,
+                                        learning_rate},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -320,14 +270,14 @@ public:
         std::uint32_t state_count = 0;
         _input_file_stream.read(reinterpret_cast<char *>(&state_count), sizeof(state_count));
 
-        Logger::logMessage(std::format("Adam_Optimizer::loadCheckpoint: Loaded timestep={}, learning_rate={}, beta1={}, beta2={}, epsilon={}, max_gradient={}, state_count={}",
-                                       timestep,
-                                       learning_rate,
-                                       beta1,
-                                       beta2,
-                                       epsilon,
-                                       max_gradient,
-                                       state_count),
+        Logger::logMessage(Input_Format{"Adam_Optimizer::loadCheckpoint: Loaded timestep={}, learning_rate={}, beta1={}, beta2={}, epsilon={}, max_gradient={}, state_count={}",
+                                        timestep,
+                                        learning_rate,
+                                        beta1,
+                                        beta2,
+                                        epsilon,
+                                        max_gradient,
+                                        state_count},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -341,4 +291,46 @@ public:
             loaded_states.emplace_back(std::move(first_moment), std::move(second_moment));
         }
     }
+
+    const std::unordered_map<Matrix *, Parameter_State> &getParameterStates() const noexcept { return parameter_states; }
+    const std::vector<Parameter_State> &getLoadedStates() const noexcept { return loaded_states; }
+    const std::vector<Matrix *> &getParameterOrder() const noexcept { return parameter_order; }
+    ILearning_Rate *getLearningRateScheduler() const noexcept { return learning_rate_scheduler; }
+    std::size_t getTimestep() const noexcept { return timestep; }
+    Optimizer_Type getType() const noexcept override { return Optimizer_Type::ADAM_OPTIMIZER; }
+    float getLearningRate() const noexcept override { return learning_rate; }
+    float getMaxGradient() const noexcept { return max_gradient; }
+    float getEpsilon() const noexcept { return epsilon; }
+    float getBeta1() const noexcept { return beta1; }
+    float getBeta2() const noexcept { return beta2; }
+
+    void setParameterStates(const std::unordered_map<Matrix *, Parameter_State> &_parameter_states) { parameter_states = _parameter_states; }
+    void setLoadedStates(const std::vector<Parameter_State> &_loaded_states) { loaded_states = _loaded_states; }
+    void setParameterOrder(const std::vector<Matrix *> &_parameter_order) { parameter_order = _parameter_order; }
+    void setLearningRateScheduler(ILearning_Rate *_learning_rate_scheduler) noexcept { learning_rate_scheduler = _learning_rate_scheduler; }
+    void setTimestep(std::size_t _timestep) noexcept { timestep = _timestep; }
+    void setLearningRate(float _learning_rate) override
+    {
+        if (_learning_rate <= 0.0f)
+        {
+            Logger::logMessage("Adam_Optimizer::setLearningRate: learning_rate is non-positive",
+                               Log_Level::LOG_WARNING,
+                               true,
+                               0,
+                               Log_Feature::OPTIMIZER_STEP);
+        }
+        Logger::logMessage(Input_Format{"Adam_Optimizer::setLearningRate: old_learning_rate={}, new_learning_rate={}",
+                                        learning_rate,
+                                        _learning_rate},
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::OPTIMIZER_STEP);
+        learning_rate = _learning_rate;
+        learning_rate_scheduler = nullptr;
+    }
+    void setMaxGradient(float _max_gradient) noexcept { max_gradient = _max_gradient; }
+    void setEpsilon(float _epsilon) noexcept { epsilon = _epsilon; }
+    void setBeta1(float _beta1) noexcept { beta1 = _beta1; }
+    void setBeta2(float _beta2) noexcept { beta2 = _beta2; }
 };

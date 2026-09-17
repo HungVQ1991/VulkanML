@@ -132,42 +132,6 @@ public:
 
     ~Cpu_Tensor_Impl() noexcept override = default;
 
-    const std::vector<float> &getData() const noexcept override
-    {
-        if (isContiguous() && byte_offset == 0)
-        {
-            return *storage_buffer;
-        }
-
-        std::lock_guard<std::mutex> lock(cache_mutex);
-        materialized_cache.resize(total_elements);
-        iterateCoordinates([this](std::size_t out_idx, std::size_t src_idx)
-                           { materialized_cache[out_idx] = (*storage_buffer)[src_idx]; });
-        return materialized_cache;
-    }
-
-    Storage_Handle getStorage() const override
-    {
-        return std::cref(getData());
-    }
-
-    Mutable_Storage_Handle getStorage() override
-    {
-        if (!isContiguous() || byte_offset != 0)
-        {
-            auto owned_data = getData();
-            storage_buffer = std::make_shared<std::vector<float>>(std::move(owned_data));
-            byte_offset = 0;
-            strides = shape.computeContiguousStrides();
-        }
-        return std::ref(*storage_buffer);
-    }
-
-    bool isEmpty() const noexcept override
-    {
-        return !storage_buffer || storage_buffer->empty();
-    }
-
     void reshape(std::size_t rows, std::size_t columns) override
     {
         reshape(Shape{rows, columns});
@@ -431,15 +395,35 @@ public:
 
     void hadamardMul(const Tensor_Impl &other, Tensor_Impl &output) const override
     {
-        validateSameDimensions(other);
+        bool same_shape = (shape == other.getShape());
+        bool is_broadcast = (other.getRows() == 1 && getColumns() == other.getColumns());
+        if (!same_shape && !is_broadcast)
+        {
+            validateSameDimensions(other);
+        }
+
         const auto &a_data = getData();
         const auto &b_data = other.getData();
         auto &output_cpu = static_cast<Cpu_Tensor_Impl &>(output);
         output_cpu.reshape(shape);
 
-        for (std::size_t i = 0; i < total_elements; ++i)
+        if (same_shape)
         {
-            (*output_cpu.storage_buffer)[i] = a_data[i] * b_data[i];
+            for (std::size_t i = 0; i < total_elements; ++i)
+            {
+                (*output_cpu.storage_buffer)[i] = a_data[i] * b_data[i];
+            }
+        }
+        else if (is_broadcast)
+        {
+            std::size_t cols = getColumns();
+            for (std::size_t r = 0; r < getRows(); ++r)
+            {
+                for (std::size_t c = 0; c < cols; ++c)
+                {
+                    (*output_cpu.storage_buffer)[r * cols + c] = a_data[r * cols + c] * b_data[c];
+                }
+            }
         }
 
         Logger::logMessage(Input_Format{"Cpu_Tensor_Impl::hadamardMul: elements={}, sample={}",
@@ -449,21 +433,47 @@ public:
 
     void hadamardDiv(const Tensor_Impl &other, Tensor_Impl &output) const override
     {
-        validateSameDimensions(other);
+        bool same_shape = (shape == other.getShape());
+        bool is_broadcast = (other.getRows() == 1 && getColumns() == other.getColumns());
+        if (!same_shape && !is_broadcast)
+        {
+            validateSameDimensions(other);
+        }
+
         const auto &a_data = getData();
         const auto &b_data = other.getData();
         auto &output_cpu = static_cast<Cpu_Tensor_Impl &>(output);
         output_cpu.reshape(shape);
 
-        for (std::size_t i = 0; i < total_elements; ++i)
+        if (same_shape)
         {
-            if (std::abs(b_data[i]) < 1e-8F)
+            for (std::size_t i = 0; i < total_elements; ++i)
             {
-                Logger::logMessage(Input_Format{"Cpu_Tensor_Impl::hadamardDiv: Division by zero at index {}", i},
-                                   Log_Level::LOG_ERROR, true, 0, Log_Feature::DENSE_COMPUTE);
-                throw std::runtime_error("Division by zero in hadamardDiv");
+                if (std::abs(b_data[i]) < 1e-8F)
+                {
+                    Logger::logMessage(Input_Format{"Cpu_Tensor_Impl::hadamardDiv: Division by zero at index {}", i},
+                                       Log_Level::LOG_ERROR, true, 0, Log_Feature::DENSE_COMPUTE);
+                    throw std::runtime_error("Division by zero in hadamardDiv");
+                }
+                (*output_cpu.storage_buffer)[i] = a_data[i] / b_data[i];
             }
-            (*output_cpu.storage_buffer)[i] = a_data[i] / b_data[i];
+        }
+        else if (is_broadcast)
+        {
+            std::size_t cols = getColumns();
+            for (std::size_t r = 0; r < getRows(); ++r)
+            {
+                for (std::size_t c = 0; c < cols; ++c)
+                {
+                    if (std::abs(b_data[c]) < 1e-8F)
+                    {
+                        Logger::logMessage(Input_Format{"Cpu_Tensor_Impl::hadamardDiv: Division by zero at column {}", c},
+                                           Log_Level::LOG_ERROR, true, 0, Log_Feature::DENSE_COMPUTE);
+                        throw std::runtime_error("Division by zero in hadamardDiv");
+                    }
+                    (*output_cpu.storage_buffer)[r * cols + c] = a_data[r * cols + c] / b_data[c];
+                }
+            }
         }
 
         Logger::logMessage(Input_Format{"Cpu_Tensor_Impl::hadamardDiv: elements={}, sample={}",
@@ -1727,6 +1737,39 @@ public:
         std::copy_n(a_data.data(), up_elems, up_cpu.storage_buffer->data());
         std::copy_n(a_data.data() + up_elems, rows_down * getColumns(), down_cpu.storage_buffer->data());
     }
+
+    const std::vector<float> &getData() const noexcept override
+    {
+        if (isContiguous() && byte_offset == 0)
+        {
+            return *storage_buffer;
+        }
+
+        std::lock_guard<std::mutex> lock(cache_mutex);
+        materialized_cache.resize(total_elements);
+        iterateCoordinates([this](std::size_t out_idx, std::size_t src_idx)
+                           { materialized_cache[out_idx] = (*storage_buffer)[src_idx]; });
+        return materialized_cache;
+    }
+
+    Mutable_Storage_Handle getStorage() override
+    {
+        if (!isContiguous() || byte_offset != 0)
+        {
+            auto owned_data = getData();
+            storage_buffer = std::make_shared<std::vector<float>>(std::move(owned_data));
+            byte_offset = 0;
+            strides = shape.computeContiguousStrides();
+        }
+        return std::ref(*storage_buffer);
+    }
+
+    Storage_Handle getStorage() const override { return std::cref(getData()); }
+    const std::shared_ptr<std::vector<float>> &getStorageBuffer() const noexcept { return storage_buffer; }
+    std::shared_ptr<std::vector<float>> &getStorageBuffer() noexcept { return storage_buffer; }
+    bool isEmpty() const noexcept override { return !storage_buffer || storage_buffer->empty(); }
+
+    void setStorageBuffer(std::shared_ptr<std::vector<float>> _storage_buffer) noexcept { storage_buffer = std::move(_storage_buffer); }
 };
 
 using Cpu_Matrix_Impl = Cpu_Tensor_Impl;

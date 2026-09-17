@@ -64,11 +64,6 @@ public:
 
     ~Cosine_Annealing() noexcept override = default;
 
-     Decay_Mode getType() const noexcept override
-    {
-        return Decay_Mode::COSINE_ANNEALING;
-    }
-
     float updateRate() override
     {
         if (current_epoch >= maximum_epoch)
@@ -86,10 +81,10 @@ public:
             float cosine_value = std::cos(progress * std::numbers::pi_v<float>);
             current_learning_rate = minimum_learning_rate + 0.5f * (learning_rate - minimum_learning_rate) * (1.0f + cosine_value);
         }
-        Logger::logMessage(std::format("Cosine_Annealing::updateRate: epoch={}/{}, current_rate={}",
-                                       current_epoch,
-                                       maximum_epoch,
-                                       current_learning_rate),
+        Logger::logMessage(Input_Format{"Cosine_Annealing::updateRate: epoch={}/{}, current_rate={}",
+                                        current_epoch,
+                                        maximum_epoch,
+                                        current_learning_rate},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -103,10 +98,30 @@ public:
         updateRate();
     }
 
-     float getCurrentRate() const noexcept override
+    void saveCheckpoint(std::ofstream &_output_file_stream) const override
     {
-        return current_learning_rate;
+        _output_file_stream.write(reinterpret_cast<const char *>(&learning_rate), sizeof(learning_rate));
+        _output_file_stream.write(reinterpret_cast<const char *>(&minimum_learning_rate), sizeof(minimum_learning_rate));
+        _output_file_stream.write(reinterpret_cast<const char *>(&current_learning_rate), sizeof(current_learning_rate));
+        _output_file_stream.write(reinterpret_cast<const char *>(&maximum_epoch), sizeof(maximum_epoch));
+        _output_file_stream.write(reinterpret_cast<const char *>(&current_epoch), sizeof(current_epoch));
     }
+
+    void loadCheckpoint(std::ifstream &_input_file_stream) override
+    {
+        _input_file_stream.read(reinterpret_cast<char *>(&learning_rate), sizeof(learning_rate));
+        _input_file_stream.read(reinterpret_cast<char *>(&minimum_learning_rate), sizeof(minimum_learning_rate));
+        _input_file_stream.read(reinterpret_cast<char *>(&current_learning_rate), sizeof(current_learning_rate));
+        _input_file_stream.read(reinterpret_cast<char *>(&maximum_epoch), sizeof(maximum_epoch));
+        _input_file_stream.read(reinterpret_cast<char *>(&current_epoch), sizeof(current_epoch));
+    }
+
+    float getMinimumLearningRate() const noexcept { return minimum_learning_rate; }
+    float getCurrentRate() const noexcept override { return current_learning_rate; }
+    float getLearningRate() const noexcept override { return learning_rate; }
+    Decay_Mode getType() const noexcept override { return Decay_Mode::COSINE_ANNEALING; }
+    int getMaximumEpoch() const noexcept { return maximum_epoch; }
+    int getCurrentEpoch() const noexcept { return current_epoch; }
 
     void setMaxEpoch(int _maximum_epoch) override
     {
@@ -132,35 +147,16 @@ public:
         }
         float cosine_decay = 0.5f * (1.0f + std::cos(std::numbers::pi_v<float> * static_cast<float>(current_epoch) / static_cast<float>(maximum_epoch)));
         current_learning_rate = minimum_learning_rate + (learning_rate - minimum_learning_rate) * cosine_decay;
-        Logger::logMessage(std::format("Cosine_Annealing::setMaxEpoch: updated maximum_epoch={}, current_rate={}",
-                                       maximum_epoch,
-                                       current_learning_rate),
+        Logger::logMessage(Input_Format{"Cosine_Annealing::setMaxEpoch: updated maximum_epoch={}, current_rate={}",
+                                        maximum_epoch,
+                                        current_learning_rate},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
                            Log_Feature::LR_SCHEDULER);
     }
-
-     float getLearningRate() const noexcept override
-    {
-        return learning_rate;
-    }
-
-    void saveCheckpoint(std::ofstream &_output_file_stream) const override
-    {
-        _output_file_stream.write(reinterpret_cast<const char *>(&learning_rate), sizeof(learning_rate));
-        _output_file_stream.write(reinterpret_cast<const char *>(&minimum_learning_rate), sizeof(minimum_learning_rate));
-        _output_file_stream.write(reinterpret_cast<const char *>(&current_learning_rate), sizeof(current_learning_rate));
-        _output_file_stream.write(reinterpret_cast<const char *>(&maximum_epoch), sizeof(maximum_epoch));
-        _output_file_stream.write(reinterpret_cast<const char *>(&current_epoch), sizeof(current_epoch));
-    }
-
-    void loadCheckpoint(std::ifstream &_input_file_stream) override
-    {
-        _input_file_stream.read(reinterpret_cast<char *>(&learning_rate), sizeof(learning_rate));
-        _input_file_stream.read(reinterpret_cast<char *>(&minimum_learning_rate), sizeof(minimum_learning_rate));
-        _input_file_stream.read(reinterpret_cast<char *>(&current_learning_rate), sizeof(current_learning_rate));
-        _input_file_stream.read(reinterpret_cast<char *>(&maximum_epoch), sizeof(maximum_epoch));
-        _input_file_stream.read(reinterpret_cast<char *>(&current_epoch), sizeof(current_epoch));
-    }
+    void setMinimumLearningRate(float _minimum_learning_rate) noexcept { minimum_learning_rate = _minimum_learning_rate; }
+    void setCurrentRate(float _current_rate) noexcept { current_learning_rate = _current_rate; }
+    void setLearningRate(float _learning_rate) noexcept { learning_rate = _learning_rate; }
+    void setCurrentEpoch(int _current_epoch) noexcept { current_epoch = _current_epoch; }
 };

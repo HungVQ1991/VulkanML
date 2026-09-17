@@ -46,20 +46,23 @@ enum class Layer_Type
 class ILayer
 {
 private:
-    static const Matrix &emptyMatrix()
+    static const Tensor &emptyTensor()
     {
-        static const Matrix empty_matrix(0, 0);
-        return empty_matrix;
+        static const Tensor empty_tensor(0, 0);
+        return empty_tensor;
     }
 
+protected:
+    bool is_accumulated = false;
+
 public:
-    void logBufferAddress(Matrix *_target_matrix, const std::string &_matrix_name) const
+    void logBufferAddress(Tensor *_target_tensor, const std::string &_tensor_name) const
     {
         return;
         std::string layer_name = std::string(magic_enum::enum_name<Layer_Type>(getLayerType()));
-        if (!_target_matrix)
+        if (!_target_tensor)
         {
-            Logger::logMessage(std::format("{}::logBufferAddress: Target matrix is null", layer_name),
+            Logger::logMessage(Input_Format{"{}::logBufferAddress: Target tensor is null", layer_name},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -68,7 +71,7 @@ public:
         }
 
         std::shared_ptr<gpu::vector> gpu_vector = nullptr;
-        auto storage_handle = _target_matrix->getStorage();
+        auto storage_handle = _target_tensor->getStorage();
         if (std::holds_alternative<std::shared_ptr<gpu::vector>>(storage_handle))
         {
             gpu_vector = std::get<std::shared_ptr<gpu::vector>>(storage_handle);
@@ -76,7 +79,7 @@ public:
 
         if (!gpu_vector || gpu_vector->isEmpty())
         {
-            Logger::logMessage(std::format("{}::logBufferAddress: GPU storage of target is empty or invalid", layer_name),
+            Logger::logMessage(Input_Format{"{}::logBufferAddress: GPU storage of target is empty or invalid", layer_name},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -84,20 +87,20 @@ public:
             return;
         }
 
-        Logger::logMessage(std::format("{}::logBufferAddress: Buffer info at {}: Address: {:p}, Size: {}",
+        Logger::logMessage(Input_Format{"{}::logBufferAddress: Buffer info at {}: Address: {:p}, Size: {}",
                                        layer_name,
-                                       _matrix_name,
+                                       _tensor_name,
                                        static_cast<const void *>(gpu_vector->getBuffer()),
-                                       gpu_vector->getSize()),
+                                       gpu_vector->getSize()},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
                            Log_Feature::LAYER_INSPECTION);
 
-        const auto &host_data = _target_matrix->getData();
+        const auto &host_data = _target_tensor->getData();
         if (host_data.empty())
         {
-            Logger::logMessage(std::format("{}::logBufferAddress: {}: Data of target is empty", layer_name, _matrix_name),
+            Logger::logMessage(Input_Format{"{}::logBufferAddress: {}: Data of target is empty", layer_name, _tensor_name},
                                Log_Level::LOG_WARNING,
                                true,
                                0,
@@ -119,13 +122,13 @@ public:
             sample_string += std::format("{:.4e} ", host_data[i]);
         }
 
-        Logger::logMessage(std::format("{}::inspectGradient: {:<18}| Shape: {:>4}x{:<5} | ||G||: {:.6e} | Top: [{}]",
+        Logger::logMessage(Input_Format{"{}::inspectGradient: {:<18}| Shape: {:>4}x{:<5} | ||G||: {:.6e} | Top: [{}]",
                                        layer_name,
-                                       _matrix_name,
-                                       _target_matrix->getRows(),
-                                       _target_matrix->getColumns(),
+                                       _tensor_name,
+                                       _target_tensor->getRows(),
+                                       _target_tensor->getColumns(),
                                        norm_value,
-                                       sample_string),
+                                       sample_string},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -134,45 +137,27 @@ public:
 
     void logChangeExecutionTarget(Execution_Target new_target)
     {
-        Logger::logMessage( std::format("ILayer::setExecutionTarget: Change target at layer {} from {} to {}", 
+        Logger::logMessage(Input_Format{"ILayer::setExecutionTarget: Change target at layer {} from {} to {}", 
             getEnumString<Layer_Type>(getLayerType()),
             getEnumString<Execution_Target>(getExecutionTarget()), 
-            getEnumString<Execution_Target>(new_target)),
+            getEnumString<Execution_Target>(new_target)},
             Log_Level::LOG_DEBUG, true, 0, Log_Feature::DEVICE_MANAGEMENT);
     }
 
     virtual ~ILayer() noexcept = default;
 
-    virtual Matrix forward(const Matrix &_input_matrix) { return Tensor{}; };
-    virtual Matrix backward(const Matrix &_output_gradient) = 0;
-
-    virtual const Matrix &getWeights() const { return emptyMatrix(); }
-    virtual const Matrix &getBiases() const { return emptyMatrix(); }
-    virtual const Matrix &getWeightsGradient() const { return emptyMatrix(); }
-    virtual const Matrix &getInput() const { return emptyMatrix(); }
-    virtual const Matrix &getOutput() const { return emptyMatrix(); }
-    virtual Execution_Target getExecutionTarget() const = 0;
+    virtual Tensor forward(const Tensor &_input_tensor) { return Tensor{}; }
+    virtual Tensor backward(const Tensor &_output_gradient) = 0;
 
     virtual bool hasParameters() const { return false; }
     virtual bool supportsPopulationBatch() const { return false; }
     virtual void resetGradient() {}
     virtual void resetGradients() { resetGradient(); }
-    virtual void setTrainingMode(bool _is_training) {}
-
-    virtual std::vector<std::pair<Matrix *, Matrix *>> getParametersAndGradients() { return {}; }
-    virtual std::vector<std::pair<Matrix *, Matrix *>> getParamsAndGrads() { return getParametersAndGradients(); }
-
-    virtual std::vector<Shape> getPopulationParameterDims() const { return {}; }
 
     virtual Tensor forward(const Tensor& _batched_input, const std::vector<Tensor>& _batched_params) const
     {
         throw std::logic_error(std::format("{} does not support population-batched forward",
             getEnumString<Layer_Type>(getLayerType())));
-    }
-
-    virtual std::vector<bool> getPopulationParameterIsEvolvable() const
-    {
-        return std::vector<bool>(getPopulationParameterDims().size(), true);
     }
 
     virtual std::function<float(std::mt19937&)> getPopulationParameterInitializer(std::size_t param_index) const
@@ -182,10 +167,6 @@ public:
 
     virtual std::unique_ptr<ILayer> clone() const = 0; 
 
-    virtual void setPopulationParameter(std::size_t param_index, std::vector<float> flat_data) {}
-
-    virtual Layer_Type getLayerType() const = 0;
-
     virtual void saveConfiguration(std::ofstream &_output_file_stream) const = 0;
     virtual void saveConfig(std::ofstream &_output_file_stream) const { saveConfiguration(_output_file_stream); }
 
@@ -194,6 +175,23 @@ public:
     virtual void saveCheckpoint(std::ofstream &_output_file_stream) const = 0;
     virtual void loadCheckpoint(std::ifstream &_input_file_stream) = 0;
 
+    virtual const Tensor &getWeights() const { return emptyTensor(); }
+    virtual const Tensor &getBiases() const { return emptyTensor(); }
+    virtual const Tensor &getWeightsGradient() const { return emptyTensor(); }
+    virtual const Tensor &getInput() const { return emptyTensor(); }
+    virtual const Tensor &getOutput() const { return emptyTensor(); }
+    virtual std::vector<std::pair<Tensor *, Tensor *>> getParametersAndGradients() { return {}; }
+    virtual std::vector<std::pair<Tensor *, Tensor *>> getParamsAndGrads() { return getParametersAndGradients(); }
+    virtual std::vector<Shape> getPopulationParameterDims() const { return {}; }
+    virtual std::vector<bool> getPopulationParameterIsEvolvable() const { return std::vector<bool>(getPopulationParameterDims().size(), true); }
+    virtual std::vector<float> getPopulationParameter(std::size_t param_index) const { return {}; }
+    virtual Execution_Target getExecutionTarget() const = 0;
+    virtual Layer_Type getLayerType() const = 0;
+    virtual bool isAccumulated() const noexcept { return is_accumulated; }
+
+    virtual void setPopulationParameter(std::size_t param_index, std::vector<float> flat_data) {}
     virtual void setExecutionTarget(Execution_Target _execution_target) = 0;
     virtual void setTarget(Execution_Target _execution_target) { setExecutionTarget(_execution_target); }
+    virtual void setAccumulated(bool _is_accumulated) noexcept { is_accumulated = _is_accumulated; }
+    virtual void setTrainingMode(bool _is_training) {}
 };

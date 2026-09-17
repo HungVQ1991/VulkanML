@@ -79,7 +79,7 @@ void loadMnistImages(const std::string &_file_path, std::vector<float> &_images_
     std::ifstream input_file_stream(_file_path, std::ios::binary);
     if (!input_file_stream.is_open())
     {
-        Logger::logMessage(std::format("loadMnistImages: Cannot open MNIST images file: {}", _file_path),
+        Logger::logMessage(Input_Format{"loadMnistImages: Cannot open MNIST images file: {}", _file_path},
                            Log_Level::LOG_ERROR,
                            true,
                            0,
@@ -127,7 +127,7 @@ void loadMnistLabels(const std::string &_file_path, std::vector<float> &_labels_
     std::ifstream input_file_stream(_file_path, std::ios::binary);
     if (!input_file_stream.is_open())
     {
-        Logger::logMessage(std::format("loadMnistLabels: Cannot open MNIST labels file: {}", _file_path),
+        Logger::logMessage(Input_Format{"loadMnistLabels: Cannot open MNIST labels file: {}", _file_path},
                            Log_Level::LOG_ERROR,
                            true,
                            0,
@@ -444,7 +444,7 @@ int main()
     double elapsed_duration_ms = runBenchmark(execution_target, train_images_data, train_labels_data, train_images_count, neural_network, "output/mnist/checkpoint_{}");
     std::string mes = std::format("Training completed in {:.4f} s", elapsed_duration_ms / 1000.0);
     std::cout << mes << "\n";
-    Logger::logMessage(mes, Log_Level::LOG_INFO, true, 0, Log_Feature::TRAINING);
+    Logger::logMessage(Input_Format{"Training completed in {:.4f} s", elapsed_duration_ms / 1000.0}, Log_Level::LOG_INFO, true, 0, Log_Feature::TRAINING);
 
     neural_network.setTrainingMode(false);
     evaluateModel(neural_network, test_images_data, test_labels_data, test_images_count, execution_target);

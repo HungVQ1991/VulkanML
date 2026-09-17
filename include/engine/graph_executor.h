@@ -34,6 +34,14 @@ struct Persistent_Descriptor_Entry
     VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
     std::vector<VkBuffer> bound_buffers;
     std::vector<std::uint32_t> bound_binding_indices;
+
+    const std::vector<VkBuffer> &getBoundBuffers() const noexcept { return bound_buffers; }
+    const std::vector<std::uint32_t> &getBoundBindingIndices() const noexcept { return bound_binding_indices; }
+    VkDescriptorSet getDescriptorSet() const noexcept { return descriptor_set; }
+
+    void setBoundBuffers(const std::vector<VkBuffer> &_buffers) { bound_buffers = _buffers; }
+    void setBoundBindingIndices(const std::vector<std::uint32_t> &_indices) { bound_binding_indices = _indices; }
+    void setDescriptorSet(VkDescriptorSet _set) noexcept { descriptor_set = _set; }
 };
 
 class Graph_Executor
@@ -210,6 +218,97 @@ private:
         return _text;
     }
 
+    std::vector<std::shared_ptr<gpu::vector>> getNodeWrittenBuffers(const Compute_Node &_node) const
+    {
+        std::vector<std::shared_ptr<gpu::vector>> written_buffers;
+        if (_node.is_fused)
+        {
+            for (std::uint32_t out_idx : _node.external_output_indices)
+            {
+                if (out_idx < _node.buffers.size() && _node.buffers[out_idx])
+                {
+                    written_buffers.push_back(_node.buffers[out_idx]);
+                }
+            }
+            for (const auto &op : _node.fused_operations)
+            {
+                const auto &meta = shader_dictionary.getMetadata(op.pipeline_id);
+                for (std::uint32_t p_idx : meta.persistent_output_indices)
+                {
+                    if (p_idx < op.output_buffer_indices.size())
+                    {
+                        std::uint32_t buf_idx = op.output_buffer_indices[p_idx];
+                        if (buf_idx < _node.buffers.size() && _node.buffers[buf_idx])
+                        {
+                            written_buffers.push_back(_node.buffers[buf_idx]);
+                        }
+                    }
+                }
+                if (op.pipeline_id == Compute_Pipeline::ADAM_UPDATE)
+                {
+                    for (std::size_t idx : {0, 2, 3})
+                    {
+                        if (idx < op.input_buffer_indices.size())
+                        {
+                            std::uint32_t buf_idx = op.input_buffer_indices[idx];
+                            if (buf_idx < _node.buffers.size() && _node.buffers[buf_idx])
+                            {
+                                written_buffers.push_back(_node.buffers[buf_idx]);
+                            }
+                        }
+                    }
+                }
+                else if (op.pipeline_id == Compute_Pipeline::SGD_UPDATE)
+                {
+                    if (!op.input_buffer_indices.empty())
+                    {
+                        std::uint32_t buf_idx = op.input_buffer_indices[0];
+                        if (buf_idx < _node.buffers.size() && _node.buffers[buf_idx])
+                        {
+                            written_buffers.push_back(_node.buffers[buf_idx]);
+                        }
+                    }
+                }
+            }
+        }
+        else
+        {
+            const auto &metadata = shader_dictionary.getMetadata(_node.pipeline_id);
+            for (std::uint32_t i = metadata.input_count;
+                 i < metadata.input_count + metadata.output_count && i < _node.buffers.size();
+                 ++i)
+            {
+                if (_node.buffers[i])
+                {
+                    written_buffers.push_back(_node.buffers[i]);
+                }
+            }
+            if (_node.pipeline_id == Compute_Pipeline::ADAM_UPDATE)
+            {
+                for (std::size_t idx : {0, 2, 3})
+                {
+                    if (idx < _node.buffers.size() && _node.buffers[idx])
+                    {
+                        written_buffers.push_back(_node.buffers[idx]);
+                    }
+                }
+            }
+            else if (_node.pipeline_id == Compute_Pipeline::SGD_UPDATE)
+            {
+                if (!_node.buffers.empty() && _node.buffers[0])
+                {
+                    written_buffers.push_back(_node.buffers[0]);
+                }
+            }
+        }
+
+        if (written_buffers.empty())
+        {
+            return _node.buffers;
+        }
+        return written_buffers;
+    }
+
     void insertBufferMemoryBarriers(VkCommandBuffer _command_buffer, const std::vector<std::shared_ptr<gpu::vector>> &_buffers) const
     {
         if (_buffers.empty())
@@ -298,7 +397,7 @@ private:
 
                 if (vkAllocateDescriptorSets(device, &allocate_information, &entry.descriptor_set) != VK_SUCCESS)
                 {
-                    Logger::logMessage(std::format("Graph_Executor::executeFallbackNode: Failed to allocate descriptor set for fallback op {}", operation_index),
+                    Logger::logMessage(Input_Format{"Graph_Executor::executeFallbackNode: Failed to allocate descriptor set for fallback op {}", operation_index},
                                        Log_Level::LOG_ERROR,
                                        true,
                                        0,
@@ -396,7 +495,7 @@ private:
         {
             if (vkCreateDescriptorPool(device, &pool_create_information, nullptr, &descriptor_pools[i]) != VK_SUCCESS)
             {
-                Logger::logMessage(std::format("Graph_Executor::initializeResources: Failed to create descriptor pool for frame {}", i),
+                Logger::logMessage(Input_Format{"Graph_Executor::initializeResources: Failed to create descriptor pool for frame {}", i},
                                    Log_Level::LOG_ERROR,
                                    true,
                                    0,
@@ -433,7 +532,7 @@ private:
         {
             if (!_buffers[i] || _buffers[i]->getBuffer() == VK_NULL_HANDLE)
             {
-                Logger::logMessage(std::format("Graph_Executor::updateDescriptorSet: Null buffer encountered at index {}", i),
+                Logger::logMessage(Input_Format{"Graph_Executor::updateDescriptorSet: Null buffer encountered at index {}", i},
                                    Log_Level::LOG_WARNING,
                                    true,
                                    0,
@@ -1074,67 +1173,14 @@ public:
         if (std::find(printed_terminal_shader_chains.begin(), printed_terminal_shader_chains.end(), node_chain_name) == printed_terminal_shader_chains.end())
         {
             printed_terminal_shader_chains.push_back(node_chain_name);
-            Logger::logMessage(std::format("Graph_Executor::generateFusedGlsl: Generated GLSL for node {}:\n\n===============\n{}\n\n===============",
-                                           node_chain_name, glsl_code),
+            Logger::logMessage(Input_Format{"Graph_Executor::generateFusedGlsl: Generated GLSL for node {}:\n\n===============\n{}\n\n===============",
+                                           node_chain_name, glsl_code},
                                Log_Level::LOG_DEBUG,
                                true,
                                0,
                                Log_Feature::SHADER_GENERATION | Log_Feature::OPERATOR_FUSION);
         }
         return glsl_code;
-    }
-
-    const Vulkan_Context &getContext() const noexcept
-    {
-        return context;
-    }
-
-    const Vulkan_Network &getNetwork() const noexcept
-    {
-        return network;
-    }
-
-    Pipeline_Cache_Manager &getPipelineCacheManager() noexcept
-    {
-        return pipeline_cache_manager;
-    }
-
-    const Pipeline_Cache_Manager &getPipelineCacheManager() const noexcept
-    {
-        return pipeline_cache_manager;
-    }
-
-    const Shader_Dictionary &getShaderDictionary() const noexcept
-    {
-        return shader_dictionary;
-    }
-
-    VkCommandBuffer getCommandBuffer(std::uint32_t _frame_index) const
-    {
-        if (_frame_index >= MAX_FRAMES_IN_FLIGHT)
-        {
-            Logger::logMessage(std::format("Graph_Executor::getCommandBuffer: frame_index out of bounds ({})", _frame_index),
-                               Log_Level::LOG_WARNING,
-                               true,
-                               0,
-                               Log_Feature::DISPATCH_EXECUTION);
-            return VK_NULL_HANDLE;
-        }
-        return command_buffers[_frame_index];
-    }
-
-    VkDescriptorPool getDescriptorPool(std::uint32_t _frame_index) const
-    {
-        if (_frame_index >= MAX_FRAMES_IN_FLIGHT)
-        {
-            Logger::logMessage(std::format("Graph_Executor::getDescriptorPool: frame_index out of bounds ({})", _frame_index),
-                               Log_Level::LOG_WARNING,
-                               true,
-                               0,
-                               Log_Feature::DISPATCH_EXECUTION);
-            return VK_NULL_HANDLE;
-        }
-        return descriptor_pools[_frame_index];
     }
 
     void invalidate()
@@ -1160,7 +1206,7 @@ public:
     {
         if (_frame_index >= MAX_FRAMES_IN_FLIGHT)
         {
-            Logger::logMessage(std::format("Graph_Executor::resetFrameState: frame_index out of bounds ({})", _frame_index),
+            Logger::logMessage(Input_Format{"Graph_Executor::resetFrameState: frame_index out of bounds ({})", _frame_index},
                                Log_Level::LOG_WARNING,
                                true,
                                0,
@@ -1176,7 +1222,7 @@ public:
     {
         if (_frame_index >= MAX_FRAMES_IN_FLIGHT)
         {
-            Logger::logMessage(std::format("Graph_Executor::compileAndExecute: frame_index out of bounds ({})", _frame_index),
+            Logger::logMessage(Input_Format{"Graph_Executor::compileAndExecute: frame_index out of bounds ({})", _frame_index},
                                Log_Level::LOG_WARNING,
                                true,
                                0,
@@ -1187,14 +1233,14 @@ public:
         const std::vector<Compute_Node> &nodes = _graph.getNodes();
         if (nodes.empty() && _transfer_tasks.empty())
         {
-            Logger::logMessage(std::format("Graph_Executor::compileAndExecute: Both compute nodes and transfer tasks are empty for frame {}", _frame_index),
+            Logger::logMessage(Input_Format{"Graph_Executor::compileAndExecute: Both compute nodes and transfer tasks are empty for frame {}", _frame_index},
                                Log_Level::LOG_WARNING,
                                false,
                                0,
                                Log_Feature::DISPATCH_EXECUTION);
         }
 
-        Logger::logMessage(std::format("Graph_Executor::compileAndExecute: Frame {}, nodes={}, transfer_tasks={}", _frame_index, nodes.size(), _transfer_tasks.size()),
+        Logger::logMessage(Input_Format{"Graph_Executor::compileAndExecute: Frame {}, nodes={}, transfer_tasks={}", _frame_index, nodes.size(), _transfer_tasks.size()},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -1207,7 +1253,7 @@ public:
 
         if (vkResetCommandBuffer(command_buffer, 0) != VK_SUCCESS)
         {
-            Logger::logMessage(std::format("Graph_Executor::compileAndExecute: Failed to reset command buffer for frame {}", _frame_index),
+            Logger::logMessage(Input_Format{"Graph_Executor::compileAndExecute: Failed to reset command buffer for frame {}", _frame_index},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -1223,7 +1269,7 @@ public:
 
         if (vkBeginCommandBuffer(command_buffer, &begin_information) != VK_SUCCESS)
         {
-            Logger::logMessage(std::format("Graph_Executor::compileAndExecute: Failed to begin command buffer for frame {}", _frame_index),
+            Logger::logMessage(Input_Format{"Graph_Executor::compileAndExecute: Failed to begin command buffer for frame {}", _frame_index},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -1280,7 +1326,7 @@ public:
                 }
                 else
                 {
-                    Logger::logMessage(std::format("Graph_Executor::compileAndExecute: Null gpu::vector buffer encountered in compute node {}", i),
+                    Logger::logMessage(Input_Format{"Graph_Executor::compileAndExecute: Null gpu::vector buffer encountered in compute node {}", i},
                                        Log_Level::LOG_WARNING,
                                        true,
                                        0,
@@ -1328,7 +1374,7 @@ public:
 
                             if (vkAllocateDescriptorSets(device, &allocate_information, &entry.descriptor_set) != VK_SUCCESS)
                             {
-                                Logger::logMessage(std::format("Graph_Executor::compileAndExecute: Failed to allocate persistent descriptor set for fused node {}", i),
+                                Logger::logMessage(Input_Format{"Graph_Executor::compileAndExecute: Failed to allocate persistent descriptor set for fused node {}", i},
                                                    Log_Level::LOG_ERROR,
                                                    true,
                                                    0,
@@ -1363,7 +1409,7 @@ public:
                 }
                 catch (const std::exception &exception)
                 {
-                    Logger::logMessage(std::format("Graph_Executor::compileAndExecute: Fused shader execution failed for node [{}] ({}), initiating fallback execution", i, exception.what()),
+                    Logger::logMessage(Input_Format{"Graph_Executor::compileAndExecute: Fused shader execution failed for node [{}] ({}), initiating fallback execution", i, exception.what()},
                                        Log_Level::LOG_WARNING,
                                        true,
                                        0,
@@ -1393,7 +1439,7 @@ public:
 
                         if (vkAllocateDescriptorSets(device, &allocate_information, &entry.descriptor_set) != VK_SUCCESS)
                         {
-                            Logger::logMessage(std::format("Graph_Executor::compileAndExecute: Failed to allocate descriptor set for node {}", i),
+                            Logger::logMessage(Input_Format{"Graph_Executor::compileAndExecute: Failed to allocate descriptor set for node {}", i},
                                                Log_Level::LOG_ERROR,
                                                true,
                                                0,
@@ -1430,13 +1476,13 @@ public:
 
             if (node.is_barrier_required_after)
             {
-                insertBufferMemoryBarriers(command_buffer, node.buffers);
+                insertBufferMemoryBarriers(command_buffer, getNodeWrittenBuffers(node));
             }
         }
 
         if (vkEndCommandBuffer(command_buffer) != VK_SUCCESS)
         {
-            Logger::logMessage(std::format("Graph_Executor::compileAndExecute: Failed to end command buffer for frame {}", _frame_index),
+            Logger::logMessage(Input_Format{"Graph_Executor::compileAndExecute: Failed to end command buffer for frame {}", _frame_index},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -1459,7 +1505,7 @@ public:
 
         if (vkQueueSubmit(context.getComputeQueue(), 1, &submit_information, primary_fence) != VK_SUCCESS)
         {
-            Logger::logMessage(std::format("Graph_Executor::compileAndExecute: Failed to submit command buffer for frame {}", _frame_index),
+            Logger::logMessage(Input_Format{"Graph_Executor::compileAndExecute: Failed to submit command buffer for frame {}", _frame_index},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -1481,7 +1527,7 @@ public:
             return;
         }
 
-        Logger::logMessage(std::format("Graph_Executor::warmupPipelineCache: Pre-compiling pipelines for {} nodes", nodes.size()),
+        Logger::logMessage(Input_Format{"Graph_Executor::warmupPipelineCache: Pre-compiling pipelines for {} nodes", nodes.size()},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -1505,7 +1551,7 @@ public:
                 }
                 catch (const std::exception &exception)
                 {
-                    Logger::logMessage(std::format("Graph_Executor::warmupPipelineCache: Pre-compilation failed ({}), fallback will be used at runtime", exception.what()),
+                    Logger::logMessage(Input_Format{"Graph_Executor::warmupPipelineCache: Pre-compilation failed ({}), fallback will be used at runtime", exception.what()},
                                        Log_Level::LOG_WARNING,
                                        true,
                                        0,
@@ -1520,4 +1566,41 @@ public:
 
         pipeline_cache_manager.freezeCache(true);
     }
+
+    const Pipeline_Cache_Manager &getPipelineCacheManager() const noexcept { return pipeline_cache_manager; }
+    Pipeline_Cache_Manager &getPipelineCacheManager() noexcept { return pipeline_cache_manager; }
+    const Shader_Dictionary &getShaderDictionary() const noexcept { return shader_dictionary; }
+    const Vulkan_Network &getNetwork() const noexcept { return network; }
+    const Vulkan_Context &getContext() const noexcept { return context; }
+    const std::vector<std::string> &getPrintedTerminalShaderChains() const noexcept { return printed_terminal_shader_chains; }
+    VkCommandBuffer getCommandBuffer(std::uint32_t _frame_index) const
+    {
+        if (_frame_index >= MAX_FRAMES_IN_FLIGHT)
+        {
+            Logger::logMessage(Input_Format{"Graph_Executor::getCommandBuffer: frame_index out of bounds ({})", _frame_index},
+                               Log_Level::LOG_WARNING,
+                               true,
+                               0,
+                               Log_Feature::DISPATCH_EXECUTION);
+            return VK_NULL_HANDLE;
+        }
+        return command_buffers[_frame_index];
+    }
+    VkDescriptorPool getDescriptorPool(std::uint32_t _frame_index) const
+    {
+        if (_frame_index >= MAX_FRAMES_IN_FLIGHT)
+        {
+            Logger::logMessage(Input_Format{"Graph_Executor::getDescriptorPool: frame_index out of bounds ({})", _frame_index},
+                               Log_Level::LOG_WARNING,
+                               true,
+                               0,
+                               Log_Feature::DISPATCH_EXECUTION);
+            return VK_NULL_HANDLE;
+        }
+        return descriptor_pools[_frame_index];
+    }
+
+    void setPrintedTerminalShaderChains(const std::vector<std::string> &_chains) { printed_terminal_shader_chains = _chains; }
+    void setCommandBuffer(std::uint32_t _frame_index, VkCommandBuffer _command_buffer) noexcept { if (_frame_index < MAX_FRAMES_IN_FLIGHT) command_buffers[_frame_index] = _command_buffer; }
+    void setDescriptorPool(std::uint32_t _frame_index, VkDescriptorPool _pool) noexcept { if (_frame_index < MAX_FRAMES_IN_FLIGHT) descriptor_pools[_frame_index] = _pool; }
 };

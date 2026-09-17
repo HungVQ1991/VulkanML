@@ -130,6 +130,20 @@ struct Log_Record
     std::string message;
     std::string file;
     std::uint_least32_t line;
+
+    const std::string &getMessage() const noexcept { return message; }
+    const std::string &getTimestamp() const noexcept { return timestamp; }
+    const std::string &getFile() const noexcept { return file; }
+    Log_Feature getFeature() const noexcept { return feature; }
+    std::uint_least32_t getLine() const noexcept { return line; }
+    Log_Level getLevel() const noexcept { return level; }
+
+    void setMessage(const std::string &_message) { message = _message; }
+    void setTimestamp(const std::string &_timestamp) { timestamp = _timestamp; }
+    void setFile(const std::string &_file) { file = _file; }
+    void setFeature(Log_Feature _feature) noexcept { feature = _feature; }
+    void setLine(std::uint_least32_t _line) noexcept { line = _line; }
+    void setLevel(Log_Level _level) noexcept { level = _level; }
 };
 
 class Logger
@@ -358,78 +372,6 @@ public:
         initialize(_directory);
     }
 
-    static void setFileLogging(bool _enable) noexcept
-    {
-        Logger &instance = getInstance();
-        std::lock_guard<std::mutex> lock(instance.logger_mutex);
-        instance.is_file_logging_enabled.store(_enable, std::memory_order_relaxed);
-        if (_enable && !instance.log_file_stream.is_open())
-        {
-            instance.openNewLogFile();
-        }
-        else if (!_enable && instance.log_file_stream.is_open())
-        {
-            instance.log_file_stream << std::format("[{}] [{:<5}] [{:<18}] PAUSING LOG INSTANCE\n", timestamp(), "INFO", "General");
-            instance.log_file_stream.close();
-        }
-    }
-
-    static void enableFileLogging(bool _enable = true) noexcept
-    {
-        setFileLogging(_enable);
-    }
-
-     static bool isFileLoggingEnabled() noexcept
-    {
-        return getInstance().is_file_logging_enabled.load(std::memory_order_relaxed);
-    }
-
-    static void setForceAllConsoleOutput(bool _enable = true) noexcept
-    {
-        getInstance().is_force_all_console_enabled.store(_enable, std::memory_order_relaxed);
-    }
-
-    static void forceAllConsoleOutput(bool _enable = true) noexcept
-    {
-        setForceAllConsoleOutput(_enable);
-    }
-
-     static bool isForceAllConsoleOutputEnabled() noexcept
-    {
-        return getInstance().is_force_all_console_enabled.load(std::memory_order_relaxed);
-    }
-
-    static std::string getCurrentLogFilepath()
-    {
-        Logger &instance = getInstance();
-        std::lock_guard<std::mutex> lock(instance.logger_mutex);
-        return instance.current_log_file.string();
-    }
-
-    static void enableFeature(Log_Feature _feature, bool _enable = true) noexcept
-    {
-        Logger &instance = getInstance();
-        std::uint64_t feature_mask = static_cast<std::uint64_t>(_feature);
-        if (_enable)
-        {
-            instance.active_features.fetch_or(feature_mask, std::memory_order_relaxed);
-        }
-        else
-        {
-            instance.active_features.fetch_and(~feature_mask, std::memory_order_relaxed);
-        }
-    }
-
-    static void setOnlyActiveFeatures(Log_Feature _feature_mask) noexcept
-    {
-        getInstance().active_features.store(static_cast<std::uint64_t>(_feature_mask), std::memory_order_relaxed);
-    }
-
-    static void setConsoleOutput(bool _enable) noexcept
-    {
-        getInstance().is_console_enabled.store(_enable, std::memory_order_relaxed);
-    }
-
     template <typename... Args>
     static bool logMessage(
         const Input_Format<Args...> &_format,
@@ -615,8 +557,61 @@ public:
         instance.call_site_counters.clear();
     }
 
-    static void resetSpecificLog( )
+    static void resetSpecificLog()
     {
-
     }
+
+    static std::string getCurrentLogFilepath()
+    {
+        Logger &instance = getInstance();
+        std::lock_guard<std::mutex> lock(instance.logger_mutex);
+        return instance.current_log_file.string();
+    }
+    static std::string getLogDirectory()
+    {
+        Logger &instance = getInstance();
+        std::lock_guard<std::mutex> lock(instance.logger_mutex);
+        return instance.log_directory.string();
+    }
+    static std::size_t getMaxRingBufferEntries() noexcept { return MAX_RING_BUFFER_ENTRIES; }
+    static std::size_t getMaxLogFiles() noexcept { return MAX_LOG_FILES; }
+    static Log_Feature getActiveFeatures() noexcept { return static_cast<Log_Feature>(getInstance().active_features.load(std::memory_order_relaxed)); }
+    static bool isForceAllConsoleOutputEnabled() noexcept { return getInstance().is_force_all_console_enabled.load(std::memory_order_relaxed); }
+    static bool isFileLoggingEnabled() noexcept { return getInstance().is_file_logging_enabled.load(std::memory_order_relaxed); }
+    static bool isConsoleEnabled() noexcept { return getInstance().is_console_enabled.load(std::memory_order_relaxed); }
+
+    static void setFileLogging(bool _enable) noexcept
+    {
+        Logger &instance = getInstance();
+        std::lock_guard<std::mutex> lock(instance.logger_mutex);
+        instance.is_file_logging_enabled.store(_enable, std::memory_order_relaxed);
+        if (_enable && !instance.log_file_stream.is_open())
+        {
+            instance.openNewLogFile();
+        }
+        else if (!_enable && instance.log_file_stream.is_open())
+        {
+            instance.log_file_stream << std::format("[{}] [{:<5}] [{:<18}] PAUSING LOG INSTANCE\n", timestamp(), "INFO", "General");
+            instance.log_file_stream.close();
+        }
+    }
+    static void enableFeature(Log_Feature _feature, bool _enable = true) noexcept
+    {
+        Logger &instance = getInstance();
+        std::uint64_t feature_mask = static_cast<std::uint64_t>(_feature);
+        if (_enable)
+        {
+            instance.active_features.fetch_or(feature_mask, std::memory_order_relaxed);
+        }
+        else
+        {
+            instance.active_features.fetch_and(~feature_mask, std::memory_order_relaxed);
+        }
+    }
+    static void setLogDirectory(const std::string &_directory) { initialize(_directory); }
+    static void setOnlyActiveFeatures(Log_Feature _feature_mask) noexcept { getInstance().active_features.store(static_cast<std::uint64_t>(_feature_mask), std::memory_order_relaxed); }
+    static void setForceAllConsoleOutput(bool _enable = true) noexcept { getInstance().is_force_all_console_enabled.store(_enable, std::memory_order_relaxed); }
+    static void forceAllConsoleOutput(bool _enable = true) noexcept { setForceAllConsoleOutput(_enable); }
+    static void enableFileLogging(bool _enable = true) noexcept { setFileLogging(_enable); }
+    static void setConsoleOutput(bool _enable) noexcept { getInstance().is_console_enabled.store(_enable, std::memory_order_relaxed); }
 };

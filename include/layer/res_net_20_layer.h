@@ -28,16 +28,17 @@ private:
     std::uint32_t input_channels = 3;
     std::uint32_t num_classes = 100;
 
+    Execution_Target execution_target = Execution_Target::CPU;
+
+    Tensor input_tensor;
+    Tensor output_tensor;
+    Tensor input_gradient_tensor;
+
     bool is_forward_completed = false;
     bool is_training = true;
     bool is_accumulated = false;
-    Execution_Target execution_target = Execution_Target::CPU;
 
     std::vector<std::unique_ptr<ILayer>> layers;
-
-    Matrix input_matrix;
-    Matrix output_matrix;
-    Matrix input_gradient;
 
     void buildNetwork()
     {
@@ -85,10 +86,9 @@ public:
           input_channels(_input_channels),
           num_classes(_num_classes),
           execution_target(_execution_target),
-          input_matrix(0, 0, _execution_target),
-          output_matrix(0, 0, _execution_target),
-          input_gradient(0, 0, _execution_target),
-          is_accumulated(false),
+          input_tensor(0, 0, _execution_target),
+          output_tensor(0, 0, _execution_target),
+          input_gradient_tensor(0, 0, _execution_target),
           is_forward_completed(false)
     {
         buildNetwork();
@@ -96,151 +96,28 @@ public:
 
     ~Res_Net_20_Layer() noexcept override = default;
 
-    void setTrainingMode(bool _is_training) override
-    {
-        is_training = _is_training;
-        for (auto &layer : layers)
-        {
-            layer->setTrainingMode(_is_training);
-        }
-    }
-
-    Matrix forward(const Matrix &_input_matrix) override
-    {
-        input_matrix = _input_matrix;
-
-        Matrix current_tensor = input_matrix;
-        for (auto &layer : layers)
-        {
-            current_tensor = layer->forward(current_tensor);
-        }
-        output_matrix = current_tensor;
-
-        is_forward_completed = true;
-        return output_matrix;
-    }
-    
-    Tensor forward(const Tensor& _batched_input, const std::vector<Tensor>& _batched_params) const override
-    {
-        if (_batched_params.size() != getPopulationParameterDims().size())
-        {
-            Logger::logMessage(Input_Format{ "Res_Net_20_Layer::forward: expected {} batched parameter tensors, got {}",
-                                            getPopulationParameterDims().size(), _batched_params.size() },
-                Log_Level::LOG_ERROR,
-                true,
-                0,
-                Log_Feature::FORWARD_EVALUATION);
-            throw std::invalid_argument("Invalid input params size");
-        }
-
-        std::size_t param_offset = 0;
-        Tensor current_tensor = _batched_input;
-
-        for (const auto& layer : layers)
-        {
-            std::size_t param_count = layer->getPopulationParameterDims().size();
-            std::vector<Tensor> sub_params(
-                _batched_params.begin() + param_offset,
-                _batched_params.begin() + param_offset + param_count);
-            current_tensor = layer->forward(current_tensor, sub_params);
-            param_offset += param_count;
-        }
-
-        return current_tensor;
-    }
-
-    bool supportsPopulationBatch() const noexcept override { return true; }
-
-    std::vector<Shape> getPopulationParameterDims() const override
-    {
-        std::vector<Shape> total_dims;
-        for (const auto& layer : layers)
-        {
-            auto dims = layer->getPopulationParameterDims();
-            total_dims.insert(total_dims.end(), dims.begin(), dims.end());
-        }
-        return total_dims;
-    }
-
-    std::vector<bool> getPopulationParameterIsEvolvable() const override
-    {
-        std::vector<bool> total_evolvable;
-        for (const auto& layer : layers)
-        {
-            auto evolvable = layer->getPopulationParameterIsEvolvable();
-            total_evolvable.insert(total_evolvable.end(), evolvable.begin(), evolvable.end());
-        }
-        return total_evolvable;
-    }
-
     std::unique_ptr<ILayer> clone() const override
     {
         return std::make_unique<Res_Net_20_Layer>(
             input_height, input_width, input_channels, num_classes, execution_target);
     }
 
-    std::function<float(std::mt19937&)> getPopulationParameterInitializer(std::size_t param_index) const override
+    Tensor forward(const Tensor &_input_tensor) override
     {
-        std::size_t current_offset = 0;
-        for (const auto& layer : layers)
+        input_tensor = _input_tensor;
+
+        Tensor current_tensor = input_tensor;
+        for (auto &layer : layers)
         {
-            std::size_t count = layer->getPopulationParameterDims().size();
-            if (param_index < current_offset + count)
-            {
-                return layer->getPopulationParameterInitializer(param_index - current_offset);
-            }
-            current_offset += count;
+            current_tensor = layer->forward(current_tensor);
         }
-        throw std::out_of_range("Res_Net_20_Layer::getPopulationParameterInitializer: Parameter index out of range");
+        output_tensor = current_tensor;
+
+        is_forward_completed = true;
+        return output_tensor;
     }
 
-    void setPopulationParameter(std::size_t param_index, std::vector<float> flat_data) override
-    {
-        std::size_t current_offset = 0;
-        for (auto& layer : layers)
-        {
-            std::size_t count = layer->getPopulationParameterDims().size();
-            if (param_index < current_offset + count)
-            {
-                layer->setPopulationParameter(param_index - current_offset, std::move(flat_data));
-                return;
-            }
-            current_offset += count;
-        }
-        throw std::out_of_range("Res_Net_20_Layer::setPopulationParameter: Parameter index out of range");
-    }
-
-    bool isAccumulated() const noexcept
-    {
-        return is_accumulated;
-    }
-
-    void setAccumulated(bool _is_accumulated) noexcept
-    {
-        is_accumulated = _is_accumulated;
-    }
-
-    std::uint32_t getInputHeight() const noexcept
-    {
-        return input_height;
-    }
-
-    std::uint32_t getInputWidth() const noexcept
-    {
-        return input_width;
-    }
-
-    std::uint32_t getInputChannels() const noexcept
-    {
-        return input_channels;
-    }
-
-    std::uint32_t getNumClasses() const noexcept
-    {
-        return num_classes;
-    }
-
-    Matrix backward(const Matrix &_output_gradient) override
+    Tensor backward(const Tensor &_output_gradient) override
     {
         if (!is_forward_completed)
         {
@@ -252,14 +129,14 @@ public:
             throw std::logic_error("Backward called before forward");
         }
 
-        Matrix current_gradient = _output_gradient;
+        Tensor current_gradient = _output_gradient;
         for (auto it = layers.rbegin(); it != layers.rend(); ++it)
         {
             current_gradient = (*it)->backward(current_gradient);
         }
-        input_gradient = current_gradient;
+        input_gradient_tensor = current_gradient;
 
-        return input_gradient;
+        return input_gradient_tensor;
     }
 
     void resetGradient() override
@@ -271,60 +148,13 @@ public:
         }
     }
 
-    bool hasParameters() const noexcept override
+    void resetGradients() override
     {
-        return true;
-    }
-
-    Layer_Type getLayerType() const noexcept override
-    {
-        return Layer_Type::RES_NET_20;
-    }
-
-    const Matrix &getInput() const override
-    {
-        return input_matrix;
-    }
-
-    const Matrix &getOutput() const override
-    {
-        return output_matrix;
-    }
-
-    Execution_Target getExecutionTarget() const override
-    {
-        return execution_target;
-    }
-
-    std::vector<std::pair<Matrix *, Matrix *>> getParametersAndGradients() override
-    {
-        std::vector<std::pair<Matrix *, Matrix *>> all_parameters;
+        resetGradient();
         for (auto &layer : layers)
         {
-            auto params = layer->getParametersAndGradients();
-            all_parameters.insert(all_parameters.end(), params.begin(), params.end());
+            layer->resetGradients();
         }
-        return all_parameters;
-    }
-
-    void setExecutionTarget(Execution_Target _new_execution_target) override
-    {
-        if (_new_execution_target == execution_target)
-        {
-            return;
-        }
-
-        logChangeExecutionTarget(_new_execution_target);
-        execution_target = _new_execution_target;
-
-        for (auto &layer : layers)
-        {
-            layer->setExecutionTarget(_new_execution_target);
-        }
-
-        input_matrix.setExecutionTarget(_new_execution_target);
-        output_matrix.setExecutionTarget(_new_execution_target);
-        input_gradient.setExecutionTarget(_new_execution_target);
     }
 
     void saveConfiguration(std::ofstream &_output_file_stream) const override
@@ -366,6 +196,150 @@ public:
             layer->loadCheckpoint(_input_file_stream);
         }
     }
+
+    std::function<float(std::mt19937&)> getPopulationParameterInitializer(std::size_t param_index) const override
+    {
+        std::size_t current_offset = 0;
+        for (const auto& layer : layers)
+        {
+            std::size_t count = layer->getPopulationParameterDims().size();
+            if (param_index < current_offset + count)
+            {
+                return layer->getPopulationParameterInitializer(param_index - current_offset);
+            }
+            current_offset += count;
+        }
+        throw std::out_of_range("Res_Net_20_Layer::getPopulationParameterInitializer: Parameter index out of range");
+    }
+    std::vector<std::pair<Tensor *, Tensor *>> getParametersAndGradients() override
+    {
+        std::vector<std::pair<Tensor *, Tensor *>> all_parameters;
+        for (auto &layer : layers)
+        {
+            auto params = layer->getParametersAndGradients();
+            all_parameters.insert(all_parameters.end(), params.begin(), params.end());
+        }
+        return all_parameters;
+    }
+    std::vector<float> getPopulationParameter(std::size_t param_index) const override
+    {
+        std::size_t current_offset = 0;
+        for (const auto &layer : layers)
+        {
+            std::size_t count = layer->getPopulationParameterDims().size();
+            if (param_index < current_offset + count)
+            {
+                return layer->getPopulationParameter(param_index - current_offset);
+            }
+            current_offset += count;
+        }
+        throw std::out_of_range("Res_Net_20_Layer::getPopulationParameter: Parameter index out of range");
+    }
+    std::vector<Shape> getPopulationParameterDims() const override
+    {
+        std::vector<Shape> total_dims;
+        for (const auto& layer : layers)
+        {
+            auto dims = layer->getPopulationParameterDims();
+            total_dims.insert(total_dims.end(), dims.begin(), dims.end());
+        }
+        return total_dims;
+    }
+    std::vector<bool> getPopulationParameterIsEvolvable() const override
+    {
+        std::vector<bool> total_evolvable;
+        for (const auto& layer : layers)
+        {
+            auto evolvable = layer->getPopulationParameterIsEvolvable();
+            total_evolvable.insert(total_evolvable.end(), evolvable.begin(), evolvable.end());
+        }
+        return total_evolvable;
+    }
+    const std::vector<std::unique_ptr<ILayer>> &getLayers() const noexcept { return layers; }
+    const Tensor &getInputGradient() const noexcept { return input_gradient_tensor; }
+    const Tensor &getInput() const override { return input_tensor; }
+    const Tensor &getOutput() const override { return output_tensor; }
+    Execution_Target getExecutionTarget() const override { return execution_target; }
+    std::uint32_t getInputChannels() const noexcept { return input_channels; }
+    std::uint32_t getInputHeight() const noexcept { return input_height; }
+    std::uint32_t getNumClasses() const noexcept { return num_classes; }
+    std::uint32_t getInputWidth() const noexcept { return input_width; }
+    Layer_Type getLayerType() const noexcept override { return Layer_Type::RES_NET_20; }
+    bool supportsPopulationBatch() const noexcept override
+    {
+        for (const auto& layer : layers)
+        {
+            if (!layer->supportsPopulationBatch())
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+    bool isForwardCompleted() const noexcept { return is_forward_completed; }
+    bool isAccumulated() const noexcept { return is_accumulated; }
+    bool hasParameters() const noexcept override { return true; }
+    bool isTraining() const noexcept { return is_training; }
+
+    void setPopulationParameter(std::size_t param_index, std::vector<float> flat_data) override
+    {
+        std::size_t current_offset = 0;
+        for (auto& layer : layers)
+        {
+            std::size_t count = layer->getPopulationParameterDims().size();
+            if (param_index < current_offset + count)
+            {
+                layer->setPopulationParameter(param_index - current_offset, std::move(flat_data));
+                return;
+            }
+            current_offset += count;
+        }
+        throw std::out_of_range("Res_Net_20_Layer::setPopulationParameter: Parameter index out of range");
+    }
+    void setInputGradient(const Tensor &_tensor) { input_gradient_tensor = _tensor; }
+    void setInput(const Tensor &_tensor) { input_tensor = _tensor; }
+    void setOutput(const Tensor &_tensor) { output_tensor = _tensor; }
+    void setExecutionTarget(Execution_Target _new_execution_target) override
+    {
+        if (_new_execution_target == execution_target)
+        {
+            return;
+        }
+
+        logChangeExecutionTarget(_new_execution_target);
+        execution_target = _new_execution_target;
+
+        for (auto &layer : layers)
+        {
+            layer->setExecutionTarget(_new_execution_target);
+        }
+
+        input_tensor.setExecutionTarget(_new_execution_target);
+        output_tensor.setExecutionTarget(_new_execution_target);
+        input_gradient_tensor.setExecutionTarget(_new_execution_target);
+    }
+    void setInputChannels(std::uint32_t _channels) noexcept { input_channels = _channels; }
+    void setInputHeight(std::uint32_t _height) noexcept { input_height = _height; }
+    void setNumClasses(std::uint32_t _classes) noexcept { num_classes = _classes; }
+    void setInputWidth(std::uint32_t _width) noexcept { input_width = _width; }
+    void setAccumulated(bool _is_accumulated) noexcept override
+    {
+        is_accumulated = _is_accumulated;
+        for (auto &layer : layers)
+        {
+            layer->setAccumulated(_is_accumulated);
+        }
+    }
+    void setTrainingMode(bool _is_training) override
+    {
+        is_training = _is_training;
+        for (auto &layer : layers)
+        {
+            layer->setTrainingMode(_is_training);
+        }
+    }
+    void setIsForwardCompleted(bool _is_completed) noexcept { is_forward_completed = _is_completed; }
+    void setIsTraining(bool _is_training) noexcept { is_training = _is_training; }
 };
 
 using Res_Net_20 = Res_Net_20_Layer;

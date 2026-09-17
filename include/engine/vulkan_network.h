@@ -85,7 +85,7 @@ private:
 
     std::vector<char> readSpirvFile(const std::string &_file_path) const
     {
-        Logger::logMessage(std::format("Vulkan_Network::readSpirvFile: Reading SPIR-V file: {}", _file_path),
+        Logger::logMessage(Input_Format{"Vulkan_Network::readSpirvFile: Reading SPIR-V file: {}", _file_path},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -94,7 +94,7 @@ private:
         std::ifstream file_stream(_file_path, std::ios::ate | std::ios::binary);
         if (!file_stream.is_open())
         {
-            Logger::logMessage(std::format("Vulkan_Network::readSpirvFile: Failed to open SPIR-V file: {}", _file_path),
+            Logger::logMessage(Input_Format{"Vulkan_Network::readSpirvFile: Failed to open SPIR-V file: {}", _file_path},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -113,7 +113,7 @@ private:
 
     VkShaderModule createShaderModule(const std::vector<char> &_code_buffer) const
     {
-        Logger::logMessage(std::format("Vulkan_Network::createShaderModule: Creating shader module of size {} bytes", _code_buffer.size()),
+        Logger::logMessage(Input_Format{"Vulkan_Network::createShaderModule: Creating shader module of size {} bytes", _code_buffer.size()},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -142,7 +142,7 @@ private:
 
     VkPipeline createComputePipeline(const std::string &_shader_path) const
     {
-        Logger::logMessage(std::format("Vulkan_Network::createComputePipeline: Creating compute pipeline for shader: {}", _shader_path),
+        Logger::logMessage(Input_Format{"Vulkan_Network::createComputePipeline: Creating compute pipeline for shader: {}", _shader_path},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -178,7 +178,7 @@ private:
         if (vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipeline_create_information, nullptr, &pipeline) != VK_SUCCESS)
         {
             vkDestroyShaderModule(device, shader_module, nullptr);
-            Logger::logMessage(std::format("Vulkan_Network::createComputePipeline: Failed to create compute pipeline for shader: {}", _shader_path),
+            Logger::logMessage(Input_Format{"Vulkan_Network::createComputePipeline: Failed to create compute pipeline for shader: {}", _shader_path},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -201,7 +201,7 @@ private:
                                Log_Feature::SHADER_GENERATION);
         }
 
-        Logger::logMessage(std::format("Vulkan_Network::createAllPipelines: Creating all compute pipelines from folder: {}", _folder_path),
+        Logger::logMessage(Input_Format{"Vulkan_Network::createAllPipelines: Creating all compute pipelines from folder: {}", _folder_path},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -212,7 +212,7 @@ private:
             auto pipeline_enum_value = magic_enum::enum_cast<Compute_Pipeline>(i);
             if (!pipeline_enum_value.has_value())
             {
-                Logger::logMessage(std::format("Vulkan_Network::createAllPipelines: Failed to cast enum at index {}", i),
+                Logger::logMessage(Input_Format{"Vulkan_Network::createAllPipelines: Failed to cast enum at index {}", i},
                                    Log_Level::LOG_WARNING,
                                    true,
                                    0,
@@ -273,7 +273,7 @@ public:
     explicit Vulkan_Network(const Vulkan_Context &_context, const std::string &_pipeline_folder)
         : pipeline_folder(_pipeline_folder), device(_context.getDevice())
     {
-        Logger::logMessage(std::format("Vulkan_Network::Vulkan_Network: Initializing Vulkan Network with shader folder: {}", _pipeline_folder),
+        Logger::logMessage(Input_Format{"Vulkan_Network::Vulkan_Network: Initializing Vulkan Network with shader folder: {}", _pipeline_folder},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -358,43 +358,14 @@ public:
         cleanUp();
     }
 
-     VkPipelineLayout getPipelineLayout() const noexcept
-    {
-        return pipeline_layout;
-    }
-
-     VkDescriptorSetLayout getDescriptorSetLayout() const noexcept
-    {
-        return descriptor_set_layout;
-    }
-
-     const std::string &getPipelineFolder() const noexcept
-    {
-        return pipeline_folder;
-    }
-
-     VkDevice getDevice() const noexcept
-    {
-        return device;
-    }
-
-     const std::array<VkPipeline, Compute_Pipeline::COMPUTE_PIPELINE_END> &getPipelines() const noexcept
-    {
-        return pipelines;
-    }
-
-     bool hasPipeline(Compute_Pipeline _pipeline) const noexcept
-    {
-        std::size_t pipeline_index = static_cast<std::size_t>(_pipeline);
-        return pipeline_index < pipelines.size() && pipelines[pipeline_index] != VK_NULL_HANDLE;
-    }
-
-     VkPipeline getPipeline(Compute_Pipeline _pipeline) const
+    const std::array<VkPipeline, Compute_Pipeline::COMPUTE_PIPELINE_END> &getPipelines() const noexcept { return pipelines; }
+    const std::string &getPipelineFolder() const noexcept { return pipeline_folder; }
+    VkPipeline getPipeline(Compute_Pipeline _pipeline) const
     {
         std::size_t pipeline_index = static_cast<std::size_t>(_pipeline);
         if (pipeline_index >= pipelines.size())
         {
-            Logger::logMessage(std::format("Vulkan_Network::getPipeline: Pipeline index out of bounds ({})", pipeline_index),
+            Logger::logMessage(Input_Format{"Vulkan_Network::getPipeline: Pipeline index out of bounds ({})", pipeline_index},
                                Log_Level::LOG_WARNING,
                                true,
                                0,
@@ -403,7 +374,16 @@ public:
         }
         return pipelines[pipeline_index];
     }
+    VkPipelineLayout getPipelineLayout() const noexcept { return pipeline_layout; }
+    VkDescriptorSetLayout getDescriptorSetLayout() const noexcept { return descriptor_set_layout; }
+    VkDevice getDevice() const noexcept { return device; }
+    bool hasPipeline(Compute_Pipeline _pipeline) const noexcept
+    {
+        std::size_t pipeline_index = static_cast<std::size_t>(_pipeline);
+        return pipeline_index < pipelines.size() && pipelines[pipeline_index] != VK_NULL_HANDLE;
+    }
 
+    void setPipelines(const std::array<VkPipeline, Compute_Pipeline::COMPUTE_PIPELINE_END> &_pipelines) noexcept { pipelines = _pipelines; }
     void setPipelineFolder(const std::string &_pipeline_folder)
     {
         if (_pipeline_folder.empty())
@@ -414,11 +394,14 @@ public:
                                0,
                                Log_Feature::SHADER_GENERATION);
         }
-        Logger::logMessage(std::format("Vulkan_Network::setPipelineFolder: Changing compute shader folder to {}", _pipeline_folder),
+        Logger::logMessage(Input_Format{"Vulkan_Network::setPipelineFolder: Changing compute shader folder to {}", _pipeline_folder},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
                            Log_Feature::SHADER_GENERATION);
         pipeline_folder = _pipeline_folder;
     }
+    void setPipelineLayout(VkPipelineLayout _pipeline_layout) noexcept { pipeline_layout = _pipeline_layout; }
+    void setDescriptorSetLayout(VkDescriptorSetLayout _layout) noexcept { descriptor_set_layout = _layout; }
+    void setDevice(VkDevice _device) noexcept { device = _device; }
 };

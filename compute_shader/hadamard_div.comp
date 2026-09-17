@@ -14,7 +14,12 @@ layout(push_constant) uniform Elementwise_Dimensions {
 
 void main() {
     uint elem_idx = gl_GlobalInvocationID.x;
-    if (elem_idx < dims.total_elements) {
-        data_c[elem_idx] = data_a[elem_idx] / data_b[elem_idx];
+    if (elem_idx >= dims.total_elements)
+        return;
+
+    uint rhs_idx = elem_idx;
+    if (dims.is_broadcast != 0) {
+        rhs_idx = elem_idx % dims.cols;
     }
+    data_c[elem_idx] = data_a[elem_idx] / data_b[rhs_idx];
 }

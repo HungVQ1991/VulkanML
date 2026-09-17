@@ -59,9 +59,9 @@ public:
             return 0.0f;
         }
 
-        Logger::logMessage(std::format("Mae_Cost::computeLoss: rows={}, columns={}",
-                                       _prediction_matrix.getRows(),
-                                       _prediction_matrix.getColumns()),
+        Logger::logMessage(Input_Format{"Mae_Cost::computeLoss: rows={}, columns={}",
+                                        _prediction_matrix.getRows(),
+                                        _prediction_matrix.getColumns()},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -77,7 +77,7 @@ public:
         return loss_matrix.getScalar() / static_cast<float>(total_elements);
     }
 
-     Matrix computeGradient(const Matrix &_prediction_matrix, const Matrix &_target_matrix) const override
+    Matrix computeGradient(const Matrix &_prediction_matrix, const Matrix &_target_matrix) const override
     {
         if (_prediction_matrix.getRows() != _target_matrix.getRows() || _prediction_matrix.getColumns() != _target_matrix.getColumns())
         {
@@ -108,9 +108,9 @@ public:
             return Matrix(0, 0, _prediction_matrix.getExecutionTarget());
         }
 
-        Logger::logMessage(std::format("Mae_Cost::computeGradient: rows={}, columns={}",
-                                       _prediction_matrix.getRows(),
-                                       _prediction_matrix.getColumns()),
+        Logger::logMessage(Input_Format{"Mae_Cost::computeGradient: rows={}, columns={}",
+                                        _prediction_matrix.getRows(),
+                                        _prediction_matrix.getColumns()},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -149,13 +149,15 @@ public:
         return gradient_matrix;
     }
 
-     Cost_Type getType() const noexcept override
-    {
-        return Cost_Type::MAE;
-    }
-
     void saveCheckpoint(std::ofstream &_output_file_stream) const override {}
     void loadCheckpoint(std::ifstream &_input_file_stream) override {}
+
+    const Matrix &getGradientMatrix() const noexcept { return gradient_matrix; }
+    const Matrix &getLossMatrix() const noexcept { return loss_matrix; }
+    Cost_Type getType() const noexcept override { return Cost_Type::MAE; }
+
+    void setGradientMatrix(const Matrix &_matrix) { gradient_matrix = _matrix; }
+    void setLossMatrix(const Matrix &_matrix) { loss_matrix = _matrix; }
 };
 
 using MAE_Cost = Mae_Cost;

@@ -43,37 +43,6 @@ public:
     virtual bool isEmpty() const noexcept = 0;
     virtual std::shared_ptr<gpu::vector> getVector() { return {}; }
 
-    const Shape &getShape() const noexcept { return shape; }
-    const Stride &getStrides() const noexcept { return strides; }
-    std::size_t getRank() const noexcept { return shape.getRank(); }
-    std::size_t getTotalElements() const noexcept { return total_elements; }
-    std::size_t getByteOffset() const noexcept { return byte_offset; }
-
-    std::size_t getRows() const noexcept
-    {
-        if (shape.getRank() == 0)
-            return 0;
-        if (shape.getRank() == 1)
-            return 1;
-        return shape[0];
-    }
-
-    std::size_t getColumns() const noexcept
-    {
-        if (shape.getRank() == 0)
-            return 0;
-        if (shape.getRank() == 1)
-            return shape[0];
-        std::size_t cols = 1;
-        for (std::size_t i = 1; i < shape.getRank(); ++i)
-        {
-            cols *= shape[i];
-        }
-        return cols;
-    }
-
-    std::size_t getCols() const noexcept { return getColumns(); }
-
     bool isContiguous() const noexcept
     {
         std::size_t acc_stride = 1;
@@ -219,6 +188,39 @@ public:
     virtual void concatenateRows(const Tensor_Impl &other, Tensor_Impl &output) const = 0;
     virtual void splitCollumns(std::size_t split_index, Tensor_Impl &result_left, Tensor_Impl &result_right) const = 0;
     virtual void splitRows(std::size_t split_index, Tensor_Impl &result_up, Tensor_Impl &result_down) const = 0;
+    
+    const Shape &getShape() const noexcept { return shape; }
+    const Stride &getStrides() const noexcept { return strides; }
+    std::size_t getColumns() const noexcept
+    {
+        if (shape.getRank() == 0)
+            return 0;
+        if (shape.getRank() == 1)
+            return shape[0];
+        std::size_t cols = 1;
+        for (std::size_t i = 1; i < shape.getRank(); ++i)
+        {
+            cols *= shape[i];
+        }
+        return cols;
+    }
+    std::size_t getRows() const noexcept
+    {
+        if (shape.getRank() == 0)
+            return 0;
+        if (shape.getRank() == 1)
+            return 1;
+        return shape[0];
+    }
+    std::size_t getTotalElements() const noexcept { return total_elements; }
+    std::size_t getByteOffset() const noexcept { return byte_offset; }
+    std::size_t getRank() const noexcept { return shape.getRank(); }
+    std::size_t getCols() const noexcept { return getColumns(); }
+
+    void setShape(const Shape &_shape) { updateShapeAndStrides(_shape); }
+    void setStrides(const Stride &_strides) noexcept { strides = _strides; }
+    void setTotalElements(std::size_t _total_elements) noexcept { total_elements = _total_elements; }
+    void setByteOffset(std::size_t _byte_offset) noexcept { byte_offset = _byte_offset; }
 };
 
 using Impl = Tensor_Impl;

@@ -70,8 +70,8 @@ namespace gpu
                 throw std::runtime_error("Failed to bind buffer memory");
             }
 
-            Logger::logMessage(std::format("gpu::vector::createBuffer: ID: {}, Buffer: {:p}, Chunk: {}, Offset: {}, Size: {} bytes, Frame: {}",
-                                           vector_id, static_cast<void *>(buffer), allocation.chunk_index, allocation.offset, buffer_size_in_bytes, used_frame_index),
+            Logger::logMessage(Input_Format{"gpu::vector::createBuffer: ID: {}, Buffer: {:p}, Chunk: {}, Offset: {}, Size: {} bytes, Frame: {}",
+                                           vector_id, static_cast<void *>(buffer), allocation.chunk_index, allocation.offset, buffer_size_in_bytes, used_frame_index},
                                Log_Level::LOG_DEBUG,
                                true,
                                0,
@@ -255,7 +255,7 @@ namespace gpu
             VkDeviceSize required_byte_size = element_count * sizeof(float);
             if (required_byte_size == buffer_size_in_bytes && buffer != VK_NULL_HANDLE)
             {
-                Logger::logMessage(std::format("gpu::vector::allocateMemory: Requested size matches current buffer size (ID: {}), skipping", vector_id),
+                Logger::logMessage(Input_Format{"gpu::vector::allocateMemory: Requested size matches current buffer size (ID: {}), skipping", vector_id},
                                    Log_Level::LOG_DEBUG,
                                    true,
                                    0,
@@ -283,8 +283,8 @@ namespace gpu
             buffer_size_in_bytes = required_byte_size;
             used_frame_index = context.getCurrentFrame();
 
-            Logger::logMessage(std::format("gpu::vector::allocateMemory: Allocating {} elements ({} bytes) for ID: {}",
-                                           element_count, buffer_size_in_bytes, vector_id),
+            Logger::logMessage(Input_Format{"gpu::vector::allocateMemory: Allocating {} elements ({} bytes) for ID: {}",
+                                           element_count, buffer_size_in_bytes, vector_id},
                                Log_Level::LOG_DEBUG,
                                true,
                                0,
@@ -299,8 +299,8 @@ namespace gpu
         {
             if (buffer != VK_NULL_HANDLE || allocation.memory != VK_NULL_HANDLE)
             {
-                Logger::logMessage(std::format("gpu::vector::freeMemory: ID: {}, Buffer: {:p}, Chunk: {}, Offset: {}, Size: {} bytes, Frame: {}",
-                                               vector_id, static_cast<void *>(buffer), allocation.chunk_index, allocation.offset, buffer_size_in_bytes, used_frame_index),
+                Logger::logMessage(Input_Format{"gpu::vector::freeMemory: ID: {}, Buffer: {:p}, Chunk: {}, Offset: {}, Size: {} bytes, Frame: {}",
+                                               vector_id, static_cast<void *>(buffer), allocation.chunk_index, allocation.offset, buffer_size_in_bytes, used_frame_index},
                                    Log_Level::LOG_DEBUG,
                                    true,
                                    0,
@@ -440,23 +440,26 @@ namespace gpu
             context.deferDestruction(context.getCurrentFrame(), staging_buffer, staging_allocation);
         }
 
-         std::uint64_t getId() const noexcept { return vector_id; }
-         std::uint64_t getVectorId() const noexcept { return vector_id; }
-         const Memory_Allocation &getAllocation() const noexcept { return allocation; }
-         VkBuffer getBuffer() const noexcept { return buffer; }
-         std::size_t getSize() const noexcept { return buffer_size_in_bytes / sizeof(float); }
-         std::size_t getElementCount() const noexcept { return buffer_size_in_bytes / sizeof(float); }
-         std::size_t getSizeBytes() const noexcept { return buffer_size_in_bytes; }
-         std::size_t getByteSize() const noexcept { return buffer_size_in_bytes; }
-         std::size_t getBufferSizeInBytes() const noexcept { return buffer_size_in_bytes; }
-         const Vulkan_Context &getContext() const noexcept { return context; }
-         VkDevice getDevice() const noexcept { return context.getDevice(); }
-         std::uint32_t getUsedFrameIndex() const noexcept { return used_frame_index; }
-         bool isEmpty() const noexcept { return buffer_size_in_bytes == 0 || buffer == VK_NULL_HANDLE; }
+    public:
+        const Vulkan_Context &getContext() const noexcept { return context; }
+        const Memory_Allocation &getAllocation() const noexcept { return allocation; }
+        std::size_t getElementCount() const noexcept { return buffer_size_in_bytes / sizeof(float); }
+        std::size_t getSize() const noexcept { return buffer_size_in_bytes / sizeof(float); }
+        std::size_t getBufferSizeInBytes() const noexcept { return buffer_size_in_bytes; }
+        std::size_t getSizeBytes() const noexcept { return buffer_size_in_bytes; }
+        std::size_t getByteSize() const noexcept { return buffer_size_in_bytes; }
+        VkDevice getDevice() const noexcept { return context.getDevice(); }
+        std::uint64_t getVectorId() const noexcept { return vector_id; }
+        std::uint64_t getId() const noexcept { return vector_id; }
+        VkBuffer getBuffer() const noexcept { return buffer; }
+        std::uint32_t getUsedFrameIndex() const noexcept { return used_frame_index; }
+        bool isEmpty() const noexcept { return buffer_size_in_bytes == 0 || buffer == VK_NULL_HANDLE; }
 
-        void markAsUsedInFrame(std::uint32_t frame_index) noexcept
-        {
-            used_frame_index = frame_index;
-        }
+        void setAllocation(const Memory_Allocation &_allocation) noexcept { allocation = _allocation; }
+        void setBufferSizeInBytes(std::size_t _bytes) noexcept { buffer_size_in_bytes = _bytes; }
+        void setVectorId(std::uint64_t _vector_id) noexcept { vector_id = _vector_id; }
+        void setBuffer(VkBuffer _buffer) noexcept { buffer = _buffer; }
+        void markAsUsedInFrame(std::uint32_t frame_index) noexcept { used_frame_index = frame_index; }
+        void setUsedFrameIndex(std::uint32_t _frame_index) noexcept { used_frame_index = _frame_index; }
     };
 }

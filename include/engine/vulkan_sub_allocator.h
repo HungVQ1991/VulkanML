@@ -153,7 +153,14 @@ public:
         }
     }
 
-     VkDeviceSize getOffset(std::uint32_t _tensor_id) const
+    void reset() noexcept
+    {
+        tensor_lifetimes.clear();
+        total_allocated_size = 0;
+    }
+
+    const std::vector<Tensor_Lifetime> &getTensorLifetimes() const noexcept { return tensor_lifetimes; }
+    VkDeviceSize getOffset(std::uint32_t _tensor_id) const
     {
         for (const auto &tensor : tensor_lifetimes)
         {
@@ -161,7 +168,7 @@ public:
             {
                 if (tensor.allocated_offset == std::numeric_limits<VkDeviceSize>::max())
                 {
-                    Logger::logMessage(std::format("Memory_Planner::getOffset: Tensor ID {} has not been planned", _tensor_id),
+                    Logger::logMessage(Input_Format{"Memory_Planner::getOffset: Tensor ID {} has not been planned", _tensor_id},
                                        Log_Level::LOG_ERROR,
                                        true,
                                        0,
@@ -171,31 +178,15 @@ public:
                 return tensor.allocated_offset;
             }
         }
-        Logger::logMessage(std::format("Memory_Planner::getOffset: Tensor ID {} not found in registry", _tensor_id),
+        Logger::logMessage(Input_Format{"Memory_Planner::getOffset: Tensor ID {} not found in registry", _tensor_id},
                            Log_Level::LOG_ERROR,
                            true,
                            0,
                            Log_Feature::MEMORY_ALLOCATION);
         throw std::runtime_error(std::format("Memory_Planner::getOffset: Tensor ID {} not found in registry", _tensor_id));
     }
-
-     VkDeviceSize getTotalMemoryRequired() const noexcept
-    {
-        return total_allocated_size;
-    }
-
-     const std::vector<Tensor_Lifetime> &getTensorLifetimes() const noexcept
-    {
-        return tensor_lifetimes;
-    }
-
-     bool hasTensor(std::uint32_t _tensor_id) const noexcept
-    {
-        return std::any_of(tensor_lifetimes.begin(), tensor_lifetimes.end(), [_tensor_id](const Tensor_Lifetime &lifetime)
-                           { return lifetime.tensor_id == _tensor_id; });
-    }
-
-     bool isTensorPlanned(std::uint32_t _tensor_id) const noexcept
+    VkDeviceSize getTotalMemoryRequired() const noexcept { return total_allocated_size; }
+    bool isTensorPlanned(std::uint32_t _tensor_id) const noexcept
     {
         for (const auto &tensor : tensor_lifetimes)
         {
@@ -206,12 +197,13 @@ public:
         }
         return false;
     }
-
-    void reset() noexcept
+    bool hasTensor(std::uint32_t _tensor_id) const noexcept
     {
-        tensor_lifetimes.clear();
-        total_allocated_size = 0;
+        return std::any_of(tensor_lifetimes.begin(), tensor_lifetimes.end(), [_tensor_id](const Tensor_Lifetime &lifetime)
+                           { return lifetime.tensor_id == _tensor_id; });
     }
+
+    void setTotalAllocatedSize(VkDeviceSize _size) noexcept { total_allocated_size = _size; }
 };
 
 class Vulkan_Sub_Allocator
@@ -249,8 +241,8 @@ private:
         std::uint32_t memory_type_index = findMemoryType(_memory_requirements.memoryTypeBits, _memory_properties);
         VkDeviceSize allocation_size = std::max(default_chunk_size, _memory_requirements.size);
 
-        Logger::logMessage(std::format("Vulkan_Sub_Allocator::createChunk: Allocating new memory chunk of size {} bytes (memory_type_index={}, memory_properties={}, is_dedicated_arena={})",
-                                       allocation_size, memory_type_index, static_cast<std::uint32_t>(_memory_properties), _is_dedicated_arena),
+        Logger::logMessage(Input_Format{"Vulkan_Sub_Allocator::createChunk: Allocating new memory chunk of size {} bytes (memory_type_index={}, memory_properties={}, is_dedicated_arena={})",
+                                       allocation_size, memory_type_index, static_cast<std::uint32_t>(_memory_properties), _is_dedicated_arena},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -300,8 +292,8 @@ private:
         {
             if (block_iterator->offset + block_iterator->size == (block_iterator + 1)->offset)
             {
-                Logger::logMessage(std::format("Vulkan_Sub_Allocator::insertAndCoalesce: Merging with next block at offset {} (new size={})",
-                                               (block_iterator + 1)->offset, block_iterator->size + (block_iterator + 1)->size),
+                Logger::logMessage(Input_Format{"Vulkan_Sub_Allocator::insertAndCoalesce: Merging with next block at offset {} (new size={})",
+                                               (block_iterator + 1)->offset, block_iterator->size + (block_iterator + 1)->size},
                                    Log_Level::LOG_DEBUG,
                                    true,
                                    0,
@@ -316,8 +308,8 @@ private:
             auto previous_block_iterator = block_iterator - 1;
             if (previous_block_iterator->offset + previous_block_iterator->size == block_iterator->offset)
             {
-                Logger::logMessage(std::format("Vulkan_Sub_Allocator::insertAndCoalesce: Merging with previous block at offset {} (new size={})",
-                                               previous_block_iterator->offset, previous_block_iterator->size + block_iterator->size),
+                Logger::logMessage(Input_Format{"Vulkan_Sub_Allocator::insertAndCoalesce: Merging with previous block at offset {} (new size={})",
+                                               previous_block_iterator->offset, previous_block_iterator->size + block_iterator->size},
                                    Log_Level::LOG_DEBUG,
                                    true,
                                    0,
@@ -345,7 +337,7 @@ public:
 
     ~Vulkan_Sub_Allocator()
     {
-        Logger::logMessage(std::format("Vulkan_Sub_Allocator::~Vulkan_Sub_Allocator: Freeing {} memory chunks", memory_chunks.size()),
+        Logger::logMessage(Input_Format{"Vulkan_Sub_Allocator::~Vulkan_Sub_Allocator: Freeing {} memory chunks", memory_chunks.size()},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -368,65 +360,6 @@ public:
         }
     }
 
-     Memory_Planner &getPlanner() noexcept
-    {
-        return memory_planner;
-    }
-
-     const Memory_Planner &getPlanner() const noexcept
-    {
-        return memory_planner;
-    }
-
-     Memory_Planner &getMemoryPlanner() noexcept
-    {
-        return memory_planner;
-    }
-
-     const Memory_Planner &getMemoryPlanner() const noexcept
-    {
-        return memory_planner;
-    }
-
-     VkDevice getDevice() const noexcept
-    {
-        return device;
-    }
-
-     const Vulkan_Context &getContext() const noexcept
-    {
-        return context;
-    }
-
-     VkPhysicalDevice getPhysicalDevice() const noexcept
-    {
-        return physical_device;
-    }
-
-     const std::vector<Memory_Chunk> &getMemoryChunks() const noexcept
-    {
-        return memory_chunks;
-    }
-
-     std::size_t getMemoryChunkCount() const noexcept
-    {
-        return memory_chunks.size();
-    }
-
-     VkDeviceSize getDefaultChunkSize() const noexcept
-    {
-        return default_chunk_size;
-    }
-
-     std::size_t getArenaChunkIndex() const noexcept
-    {
-        return arena_chunk_index;
-    }
-
-     bool hasArenaChunk() const noexcept
-    {
-        return arena_chunk_index != std::numeric_limits<std::size_t>::max();
-    }
 
     void free(const Memory_Allocation &_allocation)
     {
@@ -443,8 +376,8 @@ public:
                 return;
             }
 
-            Logger::logMessage(std::format("Vulkan_Sub_Allocator::free: Freeing block in chunk {} at offset {} of size {} bytes",
-                                           _allocation.chunk_index, _allocation.offset, _allocation.size),
+            Logger::logMessage(Input_Format{"Vulkan_Sub_Allocator::free: Freeing block in chunk {} at offset {} of size {} bytes",
+                                           _allocation.chunk_index, _allocation.offset, _allocation.size},
                                Log_Level::LOG_DEBUG,
                                true,
                                0,
@@ -453,8 +386,8 @@ public:
         }
         else
         {
-            Logger::logMessage(std::format("Vulkan_Sub_Allocator::free: Invalid chunk_index {} (total chunks: {})",
-                                           _allocation.chunk_index, memory_chunks.size()),
+            Logger::logMessage(Input_Format{"Vulkan_Sub_Allocator::free: Invalid chunk_index {} (total chunks: {})",
+                                           _allocation.chunk_index, memory_chunks.size()},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -507,8 +440,8 @@ public:
     {
         std::lock_guard<std::mutex> lock(allocator_mutex);
 
-        Logger::logMessage(std::format("Vulkan_Sub_Allocator::allocate: Requesting size {} bytes, alignment {} bytes, memory_properties {}",
-                                       _memory_requirements.size, _memory_requirements.alignment, static_cast<std::uint32_t>(_memory_properties)),
+        Logger::logMessage(Input_Format{"Vulkan_Sub_Allocator::allocate: Requesting size {} bytes, alignment {} bytes, memory_properties {}",
+                                       _memory_requirements.size, _memory_requirements.alignment, static_cast<std::uint32_t>(_memory_properties)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -600,8 +533,8 @@ public:
                 chunk.free_blocks.erase(it);
             }
 
-            Logger::logMessage(std::format("Vulkan_Sub_Allocator::allocate: Reusing chunk {} at offset {} (size={} bytes, padding={} bytes, remaining blocks={})",
-                                           best_chunk_index, allocated_offset, allocation_size, padding, chunk.free_blocks.size()),
+            Logger::logMessage(Input_Format{"Vulkan_Sub_Allocator::allocate: Reusing chunk {} at offset {} (size={} bytes, padding={} bytes, remaining blocks={})",
+                                           best_chunk_index, allocated_offset, allocation_size, padding, chunk.free_blocks.size()},
                                Log_Level::LOG_DEBUG,
                                true,
                                0,
@@ -647,8 +580,8 @@ public:
             new_chunk.free_blocks.clear();
         }
 
-        Logger::logMessage(std::format("Vulkan_Sub_Allocator::allocate: Allocated in newly created chunk {} at offset {} (size={} bytes, padding={} bytes, remaining blocks={})",
-                                       new_chunk_index, allocated_offset, allocation_size, padding, new_chunk.free_blocks.size()),
+        Logger::logMessage(Input_Format{"Vulkan_Sub_Allocator::allocate: Allocated in newly created chunk {} at offset {} (size={} bytes, padding={} bytes, remaining blocks={})",
+                                       new_chunk_index, allocated_offset, allocation_size, padding, new_chunk.free_blocks.size()},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -660,4 +593,20 @@ public:
             .size = allocation_size,
             .chunk_index = new_chunk_index};
     }
+
+    const Vulkan_Context &getContext() const noexcept { return context; }
+    const Memory_Planner &getMemoryPlanner() const noexcept { return memory_planner; }
+    Memory_Planner &getMemoryPlanner() noexcept { return memory_planner; }
+    const Memory_Planner &getPlanner() const noexcept { return memory_planner; }
+    Memory_Planner &getPlanner() noexcept { return memory_planner; }
+    const std::vector<Memory_Chunk> &getMemoryChunks() const noexcept { return memory_chunks; }
+    std::size_t getMemoryChunkCount() const noexcept { return memory_chunks.size(); }
+    std::size_t getArenaChunkIndex() const noexcept { return arena_chunk_index; }
+    VkDeviceSize getDefaultChunkSize() const noexcept { return default_chunk_size; }
+    VkPhysicalDevice getPhysicalDevice() const noexcept { return physical_device; }
+    VkDevice getDevice() const noexcept { return device; }
+    bool hasArenaChunk() const noexcept { return arena_chunk_index != std::numeric_limits<std::size_t>::max(); }
+
+    void setDefaultChunkSize(VkDeviceSize _size) noexcept { default_chunk_size = _size; }
+    void setArenaChunkIndex(std::size_t _index) noexcept { arena_chunk_index = _index; }
 };
