@@ -322,6 +322,12 @@ This project is intended for developers interested in both machine learning inte
 
 ---
 
+## AI Usage
+
+AI is used in this project to optimize and debug code; the backend is written by hand and all AI codes are human-reviewed.
+
+---
+
 ## License
 
 MIT License.
