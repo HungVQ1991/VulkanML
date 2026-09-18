@@ -69,12 +69,36 @@ enum Compute_Pipeline
     SPLIT_COLUMNS,
     SPLIT_ROWS,
     CONTIGUOUS,
+    CAST_FP32_TO_FP16,
+    CAST_FP16_TO_FP32,
+    CONV2D_FORWARD_PASS_FP16,
+    CONV2D_BACKWARD_PASS_INPUT_GRADIENT_FP16,
+    CONV2D_BACKWARD_PASS_WEIGHT_BIAS_GRADIENT_FP16,
+    MATMUL_FP16,
+    MATMUL_ADD_FP16,
+    LINEAR_BACKWARD_INPUT_FP16,
+    LINEAR_BACKWARD_WEIGHT_BIAS_FP16,
+    GELU_FP16,
+    GELU_BACKWARD_FP16,
+    RELU_FP16,
+    RELU_BACKWARD_FP16,
+    BATCH_NORM2D_STATS_FORWARD_FP16,
+    BATCH_NORM2D_TRANSFORM_FORWARD_FP16,
+    BATCH_NORM2D_STATS_BACKWARD_FP16,
+    BATCH_NORM2D_TRANSFORM_BACKWARD_FP16,
+    MAXPOOL2D_FORWARD_FP16,
+    MAXPOOL2D_BACKWARD_FP16,
+    BATCH_NORM_STATS_FORWARD_FP16,
+    BATCH_NORM_TRANSFORM_FORWARD_FP16,
+    BATCH_NORM_STATS_BACKWARD_FP16,
+    BATCH_NORM_TRANSFORM_BACKWARD_FP16,
     COMPUTE_PIPELINE_END
 };
 
 class Vulkan_Network
 {
 private:
+    const Vulkan_Context *context = nullptr;
     std::string pipeline_folder = "compute_shader";
 
     VkDevice device = VK_NULL_HANDLE;
@@ -220,7 +244,21 @@ private:
                 continue;
             }
 
-            std::string shader_path = _folder_path + "/" + std::string(magic_enum::enum_name(pipeline_enum_value.value())) + ".spv";
+            Compute_Pipeline pipeline_enum = pipeline_enum_value.value();
+            bool is_fp16_pipeline = (pipeline_enum >= Compute_Pipeline::CAST_FP32_TO_FP16 &&
+                                     pipeline_enum < Compute_Pipeline::COMPUTE_PIPELINE_END);
+            if (is_fp16_pipeline && context != nullptr && !context->isFloat16Enabled())
+            {
+                Logger::logMessage("Vulkan_Network::createAllPipelines: Skipping float16 pipeline because device does not have float16 enabled",
+                                   Log_Level::LOG_INFO,
+                                   true,
+                                   0,
+                                   Log_Feature::SHADER_GENERATION);
+                pipelines[i] = VK_NULL_HANDLE;
+                continue;
+            }
+
+            std::string shader_path = _folder_path + "/" + std::string(magic_enum::enum_name(pipeline_enum)) + ".spv";
             std::ranges::transform(shader_path, shader_path.begin(), [](unsigned char character)
                                    { return static_cast<char>(std::tolower(character)); });
 
@@ -271,7 +309,7 @@ public:
     Vulkan_Network &operator=(Vulkan_Network &&other) noexcept = default;
 
     explicit Vulkan_Network(const Vulkan_Context &_context, const std::string &_pipeline_folder)
-        : pipeline_folder(_pipeline_folder), device(_context.getDevice())
+        : context(&_context), pipeline_folder(_pipeline_folder), device(_context.getDevice())
     {
         Logger::logMessage(Input_Format{"Vulkan_Network::Vulkan_Network: Initializing Vulkan Network with shader folder: {}", _pipeline_folder},
                            Log_Level::LOG_DEBUG,

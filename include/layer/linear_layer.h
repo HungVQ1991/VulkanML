@@ -29,6 +29,13 @@ private:
     Tensor weights_gradient_tensor;
     Tensor biases_gradient_tensor;
 
+    Tensor weights_fp16;
+    Tensor biases_fp16;
+    Tensor input_tensor_fp16;
+    Tensor output_tensor_fp16;
+    Tensor input_gradient_tensor_fp16;
+    Tensor output_gradient_tensor_fp16;
+
     std::size_t input_dimension = 0;
     float initialization_gain = 2.0f;
     std::size_t output_dimension = 0;
@@ -46,6 +53,12 @@ public:
           input_gradient_tensor(0, 0),
           weights_gradient_tensor(0, 0),
           biases_gradient_tensor(0, 0),
+          weights_fp16(0, 0),
+          biases_fp16(0, 0),
+          input_tensor_fp16(0, 0),
+          output_tensor_fp16(0, 0),
+          input_gradient_tensor_fp16(0, 0),
+          output_gradient_tensor_fp16(0, 0),
           is_forward_completed(false)
     {}
 
@@ -60,6 +73,12 @@ public:
           input_gradient_tensor(0, 0, _execution_target),
           weights_gradient_tensor(_input_dimension, _output_dimension, _execution_target),
           biases_gradient_tensor(1, _output_dimension, _execution_target),
+          weights_fp16(0, 0, _execution_target),
+          biases_fp16(0, 0, _execution_target),
+          input_tensor_fp16(0, 0, _execution_target),
+          output_tensor_fp16(0, 0, _execution_target),
+          input_gradient_tensor_fp16(0, 0, _execution_target),
+          output_gradient_tensor_fp16(0, 0, _execution_target),
           input_dimension(_input_dimension),
           output_dimension(_output_dimension),
           is_forward_completed(false),
@@ -115,7 +134,27 @@ public:
                            Log_Feature::DENSE_COMPUTE | Log_Feature::FORWARD_EVALUATION);
 
         input_tensor = _input_tensor;
-        input_tensor.linearForward(weights, biases, output_tensor);
+        if (is_mixed_precision_enabled && execution_target == Execution_Target::VULKAN_GPU)
+        {
+            if (input_tensor.getDataType() != Data_Type::FLOAT16)
+            {
+                input_tensor.to(Data_Type::FLOAT16, input_tensor_fp16);
+            }
+            else
+            {
+                input_tensor_fp16 = input_tensor;
+            }
+
+            weights.to(Data_Type::FLOAT16, weights_fp16);
+            biases.to(Data_Type::FLOAT16, biases_fp16);
+
+            input_tensor_fp16.linearForward(weights_fp16, biases_fp16, output_tensor_fp16);
+            output_tensor = output_tensor_fp16;
+        }
+        else
+        {
+            input_tensor.linearForward(weights, biases, output_tensor);
+        }
 
         logBufferAddress(&weights, "weights (Forward)");
         logBufferAddress(&biases, "biases (Forward)");
@@ -167,19 +206,48 @@ public:
                            1,
                            Log_Feature::DENSE_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
-        if (!is_accumulated)
+        if (is_mixed_precision_enabled && execution_target == Execution_Target::VULKAN_GPU)
         {
-            input_tensor.linearBackwardWeightBias(_output_gradient, weights_gradient_tensor, biases_gradient_tensor);
+            if (_output_gradient.getDataType() != Data_Type::FLOAT16)
+            {
+                _output_gradient.to(Data_Type::FLOAT16, output_gradient_tensor_fp16);
+            }
+            else
+            {
+                output_gradient_tensor_fp16 = _output_gradient;
+            }
+
+            if (!is_accumulated)
+            {
+                input_tensor_fp16.linearBackwardWeightBias(output_gradient_tensor_fp16, weights_gradient_tensor, biases_gradient_tensor);
+            }
+            else
+            {
+                Tensor step_weights_grad(weights_gradient_tensor.getShape(), execution_target);
+                Tensor step_biases_grad(biases_gradient_tensor.getShape(), execution_target);
+                input_tensor_fp16.linearBackwardWeightBias(output_gradient_tensor_fp16, step_weights_grad, step_biases_grad);
+                weights_gradient_tensor = weights_gradient_tensor + step_weights_grad;
+                biases_gradient_tensor = biases_gradient_tensor + step_biases_grad;
+            }
+            output_gradient_tensor_fp16.linearBackwardInput(weights_fp16, input_gradient_tensor_fp16);
+            input_gradient_tensor = input_gradient_tensor_fp16;
         }
         else
         {
-            Tensor step_weights_grad(weights_gradient_tensor.getShape(), execution_target);
-            Tensor step_biases_grad(biases_gradient_tensor.getShape(), execution_target);
-            input_tensor.linearBackwardWeightBias(_output_gradient, step_weights_grad, step_biases_grad);
-            weights_gradient_tensor = weights_gradient_tensor + step_weights_grad;
-            biases_gradient_tensor = biases_gradient_tensor + step_biases_grad;
+            if (!is_accumulated)
+            {
+                input_tensor.linearBackwardWeightBias(_output_gradient, weights_gradient_tensor, biases_gradient_tensor);
+            }
+            else
+            {
+                Tensor step_weights_grad(weights_gradient_tensor.getShape(), execution_target);
+                Tensor step_biases_grad(biases_gradient_tensor.getShape(), execution_target);
+                input_tensor.linearBackwardWeightBias(_output_gradient, step_weights_grad, step_biases_grad);
+                weights_gradient_tensor = weights_gradient_tensor + step_weights_grad;
+                biases_gradient_tensor = biases_gradient_tensor + step_biases_grad;
+            }
+            _output_gradient.linearBackwardInput(weights, input_gradient_tensor);
         }
-        _output_gradient.linearBackwardInput(weights, input_gradient_tensor);
 
         logBufferAddress(&input_tensor, "input_tensor (Backward)");
         logBufferAddress(&output_tensor, "output_tensor (Backward)");
@@ -190,7 +258,9 @@ public:
 
     std::unique_ptr<ILayer> clone() const override
     {
-        return std::make_unique<Linear_Layer>(input_dimension, output_dimension, execution_target, initialization_gain);
+        auto cloned = std::make_unique<Linear_Layer>(input_dimension, output_dimension, execution_target, initialization_gain);
+        cloned->setMixedPrecision(is_mixed_precision_enabled);
+        return cloned;
     }
 
     void resetGradient() override
@@ -370,6 +440,12 @@ public:
         input_tensor.setExecutionTarget(_new_execution_target);
         output_tensor.setExecutionTarget(_new_execution_target);
         input_gradient_tensor.setExecutionTarget(_new_execution_target);
+        weights_fp16.setExecutionTarget(_new_execution_target);
+        biases_fp16.setExecutionTarget(_new_execution_target);
+        input_tensor_fp16.setExecutionTarget(_new_execution_target);
+        output_tensor_fp16.setExecutionTarget(_new_execution_target);
+        input_gradient_tensor_fp16.setExecutionTarget(_new_execution_target);
+        output_gradient_tensor_fp16.setExecutionTarget(_new_execution_target);
     }
     void setInitializationGain(float _initialization_gain) noexcept { initialization_gain = _initialization_gain; }
     void setIsForwardCompleted(bool _is_completed) noexcept { is_forward_completed = _is_completed; }

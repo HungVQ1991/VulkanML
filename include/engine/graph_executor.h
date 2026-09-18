@@ -125,7 +125,8 @@ private:
         const std::vector<bool> &_is_output_register_flags,
         const std::vector<std::uint32_t> &_output_buffer_indices,
         const std::unordered_set<std::uint32_t> &_external_buffer_indices_set,
-        std::uint32_t _push_constants_word_offset)
+        std::uint32_t _push_constants_word_offset,
+        const std::vector<std::shared_ptr<gpu::vector>> &_node_buffers = {})
     {
         for (std::size_t i = 0; i < _input_identifiers.size(); ++i)
         {
@@ -183,7 +184,12 @@ private:
                             std::size_t semicolon_position = _text.find(';', position);
                             if (semicolon_position != std::string::npos)
                             {
-                                std::string write_statement = std::format(" buf_{}[{}] = {};", real_buffer_index, index_expression, _output_identifiers[i]);
+                                std::string target_type = "float";
+                                if (real_buffer_index < _node_buffers.size() && _node_buffers[real_buffer_index])
+                                {
+                                    target_type = std::string(getDataTypeGlslName(_node_buffers[real_buffer_index]->getDataType()));
+                                }
+                                std::string write_statement = std::format(" buf_{}[{}] = {}({});", real_buffer_index, index_expression, target_type, _output_identifiers[i]);
                                 _text.insert(semicolon_position + 1, write_statement);
                                 position = semicolon_position + 1 + write_statement.length();
                             }
@@ -876,8 +882,13 @@ public:
             {
                 buffer_access = Buffer_Access::WRITE_ONLY;
             }
+            std::string buffer_type = "float";
+            if (buffer_index < _node.buffers.size() && _node.buffers[buffer_index])
+            {
+                buffer_type = getDataTypeGlslName(_node.buffers[buffer_index]->getDataType());
+            }
 
-            shader_generator.addBuffer(buffer_index, std::format("buf_{}", buffer_index), "float", buffer_access);
+            shader_generator.addBuffer(buffer_index, std::format("buf_{}", buffer_index), buffer_type, buffer_access);
         }
 
         shader_generator.setPushConstants("uint data[32];");
@@ -896,10 +907,13 @@ public:
         }
         else if (primary_operation_class == Operation_Class::STANDALONE)
         {
-            if (primary_pipeline == Compute_Pipeline::BATCH_NORM_STATS_FORWARD ||
-                primary_pipeline == Compute_Pipeline::BATCH_NORM2D_STATS_FORWARD ||
-                primary_pipeline == Compute_Pipeline::BATCH_NORM_STATS_BACKWARD ||
+            if (primary_pipeline == Compute_Pipeline::BATCH_NORM2D_STATS_FORWARD ||
                 primary_pipeline == Compute_Pipeline::BATCH_NORM2D_STATS_BACKWARD)
+            {
+                // Standalone 2D BatchNorm stats handles workgroup internally with 100% coalesced access
+            }
+            else if (primary_pipeline == Compute_Pipeline::BATCH_NORM_STATS_FORWARD ||
+                     primary_pipeline == Compute_Pipeline::BATCH_NORM_STATS_BACKWARD)
             {
                 shader_generator.addLogicSnippet("    uint c = gl_WorkGroupID.x;");
                 shader_generator.addLogicSnippet("    if (c >= pc.data[1]) return;");
@@ -1025,8 +1039,17 @@ public:
                 }
                 else
                 {
+                    std::string reg_type = "float";
+                    if (output_index < _node.buffers.size() && _node.buffers[output_index])
+                    {
+                        reg_type = std::string(getDataTypeGlslName(_node.buffers[output_index]->getDataType()));
+                    }
+                    if (reg_type == "float16_t")
+                    {
+                        shader_generator.enableFloat16();
+                    }
                     std::string register_name = shader_generator.getUniqueVar("reg");
-                    shader_generator.addLogicSnippet(std::format("    float {} = 0.0;", register_name));
+                    shader_generator.addLogicSnippet(std::format("    {} {} = {}(0.0);", reg_type, register_name, reg_type));
 
                     register_map[output_index] = register_name;
                     outputs.push_back(register_name);
@@ -1046,7 +1069,8 @@ public:
                                                       is_output_register_flags,
                                                       operation.output_buffer_indices,
                                                       external_buffer_set,
-                                                      push_constants_word_offset);
+                                                      push_constants_word_offset,
+                                                      _node.buffers);
 
             auto remove_pattern = [](std::string &source_string, const std::string &prefix, const std::string &suffix)
             {
@@ -1076,7 +1100,11 @@ public:
                 {
                     if (snippet.starts_with("if (global_id >= pc.data[0]) return;"))
                     {
-                        snippet = snippet.substr(37);
+                        snippet = snippet.substr(36);
+                        if (!snippet.empty() && snippet.front() == ' ')
+                        {
+                            snippet = snippet.substr(1);
+                        }
                     }
                 }
                 else if (primary_operation_class == Operation_Class::MATRIX_2D)

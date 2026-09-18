@@ -1,0 +1,70 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly restrict buffer Input_Buffer {
+    float16_t input_data[];
+};
+
+layout(std430, set = 0, binding = 1) writeonly restrict buffer Output_Buffer {
+    float16_t output_data[];
+};
+
+layout(std430, set = 0, binding = 2) writeonly restrict buffer Mask_Buffer {
+    float mask_data[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint batch_size;
+    uint in_h;
+    uint in_w;
+    uint channels;
+    uint out_h;
+    uint out_w;
+    uint kernel_size;
+    uint stride;
+    uint padding;
+} pc;
+
+void main() {
+    uint c_idx = gl_GlobalInvocationID.x;
+    uint out_w_idx = gl_GlobalInvocationID.y;
+    uint n_out_h_idx = gl_GlobalInvocationID.z;
+
+    if (c_idx >= pc.channels || out_w_idx >= pc.out_w) return;
+
+    uint n_idx = n_out_h_idx / pc.out_h;
+    uint out_h_idx = n_out_h_idx % pc.out_h;
+
+    if (n_idx >= pc.batch_size) return;
+
+    float max_val = -65500.0;
+    uint max_idx = 0;
+
+    for (uint ky = 0; ky < pc.kernel_size; ++ky) {
+        for (uint kx = 0; kx < pc.kernel_size; ++kx) {
+            int in_y = int(out_h_idx * pc.stride + ky) - int(pc.padding);
+            int in_x = int(out_w_idx * pc.stride + kx) - int(pc.padding);
+
+            if (in_y >= 0 && in_y < int(pc.in_h) && in_x >= 0 && in_x < int(pc.in_w)) {
+                uint in_idx = n_idx * (pc.in_h * pc.in_w * pc.channels) +
+                             uint(in_y) * (pc.in_w * pc.channels) +
+                             uint(in_x) * pc.channels + c_idx;
+                float val = float(input_data[in_idx]);
+                if (val > max_val) {
+                    max_val = val;
+                    max_idx = in_idx;
+                }
+            }
+        }
+    }
+
+    uint out_idx = n_idx * (pc.out_h * pc.out_w * pc.channels) +
+                   out_h_idx * (pc.out_w * pc.channels) +
+                   out_w_idx * pc.channels + c_idx;
+
+    output_data[out_idx] = float16_t(max_val);
+    mask_data[out_idx] = float(max_idx);
+}

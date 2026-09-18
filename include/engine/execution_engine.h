@@ -87,9 +87,21 @@ private:
         {
             if (fused_node.is_fused && fused_node.fused_operations.size() > 1)
             {
-                graph_executor->getExternalBufferIndices(fused_node, fused_node.cached_external_buffer_indices);
-                fused_node.fused_glsl_code = graph_executor->generateFusedGlsl(fused_node);
-                fused_node.cached_pipeline = pipeline_cache_manager->getOrCreatePipeline(fused_node.fused_glsl_code);
+                try
+                {
+                    graph_executor->getExternalBufferIndices(fused_node, fused_node.cached_external_buffer_indices);
+                    fused_node.fused_glsl_code = graph_executor->generateFusedGlsl(fused_node);
+                    fused_node.cached_pipeline = pipeline_cache_manager->getOrCreatePipeline(fused_node.fused_glsl_code);
+                }
+                catch (const std::exception &e)
+                {
+                    Logger::logMessage(Input_Format{"Execution_Engine::precompileTemplatePipelines: Fused pipeline compilation failed: {}. Fallback will be used.", e.what()},
+                                       Log_Level::LOG_WARNING,
+                                       true,
+                                       0,
+                                       Log_Feature::SHADER_GENERATION);
+                    fused_node.cached_pipeline = VK_NULL_HANDLE;
+                }
             }
         }
         for (std::uint32_t frame_index = 0; frame_index < MAX_FRAMES_IN_FLIGHT; ++frame_index)

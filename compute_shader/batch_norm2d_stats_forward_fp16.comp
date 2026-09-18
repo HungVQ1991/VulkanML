@@ -1,8 +1,10 @@
 #version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
 
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
-layout(std430, binding = 0) readonly buffer InputX { float X[]; };
+layout(std430, binding = 0) readonly buffer InputX { float16_t X[]; };
 layout(std430, binding = 1) writeonly buffer BatchMean { float batch_mean[]; };
 layout(std430, binding = 2) writeonly buffer BatchVar { float batch_var[]; };
 layout(std430, binding = 3) buffer RunningMean { float running_mean[]; };
@@ -34,7 +36,7 @@ void main() {
         for (uint base = 0; base < total_elements; base += BLOCK) {
             uint idx = base + tid;
             if (idx < total_elements) {
-                sum += X[idx];
+                sum += float(X[idx]);
             }
         }
         shared_sum[tid] = sum;
@@ -58,7 +60,7 @@ void main() {
         for (uint base = 0; base < total_elements; base += BLOCK) {
             uint idx = base + tid;
             if (idx < total_elements) {
-                float diff = X[idx] - mean_c;
+                float diff = float(X[idx]) - mean_c;
                 sq += diff * diff;
             }
         }
@@ -71,13 +73,14 @@ void main() {
         for (uint p = 0; p < P_STEP; ++p) {
             tot_sq += shared_sum[tid + p * C];
         }
-        float mean = shared_mean[tid];
-        float var = tot_sq / float(M);
+        float var_val = tot_sq / float(M);
+        float mean_val = shared_mean[tid];
 
-        batch_mean[tid] = mean;
-        batch_var[tid] = var;
+        batch_mean[tid] = mean_val;
+        batch_var[tid] = var_val;
 
-        running_mean[tid] = (1.0 - pc.momentum) * running_mean[tid] + pc.momentum * mean;
-        running_var[tid] = (1.0 - pc.momentum) * running_var[tid] + pc.momentum * var;
+        // Update running stats in-place
+        running_mean[tid] = pc.momentum * running_mean[tid] + (1.0 - pc.momentum) * mean_val;
+        running_var[tid]  = pc.momentum * running_var[tid]  + (1.0 - pc.momentum) * var_val;
     }
 }

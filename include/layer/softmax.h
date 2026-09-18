@@ -47,7 +47,16 @@ public:
                            Log_Feature::ACTIVATION_COMPUTE | Log_Feature::FORWARD_EVALUATION);
 
         input_tensor = _input_tensor;
-        input_tensor.softmax(output_tensor);
+        if (input_tensor.getDataType() == Data_Type::FLOAT16)
+        {
+            Tensor input_fp32(input_tensor.getExecutionTarget());
+            input_tensor.to(Data_Type::FLOAT32, input_fp32);
+            input_fp32.softmax(output_tensor);
+        }
+        else
+        {
+            input_tensor.softmax(output_tensor);
+        }
         is_forward_completed = true;
         return output_tensor;
     }

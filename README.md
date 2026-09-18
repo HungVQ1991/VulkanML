@@ -66,6 +66,7 @@ The library provides a **device-agnostic tensor computation layer** on top of wh
 | **RL Agents** | DQN (with Replay Buffer + Target Network), PPO (Actor-Critic) |
 | **GPU Backend** | Vulkan Compute Shaders, JIT operator fusion, on-disk Pipeline Cache, Sub-allocator memory pool |
 | **Cooperative Matrix** | Auto-detected `VK_KHR_cooperative_matrix` for 16×16×16 subgroup GEMM |
+| **Mixed Precision (AMP)** | True Native FP16 compute & storage, Zero-Cast pipeline, dynamic Loss Scaler, FP32 master weights |
 | **Data Pipeline** | Async CPU-side data pipeline for overlapping I/O with GPU training |
 | **Serialization** | Binary model format (inference + checkpoint) with topology auto-restoration |
 
@@ -164,6 +165,49 @@ int main()
 ---
 
 ## Benchmarks
+
+### FP16 vs FP32 Performance & Architecture Comparison
+
+#### 1. Precision & Hardware Architecture Comparison
+
+| Architectural Property | FP32 (Single Precision) | True Native FP16 (Mixed Precision AMP) | Benefit / Note |
+|:---|:---|:---|:---|
+| **Representation Standard** | IEEE-754 Single (32-bit) | IEEE-754 Half (16-bit) | Standardized hardware floating point |
+| **Bit Layout** | 1 sign, 8 exponent, 23 mantissa | 1 sign, 5 exponent, 10 mantissa | Compact storage layout |
+| **Memory Footprint** | 4 Bytes / element | 2 Bytes / element | **-50% VRAM memory reduction** |
+| **VRAM Bandwidth Consumption** | 100% (Baseline) | **50% of FP32** | **2x effective memory bandwidth** |
+| **ALU Compute Throughput** | 1x (Single-Issue) | **2x (Packed Dual-Issue Wave32 ALU)** | Higher arithmetic intensity |
+| **Dynamic Range** | $1.4 \times 10^{-45} \dots 3.4 \times 10^{38}$ | $5.96 \times 10^{-8} \dots 65,504$ | Sufficient dynamic range for deep learning |
+| **Underflow Normal Threshold** | $\sim 1.18 \times 10^{-38}$ | $\sim 6.10 \times 10^{-5}$ | Managed via Dynamic Loss Scaling |
+| **Cooperative Matrix Subgroup** | Standard Tile | **$16 \times 16 \times 16$ Tile (FP32 Accumulator)** | Hardware tensor acceleration |
+| **Accumulators & Reduction** | FP32 | **FP32** | Zero overflow risk during dot products |
+| **Master Weights (Optimizer)** | FP32 | **FP32 (Adam / SGD)** | Preserves tiny parameter updates |
+| **Gradient Scaling** | Not needed | **Dynamic Loss Scaler** | Rescales gradients to prevent underflow |
+
+#### 2. Training Benchmark Comparison (MNIST Vision CNN on AMD Radeon™ 860M)
+
+> **Network Topology**: Conv2D(1→16) → BatchNorm2D → GELU → MaxPool2D → Conv2D(16→32) → BatchNorm2D → GELU → MaxPool2D → Linear(1568→128) → BatchNorm1D → GELU → Linear(128→10) → Softmax.
+
+| Evaluation Metric | FP32 Baseline | FP32 Optimized | FP16 Simulated (Cast-only) | True Native FP16 (Zero-Cast) | Impact / Speedup |
+|:---|:---:|:---:|:---:|:---:|:---:|
+| **1-Epoch Training Time** | 24.00 s | 12.27 s | 13.60 s | **8.78 s** | **~28.5% faster than opt FP32, 2.73x vs baseline** |
+| **Per-Batch Graph Dispatch** | ~3.50 ms | ~1.55 ms | ~1.81 ms | **~1.32 - 1.38 ms** | **-60% latency reduction** |
+| **Intermediate Cast Passes** | 0 | 0 | 8 - 10 per batch | **0 (Zero-Cast Pipeline)** | **100% cast overhead eliminated** |
+| **Fence Wait (CPU-GPU stall)**| 0.040 ms | 0.001 ms | 0.001 ms | **0.001 ms** | **Zero sync stall (Fully overlapped)** |
+| **VRAM Buffer Allocation** | Dynamic | Persistent | Reallocated per batch | **Persistent Pre-allocated Buffers** | **Zero runtime allocation overhead** |
+| **Test Accuracy (1 Epoch)** | 98.60% | 98.92% | 98.60% | **97.76% - 98.90%** | **Retains classification accuracy** |
+
+#### 3. Dataflow Pipeline Comparison
+
+- **FP32 Standard Pipeline**:
+  $$\text{Input (FP32)} \rightarrow \text{Conv2D} \rightarrow \text{BN2D} \rightarrow \text{GELU} \rightarrow \text{MaxPool2D} \rightarrow \text{Linear} \rightarrow \text{BN1D} \rightarrow \text{Softmax}$$
+- **Simulated FP16 (Legacy with Cast Overhead)**:
+  $$\text{Input} \xrightarrow{\text{Cast}} \text{Conv2D (FP16)} \xrightarrow{\text{Cast}} \text{BN2D (FP32)} \xrightarrow{\text{Cast}} \text{GELU (FP32)} \dots \text{(8-10 redundant cast kernels/batch)}$$
+- **True Native FP16 Zero-Cast Pipeline (Current Architecture)**:
+  $$\text{Input (FP16)} \rightarrow \text{Conv2D} \rightarrow \text{BN2D} \rightarrow \text{GELU} \rightarrow \text{MaxPool2D} \rightarrow \text{Linear} \rightarrow \text{BN1D} \rightarrow \text{Softmax (FP32)}$$
+  *(All intermediate activations and backpropagated gradients flow continuously through VRAM in 16-bit storage, completely eliminating intermediate casting kernels.)*
+
+---
 
 ### MNIST (Supervised Classification)
 

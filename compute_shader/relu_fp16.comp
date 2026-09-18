@@ -1,0 +1,20 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer Buffer_A { float16_t data_a[]; };
+layout(std430, binding = 1) writeonly buffer Buffer_C { float16_t data_c[]; };
+
+layout(push_constant) uniform Relu_Dimensions {
+    uint total_elements;
+} dims;
+
+void main() {
+    uint elem_idx = gl_GlobalInvocationID.x;
+    if (elem_idx < dims.total_elements) {
+        float16_t val = data_a[elem_idx];
+        data_c[elem_idx] = max(float16_t(0.0), val);
+    }
+}

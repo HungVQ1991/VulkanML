@@ -11,6 +11,7 @@
 #include <variant>
 #include <vector>
 
+#include "engine/data_type.h"
 #include "engine/gpu_vector.h"
 #include "helper/logger.h"
 #include "shape.h"
@@ -25,6 +26,7 @@ protected:
     Stride strides;
     std::size_t byte_offset = 0;
     std::size_t total_elements = 0;
+    Data_Type data_type = Data_Type::FLOAT32;
 
     void updateShapeAndStrides(Shape target_shape)
     {
@@ -95,6 +97,7 @@ public:
     virtual void permute(const std::vector<std::size_t> &axes_permutation, Tensor_Impl &output) const = 0;
     virtual void slice(std::size_t axis, std::size_t start, std::size_t length, Tensor_Impl &output) const = 0;
     virtual void contiguous(Tensor_Impl &output) const = 0;
+    virtual void to(Data_Type target_type, Tensor_Impl &output) const = 0;
 
     virtual void matmul(const Tensor_Impl &other, Tensor_Impl &output) const = 0;
     virtual void matdiv(const Tensor_Impl &other, Tensor_Impl &output) const = 0;
@@ -114,7 +117,7 @@ public:
     virtual void softmax(Tensor_Impl &output) const = 0;
     virtual void softmaxBackward(const Tensor_Impl &output_gradient, Tensor_Impl &input_gradient) const = 0;
 
-    virtual void sgdUpdate(const Tensor_Impl &gradient, float learning_rate, float max_gradient = 0.0f) = 0;
+    virtual void sgdUpdate(const Tensor_Impl &gradient, float learning_rate, float max_gradient = 0.0f, float inv_scale = 1.0f) = 0;
     virtual void adamUpdate(const Tensor_Impl &gradient,
                             const Tensor_Impl &first_moment,
                             const Tensor_Impl &second_moment,
@@ -123,7 +126,8 @@ public:
                             float beta2,
                             float epsilon,
                             std::size_t timestep,
-                            float max_gradient = 1.0f) = 0;
+                            float max_gradient = 1.0f,
+                            float inv_scale = 1.0f) = 0;
 
     virtual void matmulAdd(const Tensor_Impl &weights, const Tensor_Impl &biases, Tensor_Impl &output) const = 0;
 
@@ -221,6 +225,8 @@ public:
     void setStrides(const Stride &_strides) noexcept { strides = _strides; }
     void setTotalElements(std::size_t _total_elements) noexcept { total_elements = _total_elements; }
     void setByteOffset(std::size_t _byte_offset) noexcept { byte_offset = _byte_offset; }
+    Data_Type getDataType() const noexcept { return data_type; }
+    void setDataType(Data_Type _type) noexcept { data_type = _type; }
 };
 
 using Impl = Tensor_Impl;

@@ -69,6 +69,8 @@ private:
 
     bool is_cooperative_matrix_supported = false;
     bool is_cooperative_matrix_enabled = false;
+    bool is_float16_supported = false;
+    bool is_float16_enabled = false;
     VkCooperativeMatrixPropertiesKHR cooperative_matrix_properties{};
 
     std::unique_ptr<Vulkan_Sub_Allocator> allocator;
@@ -348,16 +350,27 @@ private:
             .storagePushConstant16 = VK_FALSE,
             .storageInputOutput16 = VK_FALSE};
 
-        if (has_coop_mat_ext && has_float16_ext && has_storage16_ext)
+        if (has_float16_ext && has_storage16_ext)
         {
-            required_extensions.push_back(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
             required_extensions.push_back(VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME);
             required_extensions.push_back(VK_KHR_16BIT_STORAGE_EXTENSION_NAME);
 
             storage_16bit_features.pNext = &float16_features;
-            float16_features.pNext = &cooperative_matrix_features;
             device_create_pnext = &storage_16bit_features;
-            is_cooperative_matrix_supported = true;
+            is_float16_supported = true;
+            is_float16_enabled = true;
+            Logger::logMessage("Vulkan_Context::createLogicalDevice: Float16 compute (VK_KHR_shader_float16_int8) & 16-bit storage enabled",
+                               Log_Level::LOG_INFO,
+                               true,
+                               0,
+                               Log_Feature::DEVICE_MANAGEMENT | Log_Feature::FP16_METRICS);
+
+            if (has_coop_mat_ext)
+            {
+                required_extensions.push_back(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
+                float16_features.pNext = &cooperative_matrix_features;
+                is_cooperative_matrix_supported = true;
+            }
         }
 
         VkPhysicalDeviceFeatures enabled_features{};
@@ -444,7 +457,7 @@ private:
                                Log_Level::LOG_INFO,
                                true,
                                0,
-                               Log_Feature::DEVICE_MANAGEMENT);
+                               Log_Feature::DEVICE_MANAGEMENT | Log_Feature::FP16_METRICS);
         }
         else
         {
@@ -1049,6 +1062,8 @@ public:
     std::uint32_t getCurrentFrame() const noexcept { return current_frame; }
     bool isCooperativeMatrixEnabled() const noexcept { return is_cooperative_matrix_supported && is_cooperative_matrix_enabled; }
     bool isCooperativeMatrixSupported() const noexcept { return is_cooperative_matrix_supported; }
+    bool isFloat16Enabled() const noexcept { return is_float16_supported && is_float16_enabled; }
+    bool isFloat16Supported() const noexcept { return is_float16_supported; }
     bool isFrameReady(std::uint32_t _frame_index) const noexcept { return is_frame_ready[_frame_index]; }
 
     void setCooperativeMatrixProperties(const VkCooperativeMatrixPropertiesKHR &_properties) noexcept { cooperative_matrix_properties = _properties; }
@@ -1060,6 +1075,13 @@ public:
         if (is_cooperative_matrix_supported)
         {
             is_cooperative_matrix_enabled = _enable;
+        }
+    }
+    void setFloat16Enabled(bool _enable) noexcept
+    {
+        if (is_float16_supported)
+        {
+            is_float16_enabled = _enable;
         }
     }
 };

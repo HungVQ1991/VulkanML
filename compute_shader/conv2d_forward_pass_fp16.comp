@@ -1,11 +1,13 @@
 #version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-layout(set = 0, binding = 0) readonly buffer Input_Buffer { float input_data[]; };
-layout(set = 0, binding = 1) readonly buffer Weight_Buffer { float weight_data[]; };
-layout(set = 0, binding = 2) readonly buffer Bias_Buffer { float bias_data[]; };
-layout(set = 0, binding = 3) writeonly buffer Output_Buffer { float output_data[]; };
+layout(set = 0, binding = 0) readonly buffer Input_Buffer { float16_t input_data[]; };
+layout(set = 0, binding = 1) readonly buffer Weight_Buffer { float16_t weight_data[]; };
+layout(set = 0, binding = 2) readonly buffer Bias_Buffer { float16_t bias_data[]; };
+layout(set = 0, binding = 3) writeonly buffer Output_Buffer { float16_t output_data[]; };
 
 layout(push_constant) uniform Push_Constants {
     uint batch_size;
@@ -32,7 +34,7 @@ void main() {
     uint n_idx = n_out_h_idx / params.out_h;
     uint out_h_idx = n_out_h_idx % params.out_h;
 
-    float sum = bias_data[out_c_idx];
+    float sum = float(bias_data[out_c_idx]);
 
     uint in_row_stride = params.in_w * params.in_c;
     uint in_batch_stride = params.in_h * in_row_stride;
@@ -57,7 +59,7 @@ void main() {
             uint w_idx = ky_w_base + kx * w_kc_stride;
 
             for (uint in_c_idx = 0; in_c_idx < params.in_c; in_c_idx++) {
-                sum += input_data[in_idx] * weight_data[w_idx];
+                sum += float(input_data[in_idx]) * float(weight_data[w_idx]);
                 in_idx++;
                 w_idx += params.out_c;
             }
@@ -71,5 +73,5 @@ void main() {
                    out_w_idx * params.out_c +
                    out_c_idx;
     
-    output_data[out_idx] = sum;
+    output_data[out_idx] = float16_t(sum);
 }

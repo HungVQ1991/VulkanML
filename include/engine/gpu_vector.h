@@ -10,6 +10,7 @@
 #include <vector>
 #include <vulkan/vulkan.h>
 
+#include "data_type.h"
 #include "helper/logger.h"
 #include "vulkan_context.h"
 #include "vulkan_sub_allocator.h"
@@ -25,6 +26,8 @@ namespace gpu
         VkBuffer buffer = VK_NULL_HANDLE;
         Memory_Allocation allocation{};
         std::size_t buffer_size_in_bytes = 0;
+        std::size_t element_count = 0;
+        Data_Type data_type = Data_Type::FLOAT32;
         std::uint32_t used_frame_index = 0;
         std::uint64_t vector_id = 0;
 
@@ -184,18 +187,21 @@ namespace gpu
 
     public:
         explicit vector(const Vulkan_Context &_context)
-            : context(_context), buffer_size_in_bytes(0), used_frame_index(_context.getCurrentFrame()), vector_id(++global_vector_counter)
+            : context(_context), buffer_size_in_bytes(0), element_count(0), data_type(Data_Type::FLOAT32),
+              used_frame_index(_context.getCurrentFrame()), vector_id(++global_vector_counter)
         {
         }
 
-        vector(const Vulkan_Context &_context, std::size_t _element_count)
-            : context(_context), buffer_size_in_bytes(0), used_frame_index(_context.getCurrentFrame()), vector_id(++global_vector_counter)
+        vector(const Vulkan_Context &_context, std::size_t _element_count, Data_Type _type = Data_Type::FLOAT32)
+            : context(_context), buffer_size_in_bytes(0), element_count(0), data_type(_type),
+              used_frame_index(_context.getCurrentFrame()), vector_id(++global_vector_counter)
         {
-            allocateMemory(_element_count);
+            allocateMemory(_element_count, _type);
         }
 
         vector(const Vulkan_Context &_context, const std::vector<float> &_host_data)
-            : context(_context), buffer_size_in_bytes(0), used_frame_index(_context.getCurrentFrame()), vector_id(++global_vector_counter)
+            : context(_context), buffer_size_in_bytes(0), element_count(0), data_type(Data_Type::FLOAT32),
+              used_frame_index(_context.getCurrentFrame()), vector_id(++global_vector_counter)
         {
             if (_host_data.empty())
             {
@@ -206,7 +212,24 @@ namespace gpu
                                    Log_Feature::MEMORY_TRANSFER);
                 return;
             }
-            allocateMemory(_host_data.size());
+            allocateMemory(_host_data.size(), Data_Type::FLOAT32);
+            uploadData(_host_data);
+        }
+
+        vector(const Vulkan_Context &_context, const std::vector<float16_t> &_host_data)
+            : context(_context), buffer_size_in_bytes(0), element_count(0), data_type(Data_Type::FLOAT16),
+              used_frame_index(_context.getCurrentFrame()), vector_id(++global_vector_counter)
+        {
+            if (_host_data.empty())
+            {
+                Logger::logMessage("gpu::vector::vector: Host data vector is empty during construction",
+                                   Log_Level::LOG_WARNING,
+                                   false,
+                                   0,
+                                   Log_Feature::MEMORY_TRANSFER);
+                return;
+            }
+            allocateMemory(_host_data.size(), Data_Type::FLOAT16);
             uploadData(_host_data);
         }
 
@@ -220,11 +243,14 @@ namespace gpu
 
         vector(vector &&other) noexcept
             : context(other.context), buffer(other.buffer), allocation(other.allocation),
-              buffer_size_in_bytes(other.buffer_size_in_bytes), used_frame_index(other.used_frame_index), vector_id(other.vector_id)
+              buffer_size_in_bytes(other.buffer_size_in_bytes), element_count(other.element_count),
+              data_type(other.data_type), used_frame_index(other.used_frame_index), vector_id(other.vector_id)
         {
             other.buffer = VK_NULL_HANDLE;
             other.allocation = Memory_Allocation{};
             other.buffer_size_in_bytes = 0;
+            other.element_count = 0;
+            other.data_type = Data_Type::FLOAT32;
             other.used_frame_index = 0;
             other.vector_id = 0;
         }
@@ -238,21 +264,27 @@ namespace gpu
                 buffer = other.buffer;
                 allocation = other.allocation;
                 buffer_size_in_bytes = other.buffer_size_in_bytes;
+                element_count = other.element_count;
+                data_type = other.data_type;
                 used_frame_index = other.used_frame_index;
                 vector_id = other.vector_id;
 
                 other.buffer = VK_NULL_HANDLE;
                 other.allocation = Memory_Allocation{};
                 other.buffer_size_in_bytes = 0;
+                other.element_count = 0;
+                other.data_type = Data_Type::FLOAT32;
                 other.used_frame_index = 0;
                 other.vector_id = 0;
             }
             return *this;
         }
 
-        void allocateMemory(std::size_t element_count)
+        void allocateMemory(std::size_t _element_count, Data_Type _type = Data_Type::FLOAT32)
         {
-            VkDeviceSize required_byte_size = element_count * sizeof(float);
+            data_type = _type;
+            element_count = _element_count;
+            VkDeviceSize required_byte_size = _element_count * getDataTypeSize(_type);
             if (required_byte_size == buffer_size_in_bytes && buffer != VK_NULL_HANDLE)
             {
                 Logger::logMessage(Input_Format{"gpu::vector::allocateMemory: Requested size matches current buffer size (ID: {}), skipping", vector_id},
@@ -265,7 +297,7 @@ namespace gpu
 
             freeMemory();
 
-            if (element_count == 0)
+            if (_element_count == 0)
             {
                 Logger::logMessage("gpu::vector::allocateMemory: Requested allocation size is 0",
                                    Log_Level::LOG_WARNING,
@@ -284,7 +316,7 @@ namespace gpu
             used_frame_index = context.getCurrentFrame();
 
             Logger::logMessage(Input_Format{"gpu::vector::allocateMemory: Allocating {} elements ({} bytes) for ID: {}",
-                                           element_count, buffer_size_in_bytes, vector_id},
+                                           _element_count, buffer_size_in_bytes, vector_id},
                                Log_Level::LOG_DEBUG,
                                true,
                                0,
@@ -314,11 +346,11 @@ namespace gpu
             }
         }
 
-        void uploadData(const std::vector<float> &host_data)
+        void uploadRawData(const void *source_pointer, std::size_t size_in_bytes)
         {
-            if (host_data.empty() || buffer_size_in_bytes == 0)
+            if (!source_pointer || size_in_bytes == 0 || buffer_size_in_bytes == 0)
             {
-                Logger::logMessage("gpu::vector::uploadData: Empty host data or zero GPU buffer size",
+                Logger::logMessage("gpu::vector::uploadRawData: Empty host data or zero GPU buffer size",
                                    Log_Level::LOG_WARNING,
                                    false,
                                    0,
@@ -326,9 +358,9 @@ namespace gpu
                 return;
             }
 
-            if (host_data.size() * sizeof(float) != buffer_size_in_bytes)
+            if (size_in_bytes != buffer_size_in_bytes)
             {
-                Logger::logMessage("gpu::vector::uploadData: Host data size mismatch with GPU buffer size",
+                Logger::logMessage("gpu::vector::uploadRawData: Host data size mismatch with GPU buffer size",
                                    Log_Level::LOG_ERROR,
                                    true,
                                    0,
@@ -342,7 +374,7 @@ namespace gpu
             VkDeviceSize staging_offset = 0;
             void *mapped_pointer = context.allocateStagingSpace(frame_index, buffer_size_in_bytes, staging_buffer, staging_offset);
 
-            std::memcpy(mapped_pointer, host_data.data(), buffer_size_in_bytes);
+            std::memcpy(mapped_pointer, source_pointer, buffer_size_in_bytes);
 
             Buffer_Transfer_Task transfer_task{
                 .source_buffer = staging_buffer,
@@ -356,11 +388,39 @@ namespace gpu
             markAsUsedInFrame(frame_index);
         }
 
-        void downloadData(std::vector<float> &host_data) const
+        void uploadData(const std::vector<float> &host_data)
         {
-            if (buffer_size_in_bytes == 0 || buffer == VK_NULL_HANDLE)
+            if (data_type == Data_Type::FLOAT16)
             {
-                Logger::logMessage("gpu::vector::downloadData: Attempted download from zero-sized or invalid buffer",
+                std::vector<float16_t> fp16_data(host_data.size());
+                convertFp32ToFp16(host_data.data(), fp16_data.data(), host_data.size());
+                uploadRawData(fp16_data.data(), fp16_data.size() * sizeof(float16_t));
+            }
+            else
+            {
+                uploadRawData(host_data.data(), host_data.size() * sizeof(float));
+            }
+        }
+
+        void uploadData(const std::vector<float16_t> &host_data)
+        {
+            if (data_type == Data_Type::FLOAT32)
+            {
+                std::vector<float> fp32_data(host_data.size());
+                convertFp16ToFp32(host_data.data(), fp32_data.data(), host_data.size());
+                uploadRawData(fp32_data.data(), fp32_data.size() * sizeof(float));
+            }
+            else
+            {
+                uploadRawData(host_data.data(), host_data.size() * sizeof(float16_t));
+            }
+        }
+
+        void downloadRawData(void *destination_pointer, std::size_t size_in_bytes) const
+        {
+            if (buffer_size_in_bytes == 0 || buffer == VK_NULL_HANDLE || !destination_pointer || size_in_bytes == 0)
+            {
+                Logger::logMessage("gpu::vector::downloadRawData: Attempted download from zero-sized or invalid buffer",
                                    Log_Level::LOG_WARNING,
                                    false,
                                    0,
@@ -372,11 +432,6 @@ namespace gpu
             if (context.getDevice() != VK_NULL_HANDLE && context.getComputeQueue() != VK_NULL_HANDLE)
             {
                 vkQueueWaitIdle(context.getComputeQueue());
-            }
-
-            if (host_data.size() != getElementCount())
-            {
-                host_data.resize(getElementCount());
             }
 
             VkDevice device = context.getDevice();
@@ -394,12 +449,12 @@ namespace gpu
 
             if (vkCreateBuffer(device, &buffer_create_information, nullptr, &staging_buffer) != VK_SUCCESS)
             {
-                Logger::logMessage("gpu::vector::downloadData: Failed to create staging buffer",
+                Logger::logMessage("gpu::vector::downloadRawData: Failed to create staging buffer",
                                    Log_Level::LOG_ERROR,
                                    true,
                                    0,
                                    Log_Feature::MEMORY_ALLOCATION | Log_Feature::MEMORY_TRANSFER);
-                throw std::runtime_error("gpu::vector::downloadData: Failed to create staging buffer");
+                throw std::runtime_error("gpu::vector::downloadRawData: Failed to create staging buffer");
             }
 
             VkMemoryRequirements memory_requirements;
@@ -411,12 +466,12 @@ namespace gpu
             {
                 vkDestroyBuffer(device, staging_buffer, nullptr);
                 context.deferDestruction(context.getCurrentFrame(), VK_NULL_HANDLE, staging_allocation);
-                Logger::logMessage("gpu::vector::downloadData: Failed to bind staging memory",
+                Logger::logMessage("gpu::vector::downloadRawData: Failed to bind staging memory",
                                    Log_Level::LOG_ERROR,
                                    true,
                                    0,
                                    Log_Feature::MEMORY_ALLOCATION | Log_Feature::MEMORY_TRANSFER);
-                throw std::runtime_error("gpu::vector::downloadData: Failed to bind staging memory");
+                throw std::runtime_error("gpu::vector::downloadRawData: Failed to bind staging memory");
             }
 
             copyBuffer(buffer, staging_buffer, buffer_size_in_bytes);
@@ -426,39 +481,83 @@ namespace gpu
             {
                 vkDestroyBuffer(device, staging_buffer, nullptr);
                 context.deferDestruction(context.getCurrentFrame(), VK_NULL_HANDLE, staging_allocation);
-                Logger::logMessage("gpu::vector::downloadData: Failed to map staging memory",
+                Logger::logMessage("gpu::vector::downloadRawData: Failed to map staging memory",
                                    Log_Level::LOG_ERROR,
                                    true,
                                    0,
                                    Log_Feature::MEMORY_ALLOCATION | Log_Feature::MEMORY_TRANSFER);
-                throw std::runtime_error("gpu::vector::downloadData: Failed to map memory");
+                throw std::runtime_error("gpu::vector::downloadRawData: Failed to map memory");
             }
 
-            std::memcpy(host_data.data(), mapped_pointer, buffer_size_in_bytes);
+            std::size_t copy_bytes = std::min(size_in_bytes, buffer_size_in_bytes);
+            std::memcpy(destination_pointer, mapped_pointer, copy_bytes);
 
             vkUnmapMemory(device, staging_allocation.memory);
             context.deferDestruction(context.getCurrentFrame(), staging_buffer, staging_allocation);
         }
 
+        void downloadData(std::vector<float> &host_data) const
+        {
+            std::size_t count = getElementCount();
+            if (host_data.size() != count)
+            {
+                host_data.resize(count);
+            }
+
+            if (data_type == Data_Type::FLOAT16)
+            {
+                std::vector<float16_t> fp16_data(count);
+                downloadRawData(fp16_data.data(), count * sizeof(float16_t));
+                convertFp16ToFp32(fp16_data.data(), host_data.data(), count);
+            }
+            else
+            {
+                downloadRawData(host_data.data(), buffer_size_in_bytes);
+            }
+        }
+
+        void downloadData(std::vector<float16_t> &host_data) const
+        {
+            std::size_t count = getElementCount();
+            if (host_data.size() != count)
+            {
+                host_data.resize(count);
+            }
+
+            if (data_type == Data_Type::FLOAT32)
+            {
+                std::vector<float> fp32_data(count);
+                downloadRawData(fp32_data.data(), count * sizeof(float));
+                convertFp32ToFp16(fp32_data.data(), host_data.data(), count);
+            }
+            else
+            {
+                downloadRawData(host_data.data(), buffer_size_in_bytes);
+            }
+        }
+
     public:
         const Vulkan_Context &getContext() const noexcept { return context; }
         const Memory_Allocation &getAllocation() const noexcept { return allocation; }
-        std::size_t getElementCount() const noexcept { return buffer_size_in_bytes / sizeof(float); }
-        std::size_t getSize() const noexcept { return buffer_size_in_bytes / sizeof(float); }
+        std::size_t getElementCount() const noexcept { return element_count > 0 ? element_count : (buffer_size_in_bytes / getDataTypeSize(data_type)); }
         std::size_t getBufferSizeInBytes() const noexcept { return buffer_size_in_bytes; }
+        std::size_t getSize() const noexcept { return getElementCount(); }
         std::size_t getSizeBytes() const noexcept { return buffer_size_in_bytes; }
         std::size_t getByteSize() const noexcept { return buffer_size_in_bytes; }
         VkDevice getDevice() const noexcept { return context.getDevice(); }
         std::uint64_t getVectorId() const noexcept { return vector_id; }
         std::uint64_t getId() const noexcept { return vector_id; }
         VkBuffer getBuffer() const noexcept { return buffer; }
+        Data_Type getDataType() const noexcept { return data_type; }
         std::uint32_t getUsedFrameIndex() const noexcept { return used_frame_index; }
         bool isEmpty() const noexcept { return buffer_size_in_bytes == 0 || buffer == VK_NULL_HANDLE; }
 
         void setAllocation(const Memory_Allocation &_allocation) noexcept { allocation = _allocation; }
         void setBufferSizeInBytes(std::size_t _bytes) noexcept { buffer_size_in_bytes = _bytes; }
+        void setElementCount(std::size_t _count) noexcept { element_count = _count; }
         void setVectorId(std::uint64_t _vector_id) noexcept { vector_id = _vector_id; }
         void setBuffer(VkBuffer _buffer) noexcept { buffer = _buffer; }
+        void setDataType(Data_Type _type) noexcept { data_type = _type; }
         void markAsUsedInFrame(std::uint32_t frame_index) noexcept { used_frame_index = frame_index; }
         void setUsedFrameIndex(std::uint32_t _frame_index) noexcept { used_frame_index = _frame_index; }
     };

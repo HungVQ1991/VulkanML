@@ -122,6 +122,11 @@ public:
 
     void step(const std::vector<std::pair<Matrix *, Matrix *>> &_parameter_gradient_pairs) override
     {
+        step(_parameter_gradient_pairs, 1.0f);
+    }
+
+    void step(const std::vector<std::pair<Matrix *, Matrix *>> &_parameter_gradient_pairs, float _grad_scale) override
+    {
         if (learning_rate_scheduler != nullptr)
         {
             learning_rate = learning_rate_scheduler->getCurrentRate();
@@ -155,6 +160,7 @@ public:
         }
 
         ++timestep;
+        float inv_scale = (_grad_scale > 0.0f) ? (1.0f / _grad_scale) : 1.0f;
 
         for (const auto &[parameter, gradient] : _parameter_gradient_pairs)
         {
@@ -184,7 +190,8 @@ public:
                                   beta2,
                                   epsilon,
                                   timestep,
-                                  max_gradient);
+                                  max_gradient,
+                                  inv_scale);
         }
     }
 

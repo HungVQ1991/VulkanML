@@ -18,6 +18,7 @@
 #include "engine/async_data_pipeline.h"
 #include "engine/execution_engine.h"
 #include "engine/graph_optimizer.h"
+#include "engine/loss_scaler.h"
 #include "helper/logger.h"
 #include "helper/magic_enum.hpp"
 #include "layer/ilayer.h"
@@ -31,8 +32,11 @@ private:
     Tensor last_prediction;
     Execution_Target execution_target = Execution_Target::CPU;
     Training_Context training_context;
+    Loss_Scaler loss_scaler;
     bool is_target_synchronized = false;
     bool is_gradient_accumulation_enabled = false;
+    bool is_mixed_precision_enabled = false;
+    bool is_step_lr_per_batch = false;
 
 public:
     explicit Neural_Network(Execution_Target _execution_target = Execution_Target::CPU)
@@ -67,6 +71,7 @@ public:
         }
         _layer->setExecutionTarget(execution_target);
         _layer->setAccumulated(is_gradient_accumulation_enabled);
+        _layer->setMixedPrecision(is_mixed_precision_enabled);
         Logger::logMessage(Input_Format{"Neural_Network::addLayer: Added layer type {}",
                                         magic_enum::enum_name<Layer_Type>(_layer->getLayerType())},
                            Log_Level::LOG_DEBUG,
@@ -135,6 +140,11 @@ public:
         else
         {
             gradient_tensor = _target_tensor;
+        }
+
+        if (is_mixed_precision_enabled && loss_scaler.getScaleFactor() != 1.0f)
+        {
+            loss_scaler.scaleGradient(gradient_tensor);
         }
 
         for (std::size_t i = layers.size(); i > 0; --i)
@@ -282,7 +292,33 @@ public:
         // printL2Norms();
 
         IOptimizer &optimizer = training_context.getOptimizer();
-        optimizer.step(getParametersAndGradients());
+        if (is_mixed_precision_enabled)
+        {
+            auto param_grad_pairs = getParametersAndGradients();
+            if (execution_target == Execution_Target::CPU)
+            {
+                bool overflow = loss_scaler.hasOverflow(param_grad_pairs);
+                bool step_accepted = loss_scaler.step(overflow);
+                if (step_accepted)
+                {
+                    loss_scaler.unscaleGradients(param_grad_pairs);
+                    optimizer.step(param_grad_pairs);
+                }
+                else
+                {
+                    zeroGradients();
+                }
+            }
+            else
+            {
+                optimizer.step(param_grad_pairs, loss_scaler.getScaleFactor());
+                loss_scaler.step(false);
+            }
+        }
+        else
+        {
+            optimizer.step(getParametersAndGradients());
+        }
 
         if (execution_target == Execution_Target::VULKAN_GPU)
         {
@@ -360,11 +396,19 @@ public:
                     }
 
                     trainStep(*batch_data.input_matrix, *batch_data.target_matrix, batch_data.fence);
+
+                    if (is_step_lr_per_batch)
+                    {
+                        training_context.getLearningRate().step();
+                    }
                 }
             }
             if (checkpoint_file_path != "")
                 saveTrainingCheckpoint(modifyFilepath(checkpoint_file_path, epoch), epoch);
-            training_context.getLearningRate().step();
+            if (!is_step_lr_per_batch)
+            {
+                training_context.getLearningRate().step();
+            }
             Logger::resetLogCounters();
         }
 
@@ -625,8 +669,11 @@ public:
     std::size_t getLayerCount() const noexcept { return layers.size(); }
     const std::vector<std::unique_ptr<ILayer>> &getLayers() const noexcept { return layers; }
     std::vector<std::unique_ptr<ILayer>> &getLayers() noexcept { return layers; }
+    const Loss_Scaler &getLossScaler() const noexcept { return loss_scaler; }
+    Loss_Scaler &getLossScaler() noexcept { return loss_scaler; }
     Execution_Target getExecutionTarget() const noexcept { return execution_target; }
     bool isGradientAccumulationEnabled() const noexcept { return is_gradient_accumulation_enabled; }
+    bool isMixedPrecisionEnabled() const noexcept { return is_mixed_precision_enabled; }
     bool isTargetSynchronized() const noexcept { return is_target_synchronized; }
 
     void setTrainingContext(Training_Context _training_context) noexcept { training_context = std::move(_training_context); }
@@ -716,6 +763,11 @@ public:
                                Log_Feature::DEVICE_MANAGEMENT);
         }
         execution_target = _new_execution_target;
+        if (is_mixed_precision_enabled && execution_target == Execution_Target::VULKAN_GPU)
+        {
+            loss_scaler.setMaxScale(1.0f);
+            loss_scaler.setScaleFactor(1.0f);
+        }
         last_prediction.setExecutionTarget(_new_execution_target);
         for (auto &layer : layers)
         {
@@ -749,6 +801,33 @@ public:
         }
     }
 
+    void setLossScaler(Loss_Scaler _loss_scaler) noexcept { loss_scaler = _loss_scaler; }
+    void setMixedPrecision(bool _enable) noexcept
+    {
+        is_mixed_precision_enabled = _enable;
+        loss_scaler.setEnabled(_enable);
+        if (_enable && execution_target == Execution_Target::VULKAN_GPU)
+        {
+            loss_scaler.setMaxScale(1.0f);
+            loss_scaler.setScaleFactor(1.0f);
+        }
+        for (auto &layer : layers)
+        {
+            layer->setMixedPrecision(_enable);
+        }
+        Logger::logMessage(Input_Format{"Neural_Network::setMixedPrecision: Mixed precision {} across {} layers. Target = {}, LossScaler: scale={:.1f}, max_scale={:.1f}",
+                                        _enable ? "ENABLED" : "DISABLED", layers.size(),
+                                        execution_target == Execution_Target::VULKAN_GPU ? "VULKAN_GPU" : "CPU",
+                                        loss_scaler.getScaleFactor(), loss_scaler.getMaxScale()},
+                           Log_Level::LOG_INFO,
+                           true,
+                           0,
+                           Log_Feature::FP16_METRICS | Log_Feature::LAYER_INSPECTION);
+    }
+    void setMixedPrecisionEnabled(bool _enable) noexcept { setMixedPrecision(_enable); }
+    void enableMixedPrecision(bool _enable = true) noexcept { setMixedPrecision(_enable); }
+    void setStepLearningRatePerBatch(bool _enable) noexcept { is_step_lr_per_batch = _enable; }
+    bool isStepLearningRatePerBatch() const noexcept { return is_step_lr_per_batch; }
     void setGradientAccumulationEnabled(bool _enable) noexcept { setGradientAccumulation(_enable); }
     void setTargetSynchronized(bool _synced) noexcept { is_target_synchronized = _synced; }
 };

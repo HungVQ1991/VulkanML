@@ -255,7 +255,8 @@ double runBenchmark(Execution_Target _execution_target,
                     std::string save_file_filepath)
 {
     std::size_t steps_per_epoch = _images_count / BATCH_SIZE;
-    _neural_network.getLearningRate().setMaxEpoch(static_cast<int>(TOTAL_EPOCHS));
+    _neural_network.getLearningRate().setMaxEpoch(static_cast<int>(TOTAL_EPOCHS * steps_per_epoch));
+    _neural_network.setStepLearningRatePerBatch(true);
 
     Mnist_Data_Pipeline data_pipeline(
         _images_data,
@@ -393,7 +394,7 @@ void evaluateModel(Neural_Network &_neural_network,
 int main()
 {
     Logger::setFileLogging(true);
-    Logger::setOnlyActiveFeatures(Log_Feature::LAYER_INSPECTION);
+    Logger::setOnlyActiveFeatures(Log_Feature::LAYER_INSPECTION | Log_Feature::FP16_METRICS);
     Logger::setConsoleOutput(true);
     Execution_Engine::getInstance().setCooperativeMatrixEnabled(true);
 
@@ -418,6 +419,7 @@ int main()
     Execution_Target execution_target = Execution_Target::VULKAN_GPU;
     Neural_Network neural_network(execution_target);
     neural_network.setTrainingMode(true);
+    // neural_network.enableMixedPrecision();
 
     neural_network.setLearningRate<Cosine_Annealing>(0.001f, 1e-5f, static_cast<int>(TOTAL_EPOCHS));
     neural_network.setOptimizer<Adam_Optimizer>(neural_network.getLearningRate(), 0.9f, 0.999f, 1e-8f, 1.0f);

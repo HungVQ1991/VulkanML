@@ -302,6 +302,15 @@ public:
             slot.is_fence_submitted = true;
         }
 
+        static double total_fence_wait_ms = 0;
+        static std::size_t batch_ctr = 0;
+        total_fence_wait_ms += fence_wait_time_in_milliseconds;
+        batch_ctr++;
+        if (batch_ctr == 500)
+        {
+            std::cout << std::format("[PROFILE 500 steps] Fence Wait (GPU busy): {:.3f}ms per batch\n", total_fence_wait_ms / 500.0);
+        }
+
         double condition_variable_wait_time_in_milliseconds = 0.0;
         {
             auto start_condition_variable_time = std::chrono::high_resolution_clock::now();

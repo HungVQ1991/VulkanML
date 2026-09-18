@@ -58,6 +58,7 @@ private:
     std::size_t action_space_size = 0;
     Execution_Target execution_target = Execution_Target::CPU;
     mutable std::mt19937 random_engine;
+    bool is_mixed_precision_enabled = false;
 
     std::vector<Population_Layer_Adapter> layer_adapters;
 
@@ -91,6 +92,10 @@ public:
         {
             for (std::size_t p = 0; p < adapter.batched_params.size(); ++p)
             {
+                if (is_mixed_precision_enabled && execution_target == Execution_Target::VULKAN_GPU)
+                {
+                    adapter.batched_params[p].setDataType(Data_Type::FLOAT16);
+                }
                 adapter.batched_params[p].uploadData(adapter.host_params[p]);
             }
         }
@@ -239,6 +244,10 @@ public:
             }
         }
 
+        if (is_mixed_precision_enabled && execution_target == Execution_Target::VULKAN_GPU)
+        {
+            batched_input_tensor.setDataType(Data_Type::FLOAT16);
+        }
         batched_input_tensor.uploadData(batched_input_host);
 
         Tensor current_tensor = batched_input_tensor;
@@ -794,4 +803,29 @@ public:
     void setPopulationSize(std::size_t _size) noexcept { population_size = _size; }
     void setStateDimension(std::size_t _dimension) noexcept { state_dimension = _dimension; }
     void setExecutionTarget(Execution_Target _target) noexcept { execution_target = _target; }
+    void setMixedPrecision(bool enable) noexcept
+    {
+        is_mixed_precision_enabled = enable;
+        if (execution_target == Execution_Target::VULKAN_GPU)
+        {
+            batched_input_tensor.setDataType(enable ? Data_Type::FLOAT16 : Data_Type::FLOAT32);
+            for (auto &adapter : layer_adapters)
+            {
+                for (auto &param : adapter.batched_params)
+                {
+                    param.setDataType(enable ? Data_Type::FLOAT16 : Data_Type::FLOAT32);
+                }
+            }
+            syncHostToDevice();
+        }
+        Logger::logMessage(Input_Format{"Population::setMixedPrecision: Mixed precision {} for population size = {}, target = {}",
+                                        enable ? "ENABLED (FLOAT16)" : "DISABLED (FLOAT32)", population_size,
+                                        execution_target == Execution_Target::VULKAN_GPU ? "VULKAN_GPU" : "CPU"},
+                           Log_Level::LOG_INFO,
+                           true,
+                           0,
+                           Log_Feature::FP16_METRICS);
+    }
+    void enableMixedPrecision(bool enable = true) noexcept { setMixedPrecision(enable); }
+    bool isMixedPrecisionEnabled() const noexcept { return is_mixed_precision_enabled; }
 };

@@ -29,6 +29,9 @@ private:
     std::uint32_t output_height = 0;
     std::uint32_t output_width = 0;
 
+    Execution_Target execution_target = Execution_Target::CPU;
+    bool is_forward_completed = false;
+
     Tensor weights;
     Tensor biases;
     Tensor weights_gradient_tensor;
@@ -37,8 +40,12 @@ private:
     Tensor output_tensor;
     Tensor input_gradient_tensor;
 
-    bool is_forward_completed = false;
-    Execution_Target execution_target = Execution_Target::CPU;
+    Tensor weights_fp16;
+    Tensor biases_fp16;
+    Tensor input_tensor_fp16;
+    Tensor output_tensor_fp16;
+    Tensor input_gradient_tensor_fp16;
+    Tensor output_gradient_tensor_fp16;
 
     void initializeWeights()
     {
@@ -88,6 +95,12 @@ public:
           input_tensor(0, 0, _execution_target),
           output_tensor(0, 0, _execution_target),
           input_gradient_tensor(0, 0, _execution_target),
+          weights_fp16(0, 0, _execution_target),
+          biases_fp16(0, 0, _execution_target),
+          input_tensor_fp16(0, 0, _execution_target),
+          output_tensor_fp16(0, 0, _execution_target),
+          input_gradient_tensor_fp16(0, 0, _execution_target),
+          output_gradient_tensor_fp16(0, 0, _execution_target),
           is_forward_completed(false)
     {
         output_height = (input_height + 2 * padding - kernel_size) / stride + 1;
@@ -107,7 +120,28 @@ public:
                            Log_Feature::CONV2D_COMPUTE | Log_Feature::FORWARD_EVALUATION);
 
         input_tensor = _input_tensor;
-        input_tensor.conv2d(weights, biases, output_tensor, input_height, input_width, input_channels, output_channels, kernel_size, stride, padding);
+        if (is_mixed_precision_enabled && execution_target == Execution_Target::VULKAN_GPU)
+        {
+            if (input_tensor.getDataType() != Data_Type::FLOAT16)
+            {
+                input_tensor.to(Data_Type::FLOAT16, input_tensor_fp16);
+            }
+            else
+            {
+                input_tensor_fp16 = input_tensor;
+            }
+
+            weights.to(Data_Type::FLOAT16, weights_fp16);
+            biases.to(Data_Type::FLOAT16, biases_fp16);
+
+            input_tensor_fp16.conv2d(weights_fp16, biases_fp16, output_tensor_fp16, input_height, input_width, input_channels, output_channels, kernel_size, stride, padding);
+
+            output_tensor = output_tensor_fp16;
+        }
+        else
+        {
+            input_tensor.conv2d(weights, biases, output_tensor, input_height, input_width, input_channels, output_channels, kernel_size, stride, padding);
+        }
         is_forward_completed = true;
         return output_tensor;
     }
@@ -159,21 +193,60 @@ public:
                            1,
                            Log_Feature::CONV2D_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
-        if (!is_accumulated)
+        if (is_mixed_precision_enabled && execution_target == Execution_Target::VULKAN_GPU)
         {
-            input_tensor.conv2dBackwardWeight(_output_gradient, weights_gradient_tensor, biases_gradient_tensor, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding);
+            if (_output_gradient.getDataType() != Data_Type::FLOAT16)
+            {
+                _output_gradient.to(Data_Type::FLOAT16, output_gradient_tensor_fp16);
+            }
+            else
+            {
+                output_gradient_tensor_fp16 = _output_gradient;
+            }
+
+            if (!is_accumulated)
+            {
+                input_tensor_fp16.conv2dBackwardWeight(output_gradient_tensor_fp16, weights_gradient_tensor, biases_gradient_tensor, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding);
+            }
+            else
+            {
+                Tensor step_weights_grad(weights_gradient_tensor.getShape(), execution_target);
+                Tensor step_biases_grad(biases_gradient_tensor.getShape(), execution_target);
+                input_tensor_fp16.conv2dBackwardWeight(output_gradient_tensor_fp16, step_weights_grad, step_biases_grad, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding);
+                weights_gradient_tensor = weights_gradient_tensor + step_weights_grad;
+                biases_gradient_tensor = biases_gradient_tensor + step_biases_grad;
+            }
+            logBufferAddress(&input_tensor_fp16, "input_tensor_fp16 (Backward)");
+            output_gradient_tensor_fp16.conv2dBackwardInput(weights_fp16, input_gradient_tensor_fp16, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding);
+
+            if (input_tensor.getDataType() == Data_Type::FLOAT16)
+            {
+                input_gradient_tensor = input_gradient_tensor_fp16;
+            }
+            else
+            {
+                input_gradient_tensor_fp16.to(Data_Type::FLOAT32, input_gradient_tensor);
+            }
+            return input_gradient_tensor;
         }
         else
         {
-            Tensor step_weights_grad(weights_gradient_tensor.getShape(), execution_target);
-            Tensor step_biases_grad(biases_gradient_tensor.getShape(), execution_target);
-            input_tensor.conv2dBackwardWeight(_output_gradient, step_weights_grad, step_biases_grad, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding);
-            weights_gradient_tensor = weights_gradient_tensor + step_weights_grad;
-            biases_gradient_tensor = biases_gradient_tensor + step_biases_grad;
+            if (!is_accumulated)
+            {
+                input_tensor.conv2dBackwardWeight(_output_gradient, weights_gradient_tensor, biases_gradient_tensor, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding);
+            }
+            else
+            {
+                Tensor step_weights_grad(weights_gradient_tensor.getShape(), execution_target);
+                Tensor step_biases_grad(biases_gradient_tensor.getShape(), execution_target);
+                input_tensor.conv2dBackwardWeight(_output_gradient, step_weights_grad, step_biases_grad, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding);
+                weights_gradient_tensor = weights_gradient_tensor + step_weights_grad;
+                biases_gradient_tensor = biases_gradient_tensor + step_biases_grad;
+            }
+            logBufferAddress(&input_tensor, "input_tensor (Backward)");
+            _output_gradient.conv2dBackwardInput(weights, input_gradient_tensor, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding);
+            return input_gradient_tensor;
         }
-        logBufferAddress(&input_tensor, "input_tensor (Backward)");
-        _output_gradient.conv2dBackwardInput(weights, input_gradient_tensor, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding);
-        return input_gradient_tensor;
     }
 
     void resetGradient() override
@@ -190,8 +263,10 @@ public:
 
     std::unique_ptr<ILayer> clone() const override
     {
-        return std::make_unique<Conv2d_Layer>(
+        auto cloned = std::make_unique<Conv2d_Layer>(
             input_height, input_width, input_channels, output_channels, kernel_size, stride, padding, execution_target);
+        cloned->setMixedPrecision(is_mixed_precision_enabled);
+        return cloned;
     }
 
     void saveConfiguration(std::ofstream &_output_file_stream) const override
@@ -343,6 +418,11 @@ public:
         input_tensor.setExecutionTarget(_new_execution_target);
         output_tensor.setExecutionTarget(_new_execution_target);
         input_gradient_tensor.setExecutionTarget(_new_execution_target);
+        weights_fp16.setExecutionTarget(_new_execution_target);
+        biases_fp16.setExecutionTarget(_new_execution_target);
+        input_tensor_fp16.setExecutionTarget(_new_execution_target);
+        output_tensor_fp16.setExecutionTarget(_new_execution_target);
+        input_gradient_tensor_fp16.setExecutionTarget(_new_execution_target);
     }
     void setOutputChannels(std::uint32_t _channels) noexcept { output_channels = _channels; }
     void setInputChannels(std::uint32_t _channels) noexcept { input_channels = _channels; }

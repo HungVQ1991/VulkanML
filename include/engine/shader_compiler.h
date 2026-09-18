@@ -38,7 +38,7 @@ public:
 
         if (compilation_result.GetCompilationStatus() != shaderc_compilation_status_success)
         {
-            Logger::logMessage(Input_Format{"Shader_Compiler::compileGlslToSpirv: {}", compilation_result.GetErrorMessage()},
+            Logger::logMessage(Input_Format{"Shader_Compiler::compileGlslToSpirv failed for {}: {}\nSource:\n{}", _shader_name, compilation_result.GetErrorMessage(), _glsl_code},
                                Log_Level::LOG_ERROR,
                                true,
                                0,

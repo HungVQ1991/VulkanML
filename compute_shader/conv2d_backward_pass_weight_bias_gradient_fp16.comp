@@ -1,9 +1,11 @@
 #version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-layout(set = 0, binding = 0) readonly buffer Input_Buffer { float input_data[]; };
-layout(set = 0, binding = 1) readonly buffer Grad_Output_Buffer { float grad_output[]; };
+layout(set = 0, binding = 0) readonly buffer Input_Buffer { float16_t input_data[]; };
+layout(set = 0, binding = 1) readonly buffer Grad_Output_Buffer { float16_t grad_output[]; };
 layout(set = 0, binding = 2) writeonly buffer Grad_Weight_Buffer { float grad_weight[]; };
 layout(set = 0, binding = 3) writeonly buffer Grad_Bias_Buffer { float grad_bias[]; };
 
@@ -59,7 +61,7 @@ void main() {
                 for (int out_y = 0; out_y < min_out_y; out_y++) {
                     uint go_ptr = n_out_base + uint(out_y) * out_row_stride;
                     for (uint out_x = 0; out_x < params.out_w; out_x++) {
-                        bias_sum += grad_output[go_ptr + out_x * params.out_c];
+                        bias_sum += float(grad_output[go_ptr + out_x * params.out_c]);
                     }
                 }
             }
@@ -73,7 +75,7 @@ void main() {
                 // Left out-of-bounds cols
                 if (is_bias_thread) {
                     for (int out_x = 0; out_x < min_out_x; out_x++) {
-                        bias_sum += grad_output[out_y_base + uint(out_x) * params.out_c];
+                        bias_sum += float(grad_output[out_y_base + uint(out_x) * params.out_c]);
                     }
                 }
 
@@ -83,8 +85,8 @@ void main() {
                 uint in_ptr = in_y_base + uint(in_x_start) * params.in_c;
 
                 for (int out_x = min_out_x; out_x < max_out_x; out_x++) {
-                    float go_val = grad_output[go_ptr];
-                    float in_val = input_data[in_ptr];
+                    float go_val = float(grad_output[go_ptr]);
+                    float in_val = float(input_data[in_ptr]);
                     weight_sum += in_val * go_val;
                     if (is_bias_thread) {
                         bias_sum += go_val;
@@ -96,7 +98,7 @@ void main() {
                 // Right out-of-bounds cols
                 if (is_bias_thread) {
                     for (int out_x = max_out_x; out_x < int(params.out_w); out_x++) {
-                        bias_sum += grad_output[out_y_base + uint(out_x) * params.out_c];
+                        bias_sum += float(grad_output[out_y_base + uint(out_x) * params.out_c]);
                     }
                 }
             }
@@ -106,7 +108,7 @@ void main() {
                 for (int out_y = max_out_y; out_y < int(params.out_h); out_y++) {
                     uint go_ptr = n_out_base + uint(out_y) * out_row_stride;
                     for (uint out_x = 0; out_x < params.out_w; out_x++) {
-                        bias_sum += grad_output[go_ptr + out_x * params.out_c];
+                        bias_sum += float(grad_output[go_ptr + out_x * params.out_c]);
                     }
                 }
             }
@@ -125,7 +127,7 @@ void main() {
 
                 for (uint out_x = 0; out_x < params.out_w; out_x++) {
                     uint go_ptr = out_y_base + out_x * params.out_c;
-                    float go_val = grad_output[go_ptr];
+                    float go_val = float(grad_output[go_ptr]);
 
                     if (is_bias_thread) {
                         bias_sum += go_val;
@@ -135,7 +137,7 @@ void main() {
                         int in_x = int(out_x * params.stride + kx) - int(params.padding);
                         if (in_x >= 0 && in_x < int(params.in_w)) {
                             uint in_ptr = in_y_base + uint(in_x) * params.in_c;
-                            weight_sum += input_data[in_ptr] * go_val;
+                            weight_sum += float(input_data[in_ptr]) * go_val;
                         }
                     }
                 }

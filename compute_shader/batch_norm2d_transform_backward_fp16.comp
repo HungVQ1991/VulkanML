@@ -1,0 +1,39 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer GradOutput { float16_t dY[]; };
+layout(std430, binding = 1) readonly buffer XHat { float x_hat[]; };
+layout(std430, binding = 2) readonly buffer Gamma { float gamma[]; };
+layout(std430, binding = 3) readonly buffer GradGamma { float dgamma[]; };
+layout(std430, binding = 4) readonly buffer GradBeta { float dbeta[]; };
+layout(std430, binding = 5) readonly buffer BatchVar { float batch_var[]; };
+layout(std430, binding = 6) writeonly buffer GradInput { float16_t dX[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint total_elements;
+    uint channels;
+    uint spatial_count;
+    float epsilon;
+} pc;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.total_elements) return;
+
+    uint c = idx % pc.channels;
+
+    float g = gamma[c];
+    float v = batch_var[c];
+    float dg = dgamma[c];
+    float db = dbeta[c];
+    float m = float(pc.spatial_count);
+
+    float inv_std = 1.0 / sqrt(v + pc.epsilon);
+    float dy = float(dY[idx]);
+    float xh = x_hat[idx];
+
+    dX[idx] = float16_t((g * inv_std / m) * (m * dy - db - xh * dg));
+}

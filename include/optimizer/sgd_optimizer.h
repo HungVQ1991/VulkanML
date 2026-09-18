@@ -53,6 +53,11 @@ public:
 
     void step(const std::vector<std::pair<Matrix *, Matrix *>> &_parameter_gradient_pairs) override
     {
+        step(_parameter_gradient_pairs, 1.0f);
+    }
+
+    void step(const std::vector<std::pair<Matrix *, Matrix *>> &_parameter_gradient_pairs, float _grad_scale) override
+    {
         if (learning_rate_scheduler != nullptr)
         {
             learning_rate = learning_rate_scheduler->getCurrentRate();
@@ -66,11 +71,13 @@ public:
                            0,
                            Log_Feature::OPTIMIZER_STEP);
 
+        float inv_scale = (_grad_scale > 0.0f) ? (1.0f / _grad_scale) : 1.0f;
+
         for (const auto &[parameter, gradient] : _parameter_gradient_pairs)
         {
             if (parameter && gradient)
             {
-                parameter->sgdUpdate(*gradient, learning_rate, max_gradient);
+                parameter->sgdUpdate(*gradient, learning_rate, max_gradient, inv_scale);
             }
             else
             {

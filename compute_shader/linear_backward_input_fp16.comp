@@ -1,0 +1,39 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer GradY {
+    float16_t dy_data[];
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer WeightsW {
+    float16_t w_data[];
+};
+
+layout(std430, set = 0, binding = 2) writeonly buffer GradX {
+    float16_t dx_data[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint batch_size;
+    uint in_dim;
+    uint out_dim;
+} params;
+
+void main() {
+    uint row = gl_GlobalInvocationID.y;
+    uint col = gl_GlobalInvocationID.x;
+
+    if (row >= params.batch_size || col >= params.in_dim) {
+        return;
+    }
+
+    float sum = 0.0;
+    for (uint j = 0; j < params.out_dim; ++j) {
+        sum += float(dy_data[row * params.out_dim + j]) * float(w_data[col * params.out_dim + j]);
+    }
+
+    dx_data[row * params.in_dim + col] = float16_t(sum);
+}

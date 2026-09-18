@@ -19,6 +19,7 @@ class Cpu_Tensor_Impl : public Tensor_Impl
 {
 private:
     std::shared_ptr<std::vector<float>> storage_buffer;
+    std::shared_ptr<std::vector<float16_t>> storage_buffer_fp16;
     mutable std::vector<float> materialized_cache;
     mutable std::mutex cache_mutex;
 
@@ -42,7 +43,8 @@ private:
 
     std::size_t resolveFlatIndex(std::span<const std::size_t> indices) const noexcept
     {
-        std::size_t flat_idx = byte_offset / sizeof(float);
+        std::size_t elem_size = getDataTypeSize(data_type);
+        std::size_t flat_idx = byte_offset / elem_size;
         for (std::size_t i = 0; i < indices.size(); ++i)
         {
             flat_idx += indices[i] * strides[i];
@@ -108,13 +110,27 @@ public:
         storage_buffer = std::make_shared<std::vector<float>>(total_elements, 0.0F);
     }
 
+    Cpu_Tensor_Impl(Shape tensor_shape, Data_Type type)
+    {
+        data_type = type;
+        updateShapeAndStrides(tensor_shape);
+        if (data_type == Data_Type::FLOAT16)
+        {
+            storage_buffer_fp16 = std::make_shared<std::vector<float16_t>>(total_elements, static_cast<float16_t>(0.0f));
+        }
+        else
+        {
+            storage_buffer = std::make_shared<std::vector<float>>(total_elements, 0.0F);
+        }
+    }
+
     Cpu_Tensor_Impl(Shape tensor_shape, const std::vector<float> &host_data)
     {
         updateShapeAndStrides(tensor_shape);
         if (host_data.size() != total_elements)
         {
             Logger::logMessage(Input_Format{"Cpu_Tensor_Impl: Host data size mismatch (expected {}, got {})",
-                                            total_elements, host_data.size()},
+                                             total_elements, host_data.size()},
                                Log_Level::LOG_ERROR, true, 0, Log_Feature::TENSOR_INSPECTION);
             throw std::invalid_argument("Host data size mismatch");
         }
@@ -126,7 +142,7 @@ public:
         shape = tensor_shape;
         strides = tensor_strides;
         storage_buffer = std::move(buffer);
-        byte_offset = offset_elements * sizeof(float);
+        byte_offset = offset_elements * getDataTypeSize(data_type);
         total_elements = shape.getTotalElements();
     }
 
@@ -147,13 +163,34 @@ public:
             throw std::runtime_error("Cannot reshape non-contiguous tensor view");
         }
 
-        if (storage_buffer.use_count() > 1 && total_elements != new_total)
+        if (data_type == Data_Type::FLOAT16)
         {
-            storage_buffer = std::make_shared<std::vector<float>>(new_total, 0.0F);
+            if (storage_buffer_fp16 && storage_buffer_fp16.use_count() > 1 && total_elements != new_total)
+            {
+                storage_buffer_fp16 = std::make_shared<std::vector<float16_t>>(new_total, static_cast<float16_t>(0.0f));
+            }
+            else if (!storage_buffer_fp16 || total_elements != new_total)
+            {
+                if (!storage_buffer_fp16)
+                {
+                    storage_buffer_fp16 = std::make_shared<std::vector<float16_t>>(new_total, static_cast<float16_t>(0.0f));
+                }
+                else
+                {
+                    storage_buffer_fp16->resize(new_total, static_cast<float16_t>(0.0f));
+                }
+            }
         }
-        else if (total_elements != new_total)
+        else
         {
-            storage_buffer->resize(new_total, 0.0F);
+            if (storage_buffer.use_count() > 1 && total_elements != new_total)
+            {
+                storage_buffer = std::make_shared<std::vector<float>>(new_total, 0.0F);
+            }
+            else if (total_elements != new_total)
+            {
+                storage_buffer->resize(new_total, 0.0F);
+            }
         }
         updateShapeAndStrides(new_shape);
     }
@@ -168,15 +205,17 @@ public:
             new_strides[i] = strides[axes_permutation[i]];
         }
         auto &output_cpu = static_cast<Cpu_Tensor_Impl &>(output);
+        output_cpu.data_type = data_type;
         output_cpu.shape = new_shape;
         output_cpu.strides = new_strides;
         output_cpu.storage_buffer = storage_buffer;
+        output_cpu.storage_buffer_fp16 = storage_buffer_fp16;
         output_cpu.byte_offset = byte_offset;
         output_cpu.total_elements = total_elements;
 
         Logger::logMessage(Input_Format{"Cpu_Tensor_Impl::permute: shape {} -> {}",
                                         shape.toString(), new_shape.toString()},
-                           Log_Level::LOG_DEBUG, true, 0, Log_Feature::TENSOR_INSPECTION);
+                            Log_Level::LOG_DEBUG, true, 0, Log_Feature::TENSOR_INSPECTION);
     }
 
     void slice(std::size_t axis, std::size_t start, std::size_t length, Tensor_Impl &output) const override
@@ -186,28 +225,82 @@ public:
         std::size_t additional_offset = start * strides[axis];
 
         auto &output_cpu = static_cast<Cpu_Tensor_Impl &>(output);
+        output_cpu.data_type = data_type;
         output_cpu.shape = new_shape;
         output_cpu.strides = strides;
         output_cpu.storage_buffer = storage_buffer;
-        output_cpu.byte_offset = byte_offset + additional_offset * sizeof(float);
+        output_cpu.storage_buffer_fp16 = storage_buffer_fp16;
+        output_cpu.byte_offset = byte_offset + additional_offset * getDataTypeSize(data_type);
         output_cpu.total_elements = new_shape.getTotalElements();
 
         Logger::logMessage(Input_Format{"Cpu_Tensor_Impl::slice: axis={}, start={}, length={}, shape={}",
                                         axis, start, length, new_shape.toString()},
-                           Log_Level::LOG_DEBUG, true, 0, Log_Feature::TENSOR_INSPECTION);
+                            Log_Level::LOG_DEBUG, true, 0, Log_Feature::TENSOR_INSPECTION);
     }
 
     void contiguous(Tensor_Impl &output) const override
     {
         auto &output_cpu = static_cast<Cpu_Tensor_Impl &>(output);
+        output_cpu.data_type = data_type;
         output_cpu.shape = shape;
         output_cpu.strides = shape.computeContiguousStrides();
         output_cpu.byte_offset = 0;
         output_cpu.total_elements = total_elements;
-        output_cpu.storage_buffer = std::make_shared<std::vector<float>>(total_elements, 0.0F);
 
-        iterateCoordinates([this, &output_cpu](std::size_t out_idx, std::size_t src_idx)
-                           { (*output_cpu.storage_buffer)[out_idx] = (*storage_buffer)[src_idx]; });
+        if (data_type == Data_Type::FLOAT16 && storage_buffer_fp16)
+        {
+            output_cpu.storage_buffer_fp16 = std::make_shared<std::vector<float16_t>>(total_elements, static_cast<float16_t>(0.0f));
+            output_cpu.storage_buffer.reset();
+            iterateCoordinates([this, &output_cpu](std::size_t out_idx, std::size_t src_idx)
+                               { (*output_cpu.storage_buffer_fp16)[out_idx] = (*storage_buffer_fp16)[src_idx]; });
+        }
+        else
+        {
+            output_cpu.storage_buffer = std::make_shared<std::vector<float>>(total_elements, 0.0F);
+            output_cpu.storage_buffer_fp16.reset();
+            if (storage_buffer)
+            {
+                iterateCoordinates([this, &output_cpu](std::size_t out_idx, std::size_t src_idx)
+                                   { (*output_cpu.storage_buffer)[out_idx] = (*storage_buffer)[src_idx]; });
+            }
+        }
+    }
+
+    void to(Data_Type target_type, Tensor_Impl &output) const override
+    {
+        auto &output_cpu = static_cast<Cpu_Tensor_Impl &>(output);
+        output_cpu.setDataType(target_type);
+        output_cpu.updateShapeAndStrides(shape);
+        output_cpu.byte_offset = 0;
+
+        if (target_type == data_type)
+        {
+            if (data_type == Data_Type::FLOAT16 && storage_buffer_fp16)
+            {
+                output_cpu.storage_buffer_fp16 = std::make_shared<std::vector<float16_t>>(*storage_buffer_fp16);
+                output_cpu.storage_buffer.reset();
+            }
+            else if (storage_buffer)
+            {
+                output_cpu.storage_buffer = std::make_shared<std::vector<float>>(*storage_buffer);
+                output_cpu.storage_buffer_fp16.reset();
+            }
+            return;
+        }
+
+        if (data_type == Data_Type::FLOAT32 && target_type == Data_Type::FLOAT16)
+        {
+            const auto &src = getData();
+            output_cpu.storage_buffer_fp16 = std::make_shared<std::vector<float16_t>>(total_elements);
+            convertFp32ToFp16(src.data(), output_cpu.storage_buffer_fp16->data(), total_elements);
+            output_cpu.storage_buffer.reset();
+        }
+        else if (data_type == Data_Type::FLOAT16 && target_type == Data_Type::FLOAT32)
+        {
+            const auto &src = getData();
+            output_cpu.storage_buffer = std::make_shared<std::vector<float>>(src);
+            output_cpu.storage_buffer_fp16.reset();
+        }
     }
 
     void matmul(const Tensor_Impl &other, Tensor_Impl &output) const override
@@ -750,25 +843,20 @@ public:
                            Log_Level::LOG_DEBUG, true, 0, Log_Feature::ACTIVATION_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
     }
 
-    void sgdUpdate(const Tensor_Impl &gradient, float learning_rate, float max_gradient = 0.0F) override
+    void sgdUpdate(const Tensor_Impl &gradient, float learning_rate, float max_gradient = 0.0F, float inv_scale = 1.0F) override
     {
         validateSameDimensions(gradient);
         const auto &grad_data = gradient.getData();
 
-        if (max_gradient > 0.0F)
+        for (std::size_t i = 0; i < total_elements; ++i)
         {
-            for (std::size_t i = 0; i < total_elements; ++i)
+            float g = grad_data[i] * inv_scale;
+            if (std::isnan(g) || std::isinf(g)) continue;
+            if (max_gradient > 0.0F)
             {
-                float clipped = std::clamp(grad_data[i], -max_gradient, max_gradient);
-                (*storage_buffer)[i] -= learning_rate * clipped;
+                g = std::clamp(g, -max_gradient, max_gradient);
             }
-        }
-        else
-        {
-            for (std::size_t i = 0; i < total_elements; ++i)
-            {
-                (*storage_buffer)[i] -= learning_rate * grad_data[i];
-            }
+            (*storage_buffer)[i] -= learning_rate * g;
         }
 
         Logger::logMessage(Input_Format{"Cpu_Tensor_Impl::sgdUpdate: elements={}, lr={}, max_grad={}, sample={}",
@@ -784,7 +872,8 @@ public:
                     float beta2,
                     float epsilon,
                     std::size_t timestep,
-                    float max_gradient = 1.0F) override
+                    float max_gradient = 1.0F,
+                    float inv_scale = 1.0F) override
     {
         validateSameDimensions(gradient);
         validateSameDimensions(first_moment);
@@ -799,7 +888,9 @@ public:
 
         for (std::size_t i = 0; i < total_elements; ++i)
         {
-            float g = (max_gradient > 0.0F) ? std::clamp(grad_data[i], -max_gradient, max_gradient) : grad_data[i];
+            float raw_g = grad_data[i] * inv_scale;
+            if (std::isnan(raw_g) || std::isinf(raw_g)) continue;
+            float g = (max_gradient > 0.0F) ? std::clamp(raw_g, -max_gradient, max_gradient) : raw_g;
             (*m_cpu.storage_buffer)[i] = beta1 * (*m_cpu.storage_buffer)[i] + (1.0F - beta1) * g;
             (*v_cpu.storage_buffer)[i] = beta2 * (*v_cpu.storage_buffer)[i] + (1.0F - beta2) * (g * g);
 
@@ -917,6 +1008,29 @@ public:
                                             total_elements, host_data.size()},
                                Log_Level::LOG_ERROR, true, 0, Log_Feature::TENSOR_INSPECTION);
             throw std::invalid_argument("Host data size mismatch");
+        }
+
+        if (data_type == Data_Type::FLOAT16)
+        {
+            if (!storage_buffer_fp16 || storage_buffer_fp16->size() != total_elements)
+            {
+                storage_buffer_fp16 = std::make_shared<std::vector<float16_t>>(total_elements);
+            }
+            if (isContiguous() && byte_offset == 0)
+            {
+                convertFp32ToFp16(host_data.data(), storage_buffer_fp16->data(), total_elements);
+                return;
+            }
+            std::vector<float16_t> fp16_data(total_elements);
+            convertFp32ToFp16(host_data.data(), fp16_data.data(), total_elements);
+            iterateCoordinates([this, &fp16_data](std::size_t in_idx, std::size_t dst_idx)
+                               { (*storage_buffer_fp16)[dst_idx] = fp16_data[in_idx]; });
+            return;
+        }
+
+        if (!storage_buffer || storage_buffer->size() != total_elements)
+        {
+            storage_buffer = std::make_shared<std::vector<float>>(total_elements);
         }
 
         if (isContiguous() && byte_offset == 0)
@@ -1740,15 +1854,40 @@ public:
 
     const std::vector<float> &getData() const noexcept override
     {
+        if (data_type == Data_Type::FLOAT16)
+        {
+            std::lock_guard<std::mutex> lock(cache_mutex);
+            materialized_cache.resize(total_elements);
+            if (storage_buffer_fp16)
+            {
+                if (isContiguous() && byte_offset == 0)
+                {
+                    convertFp16ToFp32(storage_buffer_fp16->data(), materialized_cache.data(), total_elements);
+                }
+                else
+                {
+                    iterateCoordinates([this](std::size_t out_idx, std::size_t src_idx)
+                                       { materialized_cache[out_idx] = static_cast<float>((*storage_buffer_fp16)[src_idx]); });
+                }
+            }
+            return materialized_cache;
+        }
+
         if (isContiguous() && byte_offset == 0)
         {
-            return *storage_buffer;
+            if (storage_buffer)
+            {
+                return *storage_buffer;
+            }
         }
 
         std::lock_guard<std::mutex> lock(cache_mutex);
         materialized_cache.resize(total_elements);
-        iterateCoordinates([this](std::size_t out_idx, std::size_t src_idx)
-                           { materialized_cache[out_idx] = (*storage_buffer)[src_idx]; });
+        if (storage_buffer)
+        {
+            iterateCoordinates([this](std::size_t out_idx, std::size_t src_idx)
+                               { materialized_cache[out_idx] = (*storage_buffer)[src_idx]; });
+        }
         return materialized_cache;
     }
 
@@ -1765,10 +1904,13 @@ public:
     }
 
     Storage_Handle getStorage() const override { return std::cref(getData()); }
+    const std::shared_ptr<std::vector<float16_t>> &getStorageBufferFp16() const noexcept { return storage_buffer_fp16; }
+    std::shared_ptr<std::vector<float16_t>> &getStorageBufferFp16() noexcept { return storage_buffer_fp16; }
     const std::shared_ptr<std::vector<float>> &getStorageBuffer() const noexcept { return storage_buffer; }
     std::shared_ptr<std::vector<float>> &getStorageBuffer() noexcept { return storage_buffer; }
-    bool isEmpty() const noexcept override { return !storage_buffer || storage_buffer->empty(); }
+    bool isEmpty() const noexcept override { return (data_type == Data_Type::FLOAT16) ? (!storage_buffer_fp16 || storage_buffer_fp16->empty()) : (!storage_buffer || storage_buffer->empty()); }
 
+    void setStorageBufferFp16(std::shared_ptr<std::vector<float16_t>> _buf) noexcept { storage_buffer_fp16 = std::move(_buf); }
     void setStorageBuffer(std::shared_ptr<std::vector<float>> _storage_buffer) noexcept { storage_buffer = std::move(_storage_buffer); }
 };
 

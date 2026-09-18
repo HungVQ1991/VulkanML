@@ -3,13 +3,16 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <ctime>
 #include <deque>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <mutex>
 #include <source_location>
 #include <stdexcept>
@@ -65,11 +68,16 @@ enum class Log_Feature : std::uint64_t
     MODEL_SERIALIZATION = 1ULL << 19,
     TENSOR_INSPECTION = 1ULL << 20,
     LAYER_INSPECTION = 1ULL << 21,
+    FP16_METRICS = 1ULL << 22,
+
+    FP16 = FP16_METRICS,
+    FP16_COMPUTE = FP16_METRICS,
+    MIXED_PRECISION = FP16_METRICS,
 
     HARDWARE = DEVICE_MANAGEMENT | MEMORY_ALLOCATION | MEMORY_TRANSFER | SYNCHRONIZATION,
     GRAPH = GRAPH_RECORDING | OPERATOR_FUSION | SHADER_GENERATION | DISPATCH_EXECUTION,
-    OPERATIONS = DENSE_COMPUTE | CONV2D_COMPUTE | POOLING_COMPUTE | NORMALIZATION_COMPUTE | ACTIVATION_COMPUTE | LOSS_COMPUTE,
-    TRAINING = FORWARD_EVALUATION | BACKWARD_PROPAGATION | OPTIMIZER_STEP | LR_SCHEDULER | LOSS_COMPUTE | DATA_PIPELINE | LAYER_INSPECTION,
+    OPERATIONS = DENSE_COMPUTE | CONV2D_COMPUTE | POOLING_COMPUTE | NORMALIZATION_COMPUTE | ACTIVATION_COMPUTE | LOSS_COMPUTE | FP16_METRICS,
+    TRAINING = FORWARD_EVALUATION | BACKWARD_PROPAGATION | OPTIMIZER_STEP | LR_SCHEDULER | LOSS_COMPUTE | DATA_PIPELINE | LAYER_INSPECTION | FP16_METRICS,
 
     ALL = 0xFFFFFFFFFFFFFFFFULL
 };
@@ -193,9 +201,17 @@ private:
 
     static std::string timestamp()
     {
-        const auto now = std::chrono::floor<std::chrono::milliseconds>(std::chrono::system_clock::now());
-        const std::chrono::zoned_time zt{std::chrono::current_zone(), now};
-        return std::format("{:%Y-%m-%d %H:%M:%S}", zt);
+        const auto now = std::chrono::system_clock::now();
+        const std::time_t t_c = std::chrono::system_clock::to_time_t(now);
+        std::tm tm{};
+#if defined(_WIN32) || defined(_WIN64)
+        localtime_s(&tm, &t_c);
+#else
+        localtime_r(&t_c, &tm);
+#endif
+        char buffer[32];
+        std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &tm);
+        return std::string(buffer);
     }
 
     static constexpr std::string_view levelToString(Log_Level _level) noexcept
@@ -292,6 +308,8 @@ private:
             append_tag("TensorDump");
         if ((_feature & Log_Feature::LAYER_INSPECTION) != Log_Feature::NONE)
             append_tag("LayerInspect");
+        if ((_feature & Log_Feature::FP16_METRICS) != Log_Feature::NONE)
+            append_tag("FP16");
 
         if (result.empty())
         {
@@ -328,9 +346,17 @@ private:
             log_files.erase(log_files.begin());
         }
 
-        const auto now = std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now());
-        const std::chrono::zoned_time zt{std::chrono::current_zone(), now};
-        const std::string base_name = std::format("log_{:%Y%m%d_%H%M%S}", zt);
+        const auto now = std::chrono::system_clock::now();
+        const std::time_t t_c = std::chrono::system_clock::to_time_t(now);
+        std::tm tm{};
+#if defined(_WIN32) || defined(_WIN64)
+        localtime_s(&tm, &t_c);
+#else
+        localtime_r(&t_c, &tm);
+#endif
+        char date_buffer[32];
+        std::strftime(date_buffer, sizeof(date_buffer), "log_%Y%m%d_%H%M%S", &tm);
+        const std::string base_name = date_buffer;
 
         current_log_file = log_directory / (base_name + ".log");
         std::size_t suffix_index = 1;
@@ -529,6 +555,67 @@ public:
                                      _message);
         }
         return true;
+    }
+
+    static void logFp16TensorStats(
+        std::string_view tensor_name,
+        const std::vector<float> &data,
+        std::size_t element_count,
+        std::string_view data_type_name = "FLOAT16",
+        Log_Level level = Log_Level::LOG_DEBUG,
+        const std::source_location location = std::source_location::current())
+    {
+        if (data.empty() || element_count == 0)
+        {
+            return;
+        }
+        float min_val = std::numeric_limits<float>::infinity();
+        float max_val = -std::numeric_limits<float>::infinity();
+        float sum_val = 0.0f;
+        std::size_t nan_count = 0;
+        std::size_t inf_count = 0;
+        std::size_t zero_count = 0;
+        std::size_t subnormal_count = 0;
+
+        for (float val : data)
+        {
+            if (std::isnan(val))
+            {
+                nan_count++;
+                continue;
+            }
+            if (std::isinf(val))
+            {
+                inf_count++;
+                continue;
+            }
+            if (val == 0.0f)
+            {
+                zero_count++;
+            }
+            else if (std::abs(val) < 6.1035e-5f)
+            {
+                subnormal_count++;
+            }
+            if (val < min_val) min_val = val;
+            if (val > max_val) max_val = val;
+            sum_val += val;
+        }
+
+        float valid_elements = static_cast<float>(data.size() - nan_count - inf_count);
+        float mean_val = (valid_elements > 0.0f) ? (sum_val / valid_elements) : 0.0f;
+
+        logMessage(
+            Input_Format{"[FP16 Stats] {}: type={}, count={}, min={:.5e}, max={:.5e}, mean={:.5e}, zeros={}/{} ({:.1f}%), subnormals={}/{} ({:.1f}%), NaNs={}, Infs={}",
+                         tensor_name, data_type_name, element_count, min_val, max_val, mean_val,
+                         zero_count, element_count, (100.0f * static_cast<float>(zero_count) / static_cast<float>(element_count)),
+                         subnormal_count, element_count, (100.0f * static_cast<float>(subnormal_count) / static_cast<float>(element_count)),
+                         nan_count, inf_count},
+            level,
+            false,
+            0,
+            Log_Feature::FP16_METRICS,
+            location);
     }
 
     static void dumpRecentLogs(std::ostream &_output_stream = std::cerr)

@@ -1,0 +1,35 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer Forward_Input_Buffer { float16_t forward_input[]; };
+layout(set = 0, binding = 1) readonly buffer Grad_Output_Buffer { float16_t grad_output[]; };
+layout(set = 0, binding = 2) writeonly buffer Grad_Input_Buffer { float16_t grad_input[]; };
+
+layout(push_constant) uniform Push_Constants { 
+    uint num_elements; 
+};
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= num_elements) return;
+
+    float x = float(forward_input[idx]);
+    float grad = float(grad_output[idx]);
+
+    float k_alpha = 0.79788456;
+    float k_beta = 0.044715;
+
+    float x2 = x * x;
+    float x3 = x2 * x;
+
+    float u = k_alpha * (x + k_beta * x3);
+    float t = tanh(u);
+    float sech2 = 1.0 - t * t;
+
+    float derivative = 0.5 * (1.0 + t) + 0.5 * x * sech2 * k_alpha * (1.0 + 3.0 * k_beta * x2);
+
+    grad_input[idx] = float16_t(grad * derivative);
+}

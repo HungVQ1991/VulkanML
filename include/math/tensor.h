@@ -111,6 +111,64 @@ public:
         }
     }
 
+    Tensor(Shape shape, Data_Type type, Execution_Target target = Execution_Target::CPU)
+        : execution_target(target)
+    {
+        if (execution_target == Execution_Target::CPU)
+        {
+            implementation = std::make_shared<Cpu_Tensor_Impl>(shape, type);
+        }
+        else
+        {
+            implementation = std::make_shared<Gpu_Tensor_Impl>(shape, type);
+        }
+    }
+
+    Tensor(Shape shape, const std::vector<float> &host_data, Data_Type type, Execution_Target target = Execution_Target::CPU)
+        : execution_target(target)
+    {
+        if (execution_target == Execution_Target::CPU)
+        {
+            auto cpu_impl = std::make_shared<Cpu_Tensor_Impl>(shape, type);
+            cpu_impl->uploadData(host_data);
+            implementation = cpu_impl;
+        }
+        else
+        {
+            implementation = std::make_shared<Gpu_Tensor_Impl>(shape, host_data, type);
+        }
+    }
+
+    void to(Data_Type target_type, Tensor &output) const
+    {
+        if (!output.implementation || output.getExecutionTarget() != execution_target || output.getShape() != getShape() || output.getDataType() != target_type)
+        {
+            output = Tensor(getShape(), target_type, execution_target);
+        }
+        implementation->to(target_type, *output.implementation);
+    }
+
+    Tensor to(Data_Type target_type) const
+    {
+        if (implementation->getDataType() == target_type)
+        {
+            return clone();
+        }
+        Tensor result(getShape(), target_type, execution_target);
+        implementation->to(target_type, *result.implementation);
+        return result;
+    }
+
+    Tensor toFp16() const
+    {
+        return to(Data_Type::FLOAT16);
+    }
+
+    Tensor toFp32() const
+    {
+        return to(Data_Type::FLOAT32);
+    }
+
     Tensor(std::initializer_list<std::size_t> shape_list, Execution_Target target = Execution_Target::CPU)
         : Tensor(Shape(shape_list), target)
     {
@@ -190,9 +248,9 @@ public:
     void softmaxBackward(const Tensor &output_gradient, Tensor &input_gradient) const { implementation->softmaxBackward(*output_gradient.implementation, *input_gradient.implementation); }
     void matmulAdd(const Tensor &other, const Tensor &biases, Tensor &output) const { implementation->matmulAdd(*other.implementation, *biases.implementation, *output.implementation); }
 
-    void sgdUpdate(const Tensor &gradient, float learning_rate, float max_gradient = 0.0F)
+    void sgdUpdate(const Tensor &gradient, float learning_rate, float max_gradient = 0.0F, float inv_scale = 1.0F)
     {
-        implementation->sgdUpdate(*gradient.implementation, learning_rate, max_gradient);
+        implementation->sgdUpdate(*gradient.implementation, learning_rate, max_gradient, inv_scale);
     }
 
     void adamUpdate(const Tensor &gradient,
@@ -203,7 +261,8 @@ public:
                     float beta2,
                     float epsilon,
                     std::size_t timestep,
-                    float max_gradient = 1.0F)
+                    float max_gradient = 1.0F,
+                    float inv_scale = 1.0F)
     {
         implementation->adamUpdate(*gradient.implementation,
                                    *first_moment.implementation,
@@ -213,7 +272,8 @@ public:
                                    beta2,
                                    epsilon,
                                    timestep,
-                                   max_gradient);
+                                   max_gradient,
+                                   inv_scale);
     }
 
     void conv2d(const Tensor &weights, const Tensor &biases, Tensor &output,
@@ -641,7 +701,7 @@ public:
 
     Tensor clone() const
     {
-        return Tensor(getShape(), getData(), execution_target);
+        return Tensor(getShape(), getData(), getDataType(), execution_target);
     }
 
     void fill(float value)
@@ -668,10 +728,17 @@ public:
     std::size_t getCols() const noexcept { return implementation->getColumns(); }
     Execution_Target getExecutionTarget() const noexcept { return execution_target; }
     Execution_Target getTarget() const noexcept { return execution_target; }
+    Data_Type getDataType() const noexcept { return implementation->getDataType(); }
     bool isEmpty() const noexcept { return implementation->isEmpty(); }
 
     void uploadData(const std::vector<float> &host_data) { implementation->uploadData(host_data); }
     void setImplementation(std::shared_ptr<Tensor_Impl> _impl) noexcept { implementation = std::move(_impl); }
+    void setDataType(Data_Type _type) noexcept { implementation->setDataType(_type); }
+    void logFp16Stats(std::string_view tensor_name, Log_Level level = Log_Level::LOG_DEBUG) const
+    {
+        std::vector<float> host_data = getData();
+        Logger::logFp16TensorStats(tensor_name, host_data, getTotalElements(), getDataType() == Data_Type::FLOAT16 ? "FLOAT16" : "FLOAT32", level);
+    }
     void setExecutionTarget(Execution_Target new_target)
     {
         if (execution_target == new_target)
@@ -680,7 +747,7 @@ public:
         }
         Shape current_shape = getShape();
         std::vector<float> current_data = getData();
-        *this = Tensor(current_shape, current_data, new_target);
+        *this = Tensor(current_shape, current_data, getDataType(), new_target);
         if (new_target == Execution_Target::VULKAN_GPU)
         {
             Execution_Engine::getInstance().getContext().executePendingTransfers();

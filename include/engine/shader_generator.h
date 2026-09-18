@@ -105,17 +105,27 @@ private:
 
     bool is_subgroup_enabled = false;
     bool is_control_flow_enabled = false;
+    bool is_float16_enabled = false;
     std::vector<Specialization_Constant_Entry> spec_constants;
 
 public:
     Shader_Generator(std::uint32_t _group_x, std::uint32_t _group_y = 1, std::uint32_t _group_z = 1, const std::string &_default_data_type = "float")
         : group_x(_group_x), group_y(_group_y), group_z(_group_z), default_data_type(_default_data_type)
     {
+        if (default_data_type == "float16_t")
+        {
+            is_float16_enabled = true;
+        }
         Logger::logMessage(Input_Format{"Shader_Generator::Shader_Generator: Initializing generator with local_size ({}, {}, {}) and default type '{}'", _group_x, _group_y, _group_z, _default_data_type},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
                            Log_Feature::SHADER_GENERATION);
+    }
+
+    void enableFloat16() noexcept
+    {
+        is_float16_enabled = true;
     }
 
     void enableSubgroupOperations()
@@ -185,6 +195,10 @@ public:
         }
 
         std::string resolved_type = _type_name.empty() ? default_data_type : _type_name;
+        if (resolved_type == "float16_t")
+        {
+            is_float16_enabled = true;
+        }
         std::string name = _buffer_name.empty() ? std::format("buf_{}", _binding_index) : _buffer_name;
         Logger::logMessage(Input_Format{"Shader_Generator::addBuffer: Added buffer binding {} with name '{}' of type '{}' and access '{}'",
                                         _binding_index, name, resolved_type, qualifier},
@@ -246,8 +260,13 @@ public:
         if (is_coop)
         {
             final_shader << "#extension GL_KHR_cooperative_matrix : enable\n";
-            final_shader << "#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable\n";
             final_shader << "#extension GL_KHR_memory_scope_semantics : enable\n";
+        }
+
+        if (is_float16_enabled || is_coop)
+        {
+            final_shader << "#extension GL_EXT_shader_16bit_storage : enable\n";
+            final_shader << "#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable\n";
         }
 
         if (is_subgroup_enabled)
@@ -288,22 +307,23 @@ public:
     }
 
     const std::string &getDefaultDataType() const noexcept { return default_data_type; }
+    void setDefaultDataType(const std::string &_type_name) noexcept { default_data_type = _type_name; }
     const std::vector<Specialization_Constant_Entry> &getSpecializationConstants() const noexcept { return spec_constants; }
+    void setSpecializationConstants(const std::vector<Specialization_Constant_Entry> &_constants) { spec_constants = _constants; }
     std::uint32_t getCurrentBinding() const noexcept { return current_binding; }
     std::uint32_t getVarCounter() const noexcept { return var_counter; }
     std::uint32_t getGroupX() const noexcept { return group_x; }
     std::uint32_t getGroupY() const noexcept { return group_y; }
     std::uint32_t getGroupZ() const noexcept { return group_z; }
-    bool isControlFlowEnabled() const noexcept { return is_control_flow_enabled; }
-    bool isSubgroupEnabled() const noexcept { return is_subgroup_enabled; }
-
-    void setDefaultDataType(const std::string &_type_name) noexcept { default_data_type = _type_name; }
-    void setSpecializationConstants(const std::vector<Specialization_Constant_Entry> &_constants) { spec_constants = _constants; }
     void setCurrentBinding(std::uint32_t _binding) noexcept { current_binding = _binding; }
     void setVarCounter(std::uint32_t _counter) noexcept { var_counter = _counter; }
     void setGroupX(std::uint32_t _group_x) noexcept { group_x = _group_x; }
     void setGroupY(std::uint32_t _group_y) noexcept { group_y = _group_y; }
     void setGroupZ(std::uint32_t _group_z) noexcept { group_z = _group_z; }
+    bool isControlFlowEnabled() const noexcept { return is_control_flow_enabled; }
+    bool isSubgroupEnabled() const noexcept { return is_subgroup_enabled; }
+    bool isFloat16Enabled() const noexcept { return is_float16_enabled; }
     void setControlFlowEnabled(bool _enabled) noexcept { is_control_flow_enabled = _enabled; }
     void setSubgroupEnabled(bool _enabled) noexcept { is_subgroup_enabled = _enabled; }
+    void setFloat16Enabled(bool _enabled) noexcept { is_float16_enabled = _enabled; }
 };

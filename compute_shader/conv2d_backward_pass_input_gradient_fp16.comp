@@ -1,10 +1,12 @@
 #version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-layout(set = 0, binding = 0) readonly buffer Grad_Output_Buffer { float grad_output[]; };
-layout(set = 0, binding = 1) readonly buffer Weight_Buffer { float weight_data[]; };
-layout(set = 0, binding = 2) writeonly buffer Grad_Input_Buffer { float grad_input[]; };
+layout(set = 0, binding = 0) readonly buffer Grad_Output_Buffer { float16_t grad_output[]; };
+layout(set = 0, binding = 1) readonly buffer Weight_Buffer { float16_t weight_data[]; };
+layout(set = 0, binding = 2) writeonly buffer Grad_Input_Buffer { float16_t grad_input[]; };
 
 layout(push_constant) uniform Push_Constants {
     uint batch_size;
@@ -65,7 +67,7 @@ void main() {
             uint w_idx = ky_w_base + kx * w_kc_stride;
 
             for (uint out_c_idx = 0; out_c_idx < params.out_c; out_c_idx++) {
-                sum += grad_output[grad_out_idx + out_c_idx] * weight_data[w_idx + out_c_idx];
+                sum += float(grad_output[grad_out_idx + out_c_idx]) * float(weight_data[w_idx + out_c_idx]);
             }
         }
     }
@@ -77,5 +79,5 @@ void main() {
                   in_w_idx * params.in_c +
                   in_c_idx;
 
-    grad_input[in_idx] = sum;
+    grad_input[in_idx] = float16_t(sum);
 }

@@ -125,7 +125,7 @@ private:
         {
             return nullptr;
         }
-        auto contiguous_tensor = std::make_shared<Gpu_Tensor_Impl>(shape);
+        auto contiguous_tensor = std::make_shared<Gpu_Tensor_Impl>(shape, data_type);
         contiguous(*contiguous_tensor);
         return contiguous_tensor;
     }
@@ -197,17 +197,19 @@ public:
         }
     }
 
-    explicit Gpu_Tensor_Impl(Shape tensor_shape)
+    explicit Gpu_Tensor_Impl(Shape tensor_shape, Data_Type type = Data_Type::FLOAT32)
     {
+        data_type = type;
         updateShapeAndStrides(tensor_shape);
         if (total_elements > 0)
         {
-            storage = std::make_shared<gpu::vector>(Execution_Engine::getInstance().getContext(), total_elements);
+            storage = std::make_shared<gpu::vector>(Execution_Engine::getInstance().getContext(), total_elements, data_type);
         }
     }
 
-    Gpu_Tensor_Impl(Shape tensor_shape, const std::vector<float> &host_data)
+    Gpu_Tensor_Impl(Shape tensor_shape, const std::vector<float> &host_data, Data_Type type = Data_Type::FLOAT32)
     {
+        data_type = type;
         updateShapeAndStrides(tensor_shape);
         if (host_data.size() != total_elements)
         {
@@ -219,11 +221,17 @@ public:
         if (total_elements > 0)
         {
             storage = std::make_shared<gpu::vector>(Execution_Engine::getInstance().getContext(), host_data);
+            if (data_type != Data_Type::FLOAT32)
+            {
+                storage->setDataType(data_type);
+                storage->uploadData(host_data);
+            }
         }
     }
 
-    Gpu_Tensor_Impl(Shape tensor_shape, Stride tensor_strides, std::shared_ptr<gpu::vector> existing_storage, std::size_t offset_bytes)
+    Gpu_Tensor_Impl(Shape tensor_shape, Stride tensor_strides, std::shared_ptr<gpu::vector> existing_storage, std::size_t offset_bytes, Data_Type type = Data_Type::FLOAT32)
     {
+        data_type = type;
         shape = tensor_shape;
         strides = tensor_strides;
         storage = std::move(existing_storage);
@@ -248,18 +256,18 @@ public:
             throw std::runtime_error("Cannot reshape non-contiguous GPU tensor view");
         }
 
-        if (shape == new_shape && storage && storage->getSize() == new_total)
+        if (shape == new_shape && storage && storage->getSize() == new_total && storage->getDataType() == data_type)
         {
             return;
         }
 
-        if (storage.use_count() > 1 && total_elements != new_total)
+        if (storage.use_count() > 1 && (total_elements != new_total || storage->getDataType() != data_type))
         {
-            storage = std::make_shared<gpu::vector>(Execution_Engine::getInstance().getContext(), new_total);
+            storage = std::make_shared<gpu::vector>(Execution_Engine::getInstance().getContext(), new_total, data_type);
         }
-        else if (!storage || storage->getSize() != new_total)
+        else if (!storage || storage->getSize() != new_total || storage->getDataType() != data_type)
         {
-            storage = std::make_shared<gpu::vector>(Execution_Engine::getInstance().getContext(), new_total);
+            storage = std::make_shared<gpu::vector>(Execution_Engine::getInstance().getContext(), new_total, data_type);
         }
         updateShapeAndStrides(new_shape);
     }
@@ -274,6 +282,7 @@ public:
             new_strides[i] = strides[axes_permutation[i]];
         }
         auto &output_gpu = static_cast<Gpu_Tensor_Impl &>(output);
+        output_gpu.data_type = data_type;
         output_gpu.shape = new_shape;
         output_gpu.strides = new_strides;
         output_gpu.storage = storage;
@@ -285,9 +294,10 @@ public:
     {
         Shape new_shape = shape;
         new_shape[axis] = length;
-        std::size_t add_bytes = start * strides[axis] * sizeof(float);
+        std::size_t add_bytes = start * strides[axis] * getDataTypeSize(data_type);
 
         auto &output_gpu = static_cast<Gpu_Tensor_Impl &>(output);
+        output_gpu.data_type = data_type;
         output_gpu.shape = new_shape;
         output_gpu.strides = strides;
         output_gpu.storage = storage;
@@ -298,6 +308,7 @@ public:
     void contiguous(Tensor_Impl &output) const override
     {
         auto &output_gpu = static_cast<Gpu_Tensor_Impl &>(output);
+        output_gpu.setDataType(data_type);
         output_gpu.reshape(shape);
 
         if (isContiguous())
@@ -305,7 +316,7 @@ public:
             Execution_Engine::getInstance().getContext().copyBuffer(
                 storage->getBuffer(),
                 output_gpu.storage->getBuffer(),
-                total_elements * sizeof(float),
+                total_elements * getDataTypeSize(data_type),
                 byte_offset,
                 0);
             return;
@@ -314,7 +325,7 @@ public:
         Contiguous_Push_Constants constants{
             .total_elements = static_cast<std::uint32_t>(total_elements),
             .rank = static_cast<std::uint32_t>(shape.getRank()),
-            .offset_elements = static_cast<std::uint32_t>(byte_offset / sizeof(float))};
+            .offset_elements = static_cast<std::uint32_t>(byte_offset / getDataTypeSize(data_type))};
 
         for (std::size_t i = 0; i < shape.getRank() && i < 6; ++i)
         {
@@ -351,6 +362,45 @@ public:
         }
 
         pushToGraph(Compute_Pipeline::CONTIGUOUS, {storage, output_gpu.storage}, constants, (constants.total_elements + 255) / 256);
+    }
+
+    void to(Data_Type target_type, Tensor_Impl &output) const override
+    {
+        auto &output_gpu = castToGpu(output);
+        output_gpu.setDataType(target_type);
+        output_gpu.reshape(shape);
+
+        auto contig_self = ensureContiguousSelf();
+        const auto *effective_self = contig_self ? contig_self.get() : this;
+
+        if (target_type == data_type)
+        {
+            Execution_Engine::getInstance().getContext().copyBuffer(
+                effective_self->storage->getBuffer(),
+                output_gpu.storage->getBuffer(),
+                total_elements * getDataTypeSize(data_type));
+            return;
+        }
+
+        struct Cast_Push_Constants
+        {
+            std::uint32_t total_elements = 0;
+        } pc{static_cast<std::uint32_t>(total_elements)};
+
+        if (data_type == Data_Type::FLOAT32 && target_type == Data_Type::FLOAT16)
+        {
+            pushToGraph(Compute_Pipeline::CAST_FP32_TO_FP16,
+                        {effective_self->storage, output_gpu.storage},
+                        pc,
+                        (pc.total_elements + 255) / 256);
+        }
+        else if (data_type == Data_Type::FLOAT16 && target_type == Data_Type::FLOAT32)
+        {
+            pushToGraph(Compute_Pipeline::CAST_FP16_TO_FP32,
+                        {effective_self->storage, output_gpu.storage},
+                        pc,
+                        (pc.total_elements + 255) / 256);
+        }
     }
 
     void matmul(const Tensor_Impl &other, Tensor_Impl &output) const override
@@ -405,6 +455,10 @@ public:
         }
 
         auto &output_gpu = castToGpu(output);
+        if (data_type == Data_Type::FLOAT16)
+        {
+            output_gpu.setDataType(Data_Type::FLOAT16);
+        }
         output_gpu.reshape(out_shape);
 
         Matrix_Dimensions dims{
@@ -418,7 +472,8 @@ public:
                                         dims.batch_count, dims.rows_a, dims.columns_a, dims.columns_b},
                            Log_Level::LOG_DEBUG, true, 1, Log_Feature::DENSE_COMPUTE);
 
-        pushToGraph(Compute_Pipeline::MATMUL, {effective_self->storage, effective_other->storage, output_gpu.storage},
+        pushToGraph(data_type == Data_Type::FLOAT16 ? Compute_Pipeline::MATMUL_FP16 : Compute_Pipeline::MATMUL,
+                    {effective_self->storage, effective_other->storage, output_gpu.storage},
                     dims, (dims.columns_b + 15) / 16, (dims.rows_a + 15) / 16, dims.batch_count);
     }
 
@@ -533,8 +588,13 @@ public:
         const auto *effective_self = contig_self ? contig_self.get() : this;
 
         auto &output_gpu = castToGpu(output);
+        if (data_type == Data_Type::FLOAT16)
+        {
+            output_gpu.setDataType(Data_Type::FLOAT16);
+        }
         output_gpu.reshape(shape);
-        pushToGraph(Compute_Pipeline::RELU, {effective_self->storage, output_gpu.storage},
+        pushToGraph(data_type == Data_Type::FLOAT16 ? Compute_Pipeline::RELU_FP16 : Compute_Pipeline::RELU,
+                    {effective_self->storage, output_gpu.storage},
                     static_cast<std::uint32_t>(total_elements), (static_cast<std::uint32_t>(total_elements) + 255) / 256);
     }
 
@@ -549,9 +609,14 @@ public:
         const auto *effective_grad = contig_grad ? contig_grad.get() : &out_grad_gpu;
 
         auto &in_grad_gpu = castToGpu(input_gradient);
+        if (data_type == Data_Type::FLOAT16)
+        {
+            in_grad_gpu.setDataType(Data_Type::FLOAT16);
+        }
         in_grad_gpu.reshape(shape);
 
-        pushToGraph(Compute_Pipeline::RELU_BACKWARD, {effective_self->storage, effective_grad->storage, in_grad_gpu.storage},
+        pushToGraph(data_type == Data_Type::FLOAT16 ? Compute_Pipeline::RELU_BACKWARD_FP16 : Compute_Pipeline::RELU_BACKWARD,
+                    {effective_self->storage, effective_grad->storage, in_grad_gpu.storage},
                     static_cast<std::uint32_t>(total_elements), (static_cast<std::uint32_t>(total_elements) + 255) / 256);
     }
 
@@ -561,8 +626,13 @@ public:
         const auto *effective_self = contig_self ? contig_self.get() : this;
 
         auto &output_gpu = castToGpu(output);
+        if (data_type == Data_Type::FLOAT16)
+        {
+            output_gpu.setDataType(Data_Type::FLOAT16);
+        }
         output_gpu.reshape(shape);
-        pushToGraph(Compute_Pipeline::GELU, {effective_self->storage, output_gpu.storage},
+        pushToGraph(data_type == Data_Type::FLOAT16 ? Compute_Pipeline::GELU_FP16 : Compute_Pipeline::GELU,
+                    {effective_self->storage, output_gpu.storage},
                     static_cast<std::uint32_t>(total_elements), (static_cast<std::uint32_t>(total_elements) + 255) / 256);
     }
 
@@ -577,9 +647,14 @@ public:
         const auto *effective_grad = contig_grad ? contig_grad.get() : &out_grad_gpu;
 
         auto &in_grad_gpu = castToGpu(input_gradient);
+        if (data_type == Data_Type::FLOAT16)
+        {
+            in_grad_gpu.setDataType(Data_Type::FLOAT16);
+        }
         in_grad_gpu.reshape(shape);
 
-        pushToGraph(Compute_Pipeline::GELU_BACKWARD, {effective_self->storage, effective_grad->storage, in_grad_gpu.storage},
+        pushToGraph(data_type == Data_Type::FLOAT16 ? Compute_Pipeline::GELU_BACKWARD_FP16 : Compute_Pipeline::GELU_BACKWARD,
+                    {effective_self->storage, effective_grad->storage, in_grad_gpu.storage},
                     static_cast<std::uint32_t>(total_elements), (static_cast<std::uint32_t>(total_elements) + 255) / 256);
     }
 
@@ -622,7 +697,7 @@ public:
         pushToGraph(Compute_Pipeline::SOFTMAX_BACKWARD, {effective_self->storage, effective_grad->storage, in_grad_gpu.storage}, constants, constants.rows, 1, 1);
     }
 
-    void sgdUpdate(const Tensor_Impl &gradient, float learning_rate, float max_gradient = 0.0F) override
+    void sgdUpdate(const Tensor_Impl &gradient, float learning_rate, float max_gradient = 0.0F, float inv_scale = 1.0F) override
     {
         validateSameDimensions(gradient);
         const auto &grad_gpu = castToGpu(gradient);
@@ -634,7 +709,8 @@ public:
             std::uint32_t total_elements;
             float learning_rate;
             float max_gradient;
-        } constants{static_cast<std::uint32_t>(total_elements), learning_rate, max_gradient};
+            float inv_scale;
+        } constants{static_cast<std::uint32_t>(total_elements), learning_rate, max_gradient, inv_scale};
 
         pushToGraph(Compute_Pipeline::SGD_UPDATE, {storage, effective_grad->storage}, constants, (total_elements + 255) / 256);
     }
@@ -647,7 +723,8 @@ public:
                     float beta2,
                     float epsilon,
                     std::size_t timestep,
-                    float max_gradient = 1.0F) override
+                    float max_gradient = 1.0F,
+                    float inv_scale = 1.0F) override
     {
         validateSameDimensions(gradient);
         validateSameDimensions(first_moment);
@@ -674,8 +751,9 @@ public:
             float max_gradient;
             float inv_bc1;
             float inv_sqrt_bc2;
+            float inv_scale;
         } constants{static_cast<std::uint32_t>(total_elements), learning_rate, beta1, beta2, epsilon, max_gradient,
-                    1.0F / bc1, 1.0F / std::sqrt(bc2)};
+                    1.0F / bc1, 1.0F / std::sqrt(bc2), inv_scale};
 
         pushToGraph(Compute_Pipeline::ADAM_UPDATE, {storage, effective_grad->storage, m_gpu.storage, v_gpu.storage}, constants, (total_elements + 255) / 256);
     }
@@ -736,6 +814,10 @@ public:
         }
 
         auto &output_gpu = castToGpu(output);
+        if (data_type == Data_Type::FLOAT16)
+        {
+            output_gpu.setDataType(Data_Type::FLOAT16);
+        }
         output_gpu.reshape(out_shape);
 
         std::size_t b_total_elems = biases.getTotalElements();
@@ -773,7 +855,8 @@ public:
                                         constants.batch_count, constants.rows_x, constants.columns_x, constants.columns_weights},
                            Log_Level::LOG_DEBUG, true, 1, Log_Feature::DENSE_COMPUTE);
 
-        pushToGraph(Compute_Pipeline::MATMUL_ADD, {effective_self->storage, effective_w->storage, effective_b->storage, output_gpu.storage}, constants,
+        pushToGraph(data_type == Data_Type::FLOAT16 ? Compute_Pipeline::MATMUL_ADD_FP16 : Compute_Pipeline::MATMUL_ADD,
+                    {effective_self->storage, effective_w->storage, effective_b->storage, output_gpu.storage}, constants,
                     (constants.columns_weights + 15) / 16, (constants.rows_x + 15) / 16, constants.batch_count);
     }
 
@@ -789,20 +872,21 @@ public:
 
         if (!isContiguous() || byte_offset != 0)
         {
-            Gpu_Tensor_Impl temp_upload(shape, host_data);
+            Gpu_Tensor_Impl temp_upload(shape, host_data, data_type);
             Execution_Engine::getInstance().getContext().copyBuffer(
                 temp_upload.storage->getBuffer(),
                 storage->getBuffer(),
-                total_elements * sizeof(float),
+                total_elements * getDataTypeSize(data_type),
                 0,
                 byte_offset);
             return;
         }
 
-        if (storage)
+        if (!storage || storage->getSize() != total_elements || storage->getDataType() != data_type)
         {
-            storage->uploadData(host_data);
+            storage = std::make_shared<gpu::vector>(Execution_Engine::getInstance().getContext(), total_elements, data_type);
         }
+        storage->uploadData(host_data);
     }
 
     void conv2d(const Tensor_Impl &weights, const Tensor_Impl &biases, Tensor_Impl &output,
@@ -826,6 +910,12 @@ public:
         std::uint32_t batch_size = static_cast<std::uint32_t>(getRows());
         std::uint32_t out_h = (input_height + 2 * padding - kernel_size) / stride + 1;
         std::uint32_t out_w = (input_width + 2 * padding - kernel_size) / stride + 1;
+
+        bool is_fp16 = (effective_self->getDataType() == Data_Type::FLOAT16 && effective_w->getDataType() == Data_Type::FLOAT16);
+        if (is_fp16)
+        {
+            output_gpu.setDataType(Data_Type::FLOAT16);
+        }
         output_gpu.reshape(batch_size, out_h * out_w * output_channels);
 
         struct Conv2d_Constants
@@ -842,7 +932,8 @@ public:
             std::uint32_t padding;
         } constants{batch_size, input_height, input_width, input_channels, out_h, out_w, output_channels, kernel_size, stride, padding};
 
-        pushToGraph(Compute_Pipeline::CONV2D_FORWARD_PASS, {effective_self->storage, effective_w->storage, effective_b->storage, output_gpu.storage}, constants,
+        Compute_Pipeline pipeline = is_fp16 ? Compute_Pipeline::CONV2D_FORWARD_PASS_FP16 : Compute_Pipeline::CONV2D_FORWARD_PASS;
+        pushToGraph(pipeline, {effective_self->storage, effective_w->storage, effective_b->storage, output_gpu.storage}, constants,
                     (output_channels + 15) / 16, (out_w + 15) / 16, batch_size * out_h);
     }
 
@@ -860,6 +951,12 @@ public:
 
         auto &in_grad_gpu = castToGpu(input_gradient);
         std::uint32_t batch_size = static_cast<std::uint32_t>(getRows());
+
+        bool is_fp16 = (effective_self->getDataType() == Data_Type::FLOAT16 && effective_w->getDataType() == Data_Type::FLOAT16);
+        if (is_fp16)
+        {
+            in_grad_gpu.setDataType(Data_Type::FLOAT16);
+        }
         in_grad_gpu.reshape(batch_size, input_height * input_width * input_channels);
 
         struct Conv2d_Constants
@@ -876,7 +973,8 @@ public:
             std::uint32_t padding;
         } constants{batch_size, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding};
 
-        pushToGraph(Compute_Pipeline::CONV2D_BACKWARD_PASS_INPUT_GRADIENT, {effective_self->storage, effective_w->storage, in_grad_gpu.storage}, constants,
+        Compute_Pipeline pipeline = is_fp16 ? Compute_Pipeline::CONV2D_BACKWARD_PASS_INPUT_GRADIENT_FP16 : Compute_Pipeline::CONV2D_BACKWARD_PASS_INPUT_GRADIENT;
+        pushToGraph(pipeline, {effective_self->storage, effective_w->storage, in_grad_gpu.storage}, constants,
                     (input_channels + 15) / 16, (input_width + 15) / 16, batch_size * input_height);
     }
 
@@ -913,7 +1011,9 @@ public:
             std::uint32_t padding;
         } constants{batch_size, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding};
 
-        pushToGraph(Compute_Pipeline::CONV2D_BACKWARD_PASS_WEIGHT_BIAS_GRADIENT, {effective_self->storage, effective_grad->storage, w_grad_gpu.storage, b_grad_gpu.storage}, constants,
+        bool is_fp16 = (effective_self->getDataType() == Data_Type::FLOAT16 && effective_grad->getDataType() == Data_Type::FLOAT16);
+        Compute_Pipeline pipeline = is_fp16 ? Compute_Pipeline::CONV2D_BACKWARD_PASS_WEIGHT_BIAS_GRADIENT_FP16 : Compute_Pipeline::CONV2D_BACKWARD_PASS_WEIGHT_BIAS_GRADIENT;
+        pushToGraph(pipeline, {effective_self->storage, effective_grad->storage, w_grad_gpu.storage, b_grad_gpu.storage}, constants,
                     (output_channels + 15) / 16, (input_channels + 15) / 16, kernel_size * kernel_size);
     }
 
@@ -931,6 +1031,11 @@ public:
         std::uint32_t out_h = (input_height + 2 * padding - kernel_size) / stride + 1;
         std::uint32_t out_w = (input_width + 2 * padding - kernel_size) / stride + 1;
 
+        if (data_type == Data_Type::FLOAT16)
+        {
+            res_gpu.setDataType(Data_Type::FLOAT16);
+            mask_gpu.setDataType(Data_Type::FLOAT32);
+        }
         res_gpu.reshape(batch_size, out_h * out_w * channels);
         mask_gpu.reshape(batch_size, out_h * out_w * channels);
 
@@ -947,7 +1052,8 @@ public:
             std::uint32_t padding;
         } constants{batch_size, input_height, input_width, channels, out_h, out_w, kernel_size, stride, padding};
 
-        pushToGraph(Compute_Pipeline::MAXPOOL2D_FORWARD, {effective_self->storage, res_gpu.storage, mask_gpu.storage}, constants,
+        pushToGraph(data_type == Data_Type::FLOAT16 ? Compute_Pipeline::MAXPOOL2D_FORWARD_FP16 : Compute_Pipeline::MAXPOOL2D_FORWARD,
+                    {effective_self->storage, res_gpu.storage, mask_gpu.storage}, constants,
                     (channels + 15) / 16, (out_w + 15) / 16, batch_size * out_h);
     }
 
@@ -965,6 +1071,10 @@ public:
 
         auto &in_grad_gpu = castToGpu(input_gradient);
         std::uint32_t batch_size = static_cast<std::uint32_t>(getRows());
+        if (data_type == Data_Type::FLOAT16)
+        {
+            in_grad_gpu.setDataType(Data_Type::FLOAT16);
+        }
         in_grad_gpu.reshape(batch_size, input_height * input_width * channels);
 
         struct Pool_Constants
@@ -980,7 +1090,8 @@ public:
             std::uint32_t padding;
         } constants{batch_size, input_height, input_width, channels, output_height, output_width, kernel_size, stride, padding};
 
-        pushToGraph(Compute_Pipeline::MAXPOOL2D_BACKWARD, {effective_mask->storage, effective_self->storage, in_grad_gpu.storage}, constants,
+        pushToGraph(data_type == Data_Type::FLOAT16 ? Compute_Pipeline::MAXPOOL2D_BACKWARD_FP16 : Compute_Pipeline::MAXPOOL2D_BACKWARD,
+                    {effective_mask->storage, effective_self->storage, in_grad_gpu.storage}, constants,
                     (channels + 15) / 16, (input_width + 15) / 16, batch_size * input_height);
     }
 
@@ -1044,6 +1155,11 @@ public:
 
         std::uint32_t b_count = static_cast<std::uint32_t>(getRows());
         std::uint32_t f_dim = static_cast<std::uint32_t>(getColumns());
+        if (data_type == Data_Type::FLOAT16)
+        {
+            out_gpu.setDataType(Data_Type::FLOAT16);
+            norm_in_gpu.setDataType(Data_Type::FLOAT32);
+        }
         out_gpu.reshape(b_count, f_dim);
         norm_in_gpu.reshape(b_count, f_dim);
 
@@ -1061,9 +1177,9 @@ public:
                 float momentum;
             } stats{b_count, f_dim, momentum};
 
-            pushToGraph(Compute_Pipeline::BATCH_NORM_STATS_FORWARD,
+            pushToGraph(data_type == Data_Type::FLOAT16 ? Compute_Pipeline::BATCH_NORM_STATS_FORWARD_FP16 : Compute_Pipeline::BATCH_NORM_STATS_FORWARD,
                         {effective_self->storage, bm_gpu.storage, bv_gpu.storage, rm_gpu.storage, rv_gpu.storage},
-                        stats, (f_dim + 255) / 256, 1, 1);
+                        stats, f_dim, 1, 1);
 
             struct Transform_Constants
             {
@@ -1072,7 +1188,7 @@ public:
                 float epsilon;
             } tf{b_count * f_dim, f_dim, epsilon};
 
-            pushToGraph(Compute_Pipeline::BATCH_NORM_TRANSFORM_FORWARD,
+            pushToGraph(data_type == Data_Type::FLOAT16 ? Compute_Pipeline::BATCH_NORM_TRANSFORM_FORWARD_FP16 : Compute_Pipeline::BATCH_NORM_TRANSFORM_FORWARD,
                         {effective_self->storage, bm_gpu.storage, bv_gpu.storage, gamma_gpu.storage, beta_gpu.storage, out_gpu.storage, norm_in_gpu.storage},
                         tf, (b_count * f_dim + 255) / 256, 1, 1);
         }
@@ -1085,7 +1201,7 @@ public:
                 float epsilon;
             } tf{b_count * f_dim, f_dim, epsilon};
 
-            pushToGraph(Compute_Pipeline::BATCH_NORM_TRANSFORM_FORWARD,
+            pushToGraph(data_type == Data_Type::FLOAT16 ? Compute_Pipeline::BATCH_NORM_TRANSFORM_FORWARD_FP16 : Compute_Pipeline::BATCH_NORM_TRANSFORM_FORWARD,
                         {effective_self->storage, rm_gpu.storage, rv_gpu.storage, gamma_gpu.storage, beta_gpu.storage, out_gpu.storage, norm_in_gpu.storage},
                         tf, (b_count * f_dim + 255) / 256, 1, 1);
         }
@@ -1107,6 +1223,13 @@ public:
 
         std::uint32_t b_count = static_cast<std::uint32_t>(getRows());
         std::uint32_t f_dim = static_cast<std::uint32_t>(getColumns());
+        bool is_fp16 = (effective_grad->getDataType() == Data_Type::FLOAT16 || data_type == Data_Type::FLOAT16);
+        if (is_fp16)
+        {
+            in_grad_gpu.setDataType(Data_Type::FLOAT16);
+            g_grad_gpu.setDataType(Data_Type::FLOAT32);
+            b_grad_gpu.setDataType(Data_Type::FLOAT32);
+        }
         g_grad_gpu.reshape(1, f_dim);
         b_grad_gpu.reshape(1, f_dim);
         in_grad_gpu.reshape(b_count, f_dim);
@@ -1117,9 +1240,9 @@ public:
             std::uint32_t feature_dimension;
         } stats{b_count, f_dim};
 
-        pushToGraph(Compute_Pipeline::BATCH_NORM_STATS_BACKWARD,
+        pushToGraph(is_fp16 ? Compute_Pipeline::BATCH_NORM_STATS_BACKWARD_FP16 : Compute_Pipeline::BATCH_NORM_STATS_BACKWARD,
                     {effective_grad->storage, norm_in_gpu.storage, g_grad_gpu.storage, b_grad_gpu.storage},
-                    stats, (f_dim + 255) / 256, 1, 1);
+                    stats, f_dim, 1, 1);
 
         struct Transform_Constants
         {
@@ -1129,14 +1252,44 @@ public:
             float epsilon;
         } tf{b_count * f_dim, b_count, f_dim, epsilon};
 
-        pushToGraph(Compute_Pipeline::BATCH_NORM_TRANSFORM_BACKWARD,
+        pushToGraph(is_fp16 ? Compute_Pipeline::BATCH_NORM_TRANSFORM_BACKWARD_FP16 : Compute_Pipeline::BATCH_NORM_TRANSFORM_BACKWARD,
                     {effective_grad->storage, norm_in_gpu.storage, gamma_gpu.storage, g_grad_gpu.storage, b_grad_gpu.storage, bv_gpu.storage, in_grad_gpu.storage},
                     tf, (b_count * f_dim + 255) / 256, 1, 1);
     }
 
     void linearForward(const Tensor_Impl &weights, const Tensor_Impl &biases, Tensor_Impl &output) const override
     {
-        matmulAdd(weights, biases, output);
+        if (data_type == Data_Type::FLOAT16 || shape.getRank() > 2)
+        {
+            matmulAdd(weights, biases, output);
+            return;
+        }
+
+        auto contig_self = ensureContiguousSelf();
+        const auto *effective_self = contig_self ? contig_self.get() : this;
+
+        const auto &w_gpu = castToGpu(weights);
+        auto contig_w = w_gpu.ensureContiguousSelf();
+        const auto *effective_w = contig_w ? contig_w.get() : &w_gpu;
+
+        const auto &b_gpu = castToGpu(biases);
+        auto contig_b = b_gpu.ensureContiguousSelf();
+        const auto *effective_b = contig_b ? contig_b.get() : &b_gpu;
+
+        auto &output_gpu = castToGpu(output);
+        output_gpu.reshape(getRows(), effective_w->getColumns());
+
+        struct Constants
+        {
+            std::uint32_t m_dim;
+            std::uint32_t k_dim;
+            std::uint32_t n_dim;
+        } c{static_cast<std::uint32_t>(getRows()), static_cast<std::uint32_t>(getColumns()),
+            static_cast<std::uint32_t>(effective_w->getColumns())};
+
+        pushToGraph(Compute_Pipeline::LINEAR_FORWARD,
+                    {effective_self->storage, effective_w->storage, effective_b->storage, output_gpu.storage},
+                    c, (c.n_dim + 15) / 16, (c.m_dim + 15) / 16, 1);
     }
 
     void linearBackwardInput(const Tensor_Impl &weights, Tensor_Impl &input_gradient) const override
@@ -1149,6 +1302,10 @@ public:
         const auto *effective_w = contig_w ? contig_w.get() : &w_gpu;
 
         auto &in_grad_gpu = castToGpu(input_gradient);
+        if (data_type == Data_Type::FLOAT16)
+        {
+            in_grad_gpu.setDataType(Data_Type::FLOAT16);
+        }
         in_grad_gpu.reshape(getRows(), effective_w->getRows());
 
         struct Constants
@@ -1158,7 +1315,8 @@ public:
             std::uint32_t output_dimension;
         } c{static_cast<std::uint32_t>(getRows()), static_cast<std::uint32_t>(effective_w->getRows()), static_cast<std::uint32_t>(getColumns())};
 
-        pushToGraph(Compute_Pipeline::LINEAR_BACKWARD_INPUT, {effective_self->storage, effective_w->storage, in_grad_gpu.storage}, c,
+        pushToGraph(data_type == Data_Type::FLOAT16 ? Compute_Pipeline::LINEAR_BACKWARD_INPUT_FP16 : Compute_Pipeline::LINEAR_BACKWARD_INPUT,
+                    {effective_self->storage, effective_w->storage, in_grad_gpu.storage}, c,
                     (c.input_dimension + 15) / 16, (c.batch_size + 15) / 16, 1);
     }
 
@@ -1173,7 +1331,11 @@ public:
 
         auto &w_grad_gpu = castToGpu(weight_gradient);
         auto &b_grad_gpu = castToGpu(bias_gradient);
-
+        if (data_type == Data_Type::FLOAT16)
+        {
+            w_grad_gpu.setDataType(Data_Type::FLOAT32);
+            b_grad_gpu.setDataType(Data_Type::FLOAT32);
+        }
         w_grad_gpu.reshape(getColumns(), effective_grad->getColumns());
         b_grad_gpu.reshape(1, effective_grad->getColumns());
 
@@ -1184,7 +1346,8 @@ public:
             std::uint32_t output_dimension;
         } c{static_cast<std::uint32_t>(getRows()), static_cast<std::uint32_t>(getColumns()), static_cast<std::uint32_t>(effective_grad->getColumns())};
 
-        pushToGraph(Compute_Pipeline::LINEAR_BACKWARD_WEIGHT_BIAS, {effective_self->storage, effective_grad->storage, w_grad_gpu.storage, b_grad_gpu.storage}, c,
+        pushToGraph(data_type == Data_Type::FLOAT16 ? Compute_Pipeline::LINEAR_BACKWARD_WEIGHT_BIAS_FP16 : Compute_Pipeline::LINEAR_BACKWARD_WEIGHT_BIAS,
+                    {effective_self->storage, effective_grad->storage, w_grad_gpu.storage, b_grad_gpu.storage}, c,
                     (c.output_dimension + 15) / 16, (c.input_dimension + 15) / 16, 1);
     }
 
@@ -1208,6 +1371,11 @@ public:
         std::uint32_t b_size = static_cast<std::uint32_t>(getRows());
         std::uint32_t tot_feat = input_height * input_width * input_channels;
         std::uint32_t sp_count = b_size * input_height * input_width;
+        if (data_type == Data_Type::FLOAT16)
+        {
+            out_gpu.setDataType(Data_Type::FLOAT16);
+            norm_in_gpu.setDataType(Data_Type::FLOAT32);
+        }
         out_gpu.reshape(b_size, tot_feat);
         norm_in_gpu.reshape(b_size, tot_feat);
 
@@ -1226,9 +1394,9 @@ public:
                 float momentum;
             } stats{b_size * tot_feat, input_channels, sp_count, momentum};
 
-            pushToGraph(Compute_Pipeline::BATCH_NORM2D_STATS_FORWARD,
+            pushToGraph(data_type == Data_Type::FLOAT16 ? Compute_Pipeline::BATCH_NORM2D_STATS_FORWARD_FP16 : Compute_Pipeline::BATCH_NORM2D_STATS_FORWARD,
                         {effective_self->storage, bm_gpu.storage, bv_gpu.storage, rm_gpu.storage, rv_gpu.storage},
-                        stats, (input_channels + 255) / 256, 1, 1);
+                        stats, 1, 1, 1);
 
             struct Transform_Constants
             {
@@ -1237,7 +1405,7 @@ public:
                 float epsilon;
             } tf{b_size * tot_feat, input_channels, epsilon};
 
-            pushToGraph(Compute_Pipeline::BATCH_NORM2D_TRANSFORM_FORWARD,
+            pushToGraph(data_type == Data_Type::FLOAT16 ? Compute_Pipeline::BATCH_NORM2D_TRANSFORM_FORWARD_FP16 : Compute_Pipeline::BATCH_NORM2D_TRANSFORM_FORWARD,
                         {effective_self->storage, bm_gpu.storage, bv_gpu.storage, gamma_gpu.storage, beta_gpu.storage, out_gpu.storage, norm_in_gpu.storage},
                         tf, (b_size * tot_feat + 255) / 256, 1, 1);
         }
@@ -1250,7 +1418,7 @@ public:
                 float epsilon;
             } tf{b_size * tot_feat, input_channels, epsilon};
 
-            pushToGraph(Compute_Pipeline::BATCH_NORM2D_TRANSFORM_FORWARD,
+            pushToGraph(data_type == Data_Type::FLOAT16 ? Compute_Pipeline::BATCH_NORM2D_TRANSFORM_FORWARD_FP16 : Compute_Pipeline::BATCH_NORM2D_TRANSFORM_FORWARD,
                         {effective_self->storage, rm_gpu.storage, rv_gpu.storage, gamma_gpu.storage, beta_gpu.storage, out_gpu.storage, norm_in_gpu.storage},
                         tf, (b_size * tot_feat + 255) / 256, 1, 1);
         }
@@ -1273,6 +1441,12 @@ public:
         std::uint32_t b_size = static_cast<std::uint32_t>(getRows());
         std::uint32_t tot_feat = input_height * input_width * input_channels;
         std::uint32_t sp_count = b_size * input_height * input_width;
+        if (data_type == Data_Type::FLOAT16)
+        {
+            in_grad_gpu.setDataType(Data_Type::FLOAT16);
+            g_grad_gpu.setDataType(Data_Type::FLOAT32);
+            b_grad_gpu.setDataType(Data_Type::FLOAT32);
+        }
         in_grad_gpu.reshape(b_size, tot_feat);
         g_grad_gpu.reshape(1, input_channels);
         b_grad_gpu.reshape(1, input_channels);
@@ -1284,9 +1458,9 @@ public:
             std::uint32_t spatial_count;
         } stats{b_size * tot_feat, input_channels, sp_count};
 
-        pushToGraph(Compute_Pipeline::BATCH_NORM2D_STATS_BACKWARD,
+        pushToGraph(data_type == Data_Type::FLOAT16 ? Compute_Pipeline::BATCH_NORM2D_STATS_BACKWARD_FP16 : Compute_Pipeline::BATCH_NORM2D_STATS_BACKWARD,
                     {effective_self->storage, norm_in_gpu.storage, g_grad_gpu.storage, b_grad_gpu.storage},
-                    stats, (input_channels + 255) / 256, 1, 1);
+                    stats, 1, 1, 1);
 
         struct Transform_Constants
         {
@@ -1296,7 +1470,7 @@ public:
             float epsilon;
         } tf{b_size * tot_feat, input_channels, sp_count, epsilon};
 
-        pushToGraph(Compute_Pipeline::BATCH_NORM2D_TRANSFORM_BACKWARD,
+        pushToGraph(data_type == Data_Type::FLOAT16 ? Compute_Pipeline::BATCH_NORM2D_TRANSFORM_BACKWARD_FP16 : Compute_Pipeline::BATCH_NORM2D_TRANSFORM_BACKWARD,
                     {effective_self->storage, norm_in_gpu.storage, gamma_gpu.storage, g_grad_gpu.storage, b_grad_gpu.storage, bv_gpu.storage, in_grad_gpu.storage},
                     tf, (b_size * tot_feat + 255) / 256, 1, 1);
     }

@@ -6,6 +6,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <random>
 #include <string>
@@ -374,6 +375,122 @@ bool testConv2dLayer(Execution_Target exec_target)
     bool grad_w_ok = verifyMatrix(layer.getWeightsGradient(), { 12.0f, 16.0f, 24.0f, 28.0f });
 
     return fwd_ok && grad_in_ok && grad_w_ok;
+}
+
+bool testConv2dLayerFp16(Execution_Target exec_target)
+{
+    if (exec_target != Execution_Target::VULKAN_GPU)
+    {
+        return true;
+    }
+    const auto &context = Execution_Engine::getInstance().getContext();
+    if (!context.isFloat16Supported() || !context.isFloat16Enabled())
+    {
+        return true;
+    }
+
+    Conv2d_Layer layer(3, 3, 1, 1, 2, 1, 0, exec_target);
+    layer.setMixedPrecision(true);
+    auto params = layer.getParametersAndGradients();
+    params[0].first->uploadData({ 1.0f, 0.0f, 0.0f, 1.0f });
+    params[1].first->uploadData({ 0.0f });
+
+    Matrix input_mat(1, 9, { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f }, exec_target);
+    Matrix out_mat = layer.forward(input_mat);
+    bool fwd_ok = verifyMatrix(out_mat, { 6.0f, 8.0f, 12.0f, 14.0f }, 1e-2f);
+
+    Matrix grad_out(1, 4, { 1.0f, 1.0f, 1.0f, 1.0f }, exec_target);
+    Matrix grad_in = layer.backward(grad_out);
+
+    bool grad_in_ok = verifyMatrix(grad_in, { 1.0f, 1.0f, 0.0f, 1.0f, 2.0f, 1.0f, 0.0f, 1.0f, 1.0f }, 1e-2f);
+    bool grad_w_ok = verifyMatrix(layer.getWeightsGradient(), { 12.0f, 16.0f, 24.0f, 28.0f }, 1e-2f);
+
+    return fwd_ok && grad_in_ok && grad_w_ok;
+}
+
+bool testNativeFp16ZeroCastPipeline(Execution_Target exec_target)
+{
+    if (exec_target != Execution_Target::VULKAN_GPU)
+    {
+        return true;
+    }
+    const auto &context = Execution_Engine::getInstance().getContext();
+    if (!context.isFloat16Supported() || !context.isFloat16Enabled())
+    {
+        return true;
+    }
+
+    Neural_Network nn(exec_target);
+    nn.addLayer<Conv2d_Layer>(4, 4, 1, 2, 2, 1, 0, exec_target);
+    nn.addLayer<Batch_Norm_2d_Layer>(3, 3, 2, 1e-5f, 0.1f, exec_target);
+    nn.addLayer<Gelu_Layer>(exec_target);
+    nn.addLayer<Max_Pool_2d_Layer>(3, 3, 2, 2, 1, 0, exec_target);
+    nn.addLayer<Linear_Layer>(2 * 2 * 2, 2, exec_target);
+    nn.setOptimizer<Adam_Optimizer>(0.01f);
+    nn.enableMixedPrecision(true);
+
+    std::vector<float> in_data(16, 1.0f);
+    for (std::size_t i = 0; i < 16; ++i) in_data[i] = static_cast<float>(i + 1) * 0.1f;
+    Tensor input(1, 16, in_data, exec_target);
+    Tensor target(1, 2, std::vector<float>{1.0f, 0.0f}, exec_target);
+
+    Tensor out = nn.forward(input);
+    const auto &out_data = out.getData();
+    if (out_data.size() != 2) return false;
+    for (float v : out_data)
+    {
+        if (std::isnan(v) || std::isinf(v)) return false;
+    }
+
+    nn.trainStep(input, target);
+
+    Tensor out_after = nn.forward(input);
+    const auto &out_after_data = out_after.getData();
+    if (out_after_data.size() != 2) return false;
+    for (float v : out_after_data)
+    {
+        if (std::isnan(v) || std::isinf(v)) return false;
+    }
+
+    return true;
+}
+
+bool testPopulationFp16(Execution_Target exec_target)
+{
+    if (exec_target != Execution_Target::VULKAN_GPU)
+    {
+        return true;
+    }
+    const auto &context = Execution_Engine::getInstance().getContext();
+    if (!context.isFloat16Supported() || !context.isFloat16Enabled())
+    {
+        return true;
+    }
+
+    std::size_t state_dim = 16;
+    std::size_t hidden_dim = 32;
+    std::size_t action_dim = 4;
+    std::size_t pop_size = 8;
+
+    Neural_Network template_net(exec_target);
+    template_net.addLayer<Linear_Layer>(state_dim, hidden_dim, exec_target);
+    template_net.addLayer<Gelu_Layer>(exec_target);
+    template_net.addLayer<Linear_Layer>(hidden_dim, action_dim, exec_target);
+
+    Population pop(pop_size, template_net, state_dim, action_dim, exec_target);
+    pop.enableMixedPrecision(true);
+
+    std::vector<float> states(pop_size * state_dim, 0.5f);
+    std::vector<std::size_t> actions(pop_size, 0);
+
+    pop.selectBatchActions(states.data(), nullptr, pop_size, actions.data());
+
+    for (std::size_t a : actions)
+    {
+        if (a >= action_dim) return false;
+    }
+
+    return true;
 }
 
 bool testMaxPool2dLayer(Execution_Target exec_target)
@@ -1862,6 +1979,138 @@ bool testPipelineCachePersistence()
     return std::filesystem::exists(path);
 }
 
+bool testFp16SupportAndCastingCpu()
+{
+    Shape shape{2, 3};
+    std::vector<float> input_data = {1.0f, -2.5f, 0.125f, 500.0f, -0.05f, 0.0f};
+    Tensor fp32_tensor(shape, input_data, Execution_Target::CPU);
+
+    Tensor fp16_tensor = fp32_tensor.toFp16();
+    if (fp16_tensor.getDataType() != Data_Type::FLOAT16)
+    {
+        return false;
+    }
+
+    Tensor recovered_fp32 = fp16_tensor.toFp32();
+    if (recovered_fp32.getDataType() != Data_Type::FLOAT32)
+    {
+        return false;
+    }
+
+    const auto &rec_data = recovered_fp32.getData();
+    for (std::size_t i = 0; i < input_data.size(); ++i)
+    {
+        if (std::abs(rec_data[i] - input_data[i]) > 1e-2f * (std::abs(input_data[i]) + 1.0f))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool testFp16SupportAndCastingGpu()
+{
+    auto &engine = Execution_Engine::getInstance();
+    const auto &context = engine.getContext();
+    if (!context.isFloat16Supported() || !context.isFloat16Enabled())
+    {
+        std::cout << "[INFO: GPU does not enable/support FP16, skipping GPU kernel test] ";
+        return true;
+    }
+
+    Shape shape{2, 3};
+    std::vector<float> input_data = {1.0f, -2.5f, 0.125f, 42.0f, -100.0f, 0.5f};
+    Tensor gpu_fp32(shape, input_data, Execution_Target::VULKAN_GPU);
+
+    Tensor gpu_fp16 = gpu_fp32.toFp16();
+    if (gpu_fp16.getDataType() != Data_Type::FLOAT16)
+    {
+        return false;
+    }
+
+    Tensor gpu_recovered_fp32 = gpu_fp16.toFp32();
+    engine.waitIdle();
+
+    const auto &rec_data = gpu_recovered_fp32.getData();
+    for (std::size_t i = 0; i < input_data.size(); ++i)
+    {
+        if (std::abs(rec_data[i] - input_data[i]) > 1e-2f * (std::abs(input_data[i]) + 1.0f))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool testLossScalerAndAmp()
+{
+    Loss_Scaler scaler(1024.0f, 2.0f, 0.5f, 2, true);
+
+    float loss = 0.05f;
+    float scaled_loss = scaler.scaleLoss(loss);
+    if (std::abs(scaled_loss - 51.2f) > 1e-3f)
+    {
+        return false;
+    }
+
+    Shape shape{2, 2};
+    std::vector<float> normal_grad = {0.1f, 0.2f, -0.1f, 0.05f};
+    Tensor grad_tensor(shape, normal_grad, Execution_Target::CPU);
+
+    scaler.scaleGradient(grad_tensor);
+    if (std::abs(grad_tensor.getData()[0] - 102.4f) > 1e-2f)
+    {
+        return false;
+    }
+
+    scaler.unscaleGradient(grad_tensor);
+    if (std::abs(grad_tensor.getData()[0] - 0.1f) > 1e-3f)
+    {
+        return false;
+    }
+
+    if (scaler.hasOverflow(grad_tensor))
+    {
+        return false;
+    }
+
+    std::vector<float> overflow_grad = {0.1f, std::numeric_limits<float>::quiet_NaN(), 0.0f, 1.0f};
+    Tensor overflow_tensor(shape, overflow_grad, Execution_Target::CPU);
+    if (!scaler.hasOverflow(overflow_tensor))
+    {
+        return false;
+    }
+
+    bool accepted = scaler.step(true);
+    if (accepted || std::abs(scaler.getScaleFactor() - 512.0f) > 1e-3f)
+    {
+        return false;
+    }
+
+    scaler.step(false);
+    scaler.step(false);
+    if (std::abs(scaler.getScaleFactor() - 1024.0f) > 1e-3f)
+    {
+        return false;
+    }
+
+    Neural_Network nn(Execution_Target::CPU);
+    nn.addLayer<Linear_Layer>(4, 2, Execution_Target::CPU);
+    nn.setOptimizer<Sgd_Optimizer>(0.01f);
+    nn.enableMixedPrecision(true);
+
+    if (!nn.isMixedPrecisionEnabled())
+    {
+        return false;
+    }
+
+    Tensor input(1, 4, std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f}, Execution_Target::CPU);
+    Tensor target(1, 2, std::vector<float>{0.5f, -0.5f}, Execution_Target::CPU);
+    nn.trainStep(input, target);
+
+    return true;
+}
+
 void runTestSuite(Execution_Target exec_target, const std::string& target_name)
 {
     std::cout << "   RUNNING TEST SUITE ON " << target_name << "\n";
@@ -1896,6 +2145,8 @@ void runTestSuite(Execution_Target exec_target, const std::string& target_name)
     std::cout << "\n[5. Neural Network Layers]\n";
     std::cout << "  Linear Layer (Forward & Backward): " << (testLinearLayer(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "  Conv2D Layer (Forward & Backward): " << (testConv2dLayer(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Conv2D Native FP16 (Fwd & Bwd):    " << (testConv2dLayerFp16(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Zero-Cast Pipeline (Native FP16):  " << (testNativeFp16ZeroCastPipeline(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "  MaxPool2D Layer (with Mask):       " << (testMaxPool2dLayer(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "  GlobalAvgPool2D Layer:             " << (testGlobalAvgPool2dLayer(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "  BatchNorm 1D Layer:                " << (testBatchNormLayer(exec_target) ? "PASS" : "FAIL") << "\n";
@@ -1912,6 +2163,7 @@ void runTestSuite(Execution_Target exec_target, const std::string& target_name)
     std::cout << "\n[7. Reinforcement Learning & Neuroevolution]\n";
     std::cout << "  DQN Agent (Train Step & Target Sync): " << (testDqnAgent(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "  Population Suite (GEMM/Evolve/IO): " << (testPopulation(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Population Suite (Native FP16):    " << (testPopulationFp16(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "  Population Deep Architecture:      " << (testPopulationDeepNetwork(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "  Layer Population Interface & Clone:" << (testLayerInterfaceContracts(exec_target) ? "PASS" : "FAIL") << "\n";
 
@@ -1943,6 +2195,9 @@ int main()
     std::cout << "  Async Data Pipeline Double-Buffer: " << (testAsyncDataPipeline() ? "PASS" : "FAIL") << "\n";
     std::cout << "  Replay Buffer Capacity & Sampling: " << (testReplayBuffer() ? "PASS" : "FAIL") << "\n";
     std::cout << "  Pipeline Cache Persistence:        " << (testPipelineCachePersistence() ? "PASS" : "FAIL") << "\n";
+    std::cout << "  FP16 CPU Support & Precision Cast: " << (testFp16SupportAndCastingCpu() ? "PASS" : "FAIL") << "\n";
+    std::cout << "  FP16 GPU Support & Precision Cast: " << (testFp16SupportAndCastingGpu() ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Loss Scaler & Mixed Precision AMP: " << (testLossScalerAndAmp() ? "PASS" : "FAIL") << "\n";
     std::cout << "========================================\n";
 
     return 0;

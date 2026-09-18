@@ -54,6 +54,7 @@ private:
 
 protected:
     bool is_accumulated = false;
+    bool is_mixed_precision_enabled = false;
 
 public:
     void logBufferAddress(Tensor *_target_tensor, const std::string &_tensor_name) const
@@ -194,4 +195,6 @@ public:
     virtual void setTarget(Execution_Target _execution_target) { setExecutionTarget(_execution_target); }
     virtual void setAccumulated(bool _is_accumulated) noexcept { is_accumulated = _is_accumulated; }
     virtual void setTrainingMode(bool _is_training) {}
+    virtual void setMixedPrecision(bool _enable) noexcept { is_mixed_precision_enabled = _enable; }
+    virtual bool isMixedPrecisionEnabled() const noexcept { return is_mixed_precision_enabled; }
 };
