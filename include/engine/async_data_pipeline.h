@@ -2,7 +2,6 @@
 
 #include <array>
 #include <atomic>
-#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -152,13 +151,9 @@ private:
 
             try
             {
-                auto start_preparation_time = std::chrono::high_resolution_clock::now();
                 prepareBatchHost(current_batch_step, buffer_slots[slot_index].host_inputs, buffer_slots[slot_index].host_targets);
-                auto end_preparation_time = std::chrono::high_resolution_clock::now();
-
-                double preparation_time_in_milliseconds = std::chrono::duration<double, std::milli>(end_preparation_time - start_preparation_time).count();
-                Logger::logMessage(Input_Format{"Async_Data_Pipeline::workerLoop: Step {}: Slot {} host batch prepared in {:.3f} ms",
-                                               current_batch_step, slot_index, preparation_time_in_milliseconds},
+                Logger::logMessage(Input_Format{"Async_Data_Pipeline::workerLoop: Step {}: Slot {} host batch prepared",
+                                               current_batch_step, slot_index},
                                    Log_Level::LOG_DEBUG,
                                    true,
                                    0,
@@ -288,32 +283,17 @@ public:
         std::size_t slot_index = consumer_index % BUFFER_SLOTS_COUNT;
         Buffer_Slot &slot = buffer_slots[slot_index];
 
-        double fence_wait_time_in_milliseconds = 0.0;
         if (device != VK_NULL_HANDLE && slot.fence != VK_NULL_HANDLE)
         {
             if (slot.is_fence_submitted)
             {
-                auto start_fence_time = std::chrono::high_resolution_clock::now();
                 vkWaitForFences(device, 1, &slot.fence, VK_TRUE, UINT64_MAX);
-                auto end_fence_time = std::chrono::high_resolution_clock::now();
-                fence_wait_time_in_milliseconds = std::chrono::duration<double, std::milli>(end_fence_time - start_fence_time).count();
             }
             vkResetFences(device, 1, &slot.fence);
             slot.is_fence_submitted = true;
         }
 
-        static double total_fence_wait_ms = 0;
-        static std::size_t batch_ctr = 0;
-        total_fence_wait_ms += fence_wait_time_in_milliseconds;
-        batch_ctr++;
-        if (batch_ctr == 500)
         {
-            std::cout << std::format("[PROFILE 500 steps] Fence Wait (GPU busy): {:.3f}ms per batch\n", total_fence_wait_ms / 500.0);
-        }
-
-        double condition_variable_wait_time_in_milliseconds = 0.0;
-        {
-            auto start_condition_variable_time = std::chrono::high_resolution_clock::now();
             std::unique_lock<std::mutex> lock(pipeline_mutex);
             consumer_condition_variable.wait(lock, [this, slot_index]
                                              { return buffer_slots[slot_index].is_ready.load() || !is_running.load(); });
@@ -322,8 +302,6 @@ public:
             {
                 return Batch_Data();
             }
-            auto end_condition_variable_time = std::chrono::high_resolution_clock::now();
-            condition_variable_wait_time_in_milliseconds = std::chrono::duration<double, std::milli>(end_condition_variable_time - start_condition_variable_time).count();
         }
 
         try
@@ -385,8 +363,8 @@ public:
             }
         }
 
-        Logger::logMessage(Input_Format{"Async_Data_Pipeline::nextBatch: Step {}: Slot {} | gpu_fence_wait={:.3f}ms | cpu_data_wait={:.3f}ms | input_buffer={} | target_buffer={}",
-                                       consumer_index, slot_index, fence_wait_time_in_milliseconds, condition_variable_wait_time_in_milliseconds, input_buffer_handle, target_buffer_handle},
+        Logger::logMessage(Input_Format{"Async_Data_Pipeline::nextBatch: Step {}: Slot {} | input_buffer={} | target_buffer={}",
+                                       consumer_index, slot_index, input_buffer_handle, target_buffer_handle},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,

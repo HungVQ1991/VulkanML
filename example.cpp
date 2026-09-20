@@ -20,26 +20,12 @@
 #include <utility>
 #include <vector>
 
-#include "cost_function/cce_cost.h"
-#include "cost_function/icost_function.h"
-#include "engine/async_data_pipeline.h"
-#include "engine/execution_engine.h"
-#include "helper/layer.h"
-#include "helper/logger.h"
-#include "layer/ilayer.h"
-#include "layer/linear_layer.h"
-#include "layer/maxpool2d_layer.h"
-#include "layer/relu.h"
-#include "layer/softmax.h"
-#include "learning_rate/cosine_annealing.h"
-#include "math/tensor.h"
-#include "neural_network.h"
-#include "optimizer/adam_optimizer.h"
+#include "helper/vulkan_ml.h"
 
 constexpr std::size_t INPUT_DIMENSION = 784;
 constexpr std::size_t OUTPUT_DIMENSION = 10;
 constexpr std::size_t BATCH_SIZE = 8;
-constexpr std::size_t TOTAL_EPOCHS = 1;
+constexpr std::size_t TOTAL_EPOCHS = 10;
 
 std::uint32_t swapByteOrder(std::uint32_t _value)
 {
@@ -297,12 +283,20 @@ void evaluateModel(Neural_Network &_neural_network,
     std::size_t test_batch_size = BATCH_SIZE;
     std::size_t batches_count = (_test_images_count + test_batch_size - 1) / test_batch_size;
 
+    Matrix input_matrix(test_batch_size, INPUT_DIMENSION, _execution_target);
+    std::vector<float> host_batch_inputs(test_batch_size * INPUT_DIMENSION);
+    std::vector<float> host_batch_targets(test_batch_size * OUTPUT_DIMENSION);
+
     for (std::size_t b = 0; b < batches_count; ++b)
     {
         std::size_t current_batch_size = std::min(test_batch_size, static_cast<std::size_t>(_test_images_count) - b * test_batch_size);
 
-        std::vector<float> host_batch_inputs(current_batch_size * INPUT_DIMENSION);
-        std::vector<float> host_batch_targets(current_batch_size * OUTPUT_DIMENSION);
+        if (current_batch_size != test_batch_size)
+        {
+            host_batch_inputs.resize(current_batch_size * INPUT_DIMENSION);
+            host_batch_targets.resize(current_batch_size * OUTPUT_DIMENSION);
+            input_matrix = Matrix(current_batch_size, INPUT_DIMENSION, _execution_target);
+        }
 
         std::copy(_test_images_data.begin() + b * test_batch_size * INPUT_DIMENSION,
                   _test_images_data.begin() + (b * test_batch_size + current_batch_size) * INPUT_DIMENSION,
@@ -312,8 +306,7 @@ void evaluateModel(Neural_Network &_neural_network,
                   _test_labels_data.begin() + (b * test_batch_size + current_batch_size) * OUTPUT_DIMENSION,
                   host_batch_targets.begin());
 
-        Matrix input_matrix(current_batch_size, INPUT_DIMENSION, host_batch_inputs, _execution_target);
-        Matrix target_matrix(current_batch_size, OUTPUT_DIMENSION, host_batch_targets, _execution_target);
+        input_matrix.uploadData(host_batch_inputs);
 
         Matrix prediction_matrix = _neural_network.forward(input_matrix);
 
@@ -394,9 +387,8 @@ void evaluateModel(Neural_Network &_neural_network,
 int main()
 {
     Logger::setFileLogging(true);
-    Logger::setOnlyActiveFeatures(Log_Feature::LAYER_INSPECTION | Log_Feature::FP16_METRICS);
+    Logger::setOnlyActiveFeatures(Log_Feature::NONE);
     Logger::setConsoleOutput(true);
-    Execution_Engine::getInstance().setCooperativeMatrixEnabled(true);
 
     std::vector<float> train_images_data;
     std::vector<float> train_labels_data;
@@ -419,7 +411,9 @@ int main()
     Execution_Target execution_target = Execution_Target::VULKAN_GPU;
     Neural_Network neural_network(execution_target);
     neural_network.setTrainingMode(true);
-    // neural_network.enableMixedPrecision();
+    neural_network.enableMixedPrecision();
+    neural_network.enableStaticGraph();
+    neural_network.enableCooperationMatrix();
 
     neural_network.setLearningRate<Cosine_Annealing>(0.001f, 1e-5f, static_cast<int>(TOTAL_EPOCHS));
     neural_network.setOptimizer<Adam_Optimizer>(neural_network.getLearningRate(), 0.9f, 0.999f, 1e-8f, 1.0f);

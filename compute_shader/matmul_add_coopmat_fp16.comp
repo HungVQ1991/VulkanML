@@ -1,0 +1,108 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_KHR_cooperative_matrix : require
+
+#define TILE_M 16
+#define TILE_N 16
+#define TILE_K 16
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer Matrix_X { float16_t data_x[]; };
+layout(std430, binding = 1) readonly buffer Matrix_W { float16_t data_w[]; };
+layout(std430, binding = 2) readonly buffer Matrix_B { float16_t data_b[]; };
+layout(std430, binding = 3) writeonly buffer Matrix_Y { float16_t data_y[]; };
+
+layout(push_constant) uniform Push_Constants {
+    uint batch_count;
+    uint rows_x;
+    uint columns_x;
+    uint columns_weights;
+    uint broadcast_w;
+    uint broadcast_b;
+} dims;
+
+shared float16_t smem_x[TILE_M * TILE_K];
+shared float16_t smem_w[TILE_K * TILE_N];
+
+void main() {
+    uint batch = gl_WorkGroupID.z;
+    if (batch >= dims.batch_count) return;
+
+    uint tile_row = gl_WorkGroupID.y * TILE_M;
+    uint tile_col = gl_WorkGroupID.x * TILE_N;
+
+    if (tile_row >= dims.rows_x || tile_col >= dims.columns_weights) return;
+
+    uint lane_id = gl_LocalInvocationID.x;
+
+    uint x_batch_offset = batch * dims.rows_x * dims.columns_x;
+    uint w_batch_offset = (dims.broadcast_w == 1) ? 0 : (batch * dims.columns_x * dims.columns_weights);
+    uint y_batch_offset = batch * dims.rows_x * dims.columns_weights;
+
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc;
+    acc = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+
+    bool is_m_aligned = (tile_row + TILE_M <= dims.rows_x);
+    bool is_n_aligned = (tile_col + TILE_N <= dims.columns_weights);
+
+    for (uint k = 0; k < dims.columns_x; k += TILE_K) {
+        bool is_k_aligned = (k + TILE_K <= dims.columns_x);
+
+        coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> matX;
+        if (is_m_aligned && is_k_aligned) {
+            coopMatLoad(matX, data_x, x_batch_offset + tile_row * dims.columns_x + k, dims.columns_x, gl_CooperativeMatrixLayoutRowMajor);
+        } else {
+            for (uint i = 0; i < 8; ++i) {
+                uint idx = lane_id * 8 + i;
+                uint lr = idx / TILE_K;
+                uint lc = idx % TILE_K;
+                uint gr = tile_row + lr;
+                uint gk = k + lc;
+                smem_x[idx] = (gr < dims.rows_x && gk < dims.columns_x) ? data_x[x_batch_offset + gr * dims.columns_x + gk] : float16_t(0.0);
+            }
+            barrier();
+            coopMatLoad(matX, smem_x, 0, TILE_K, gl_CooperativeMatrixLayoutRowMajor);
+            barrier();
+        }
+
+        coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> matW;
+        if (is_k_aligned && is_n_aligned) {
+            coopMatLoad(matW, data_w, w_batch_offset + k * dims.columns_weights + tile_col, dims.columns_weights, gl_CooperativeMatrixLayoutRowMajor);
+        } else {
+            for (uint i = 0; i < 8; ++i) {
+                uint idx = lane_id * 8 + i;
+                uint lr = idx / TILE_N;
+                uint lc = idx % TILE_N;
+                uint gk = k + lr;
+                uint gc = tile_col + lc;
+                smem_w[idx] = (gk < dims.columns_x && gc < dims.columns_weights) ? data_w[w_batch_offset + gk * dims.columns_weights + gc] : float16_t(0.0);
+            }
+            barrier();
+            coopMatLoad(matW, smem_w, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+            barrier();
+        }
+
+        acc = coopMatMulAdd(matX, matW, acc);
+    }
+
+    coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> res;
+    res = coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(acc);
+
+    coopMatStore(res, smem_x, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+    barrier();
+
+    for (uint i = 0; i < 8; ++i) {
+        uint idx = lane_id * 8 + i;
+        uint lr = idx / TILE_N;
+        uint lc = idx % TILE_N;
+        uint gr = tile_row + lr;
+        uint gc = tile_col + lc;
+        if (gr < dims.rows_x && gc < dims.columns_weights) {
+            uint b_offset = (dims.broadcast_b == 1) ? gc : ((dims.broadcast_b == 2) ? (gr * dims.columns_weights + gc) : (y_batch_offset + gr * dims.columns_weights + gc));
+            data_y[y_batch_offset + gr * dims.columns_weights + gc] = float16_t(float(smem_x[idx]) + float(data_b[b_offset]));
+        }
+    }
+}

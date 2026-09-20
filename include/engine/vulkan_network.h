@@ -69,6 +69,8 @@ enum Compute_Pipeline
     SPLIT_COLUMNS,
     SPLIT_ROWS,
     CONTIGUOUS,
+    CONV2D_IM2COL_TRANSPOSED,
+    CONV2D_BIAS_GRADIENT,
     CAST_FP32_TO_FP16,
     CAST_FP16_TO_FP32,
     CONV2D_FORWARD_PASS_FP16,
@@ -92,6 +94,12 @@ enum Compute_Pipeline
     BATCH_NORM_TRANSFORM_FORWARD_FP16,
     BATCH_NORM_STATS_BACKWARD_FP16,
     BATCH_NORM_TRANSFORM_BACKWARD_FP16,
+    CONV2D_IM2COL_TRANSPOSED_FP16,
+    CONV2D_BIAS_GRADIENT_FP16,
+    CONV2D_WEIGHT_GRADIENT_COOPMAT_FP16,
+    CONV2D_WEIGHT_GRADIENT_FP16,
+    MATMUL_COOPMAT_FP16,
+    MATMUL_ADD_COOPMAT_FP16,
     COMPUTE_PIPELINE_END
 };
 
@@ -164,7 +172,7 @@ private:
         return shader_module;
     }
 
-    VkPipeline createComputePipeline(const std::string &_shader_path) const
+    VkPipeline createComputePipeline(const std::string &_shader_path, bool is_coop = false) const
     {
         Logger::logMessage(Input_Format{"Vulkan_Network::createComputePipeline: Creating compute pipeline for shader: {}", _shader_path},
                            Log_Level::LOG_DEBUG,
@@ -258,11 +266,25 @@ private:
                 continue;
             }
 
+            bool is_coop_pipeline = (pipeline_enum == Compute_Pipeline::MATMUL_COOPMAT_FP16 ||
+                                     pipeline_enum == Compute_Pipeline::MATMUL_ADD_COOPMAT_FP16 ||
+                                     pipeline_enum == Compute_Pipeline::CONV2D_WEIGHT_GRADIENT_COOPMAT_FP16);
+            if (is_coop_pipeline && context != nullptr && !context->isCooperativeMatrixEnabled())
+            {
+                Logger::logMessage("Vulkan_Network::createAllPipelines: Skipping cooperative matrix pipeline because device does not have cooperative matrix enabled",
+                                   Log_Level::LOG_INFO,
+                                   true,
+                                   0,
+                                   Log_Feature::SHADER_GENERATION);
+                pipelines[i] = VK_NULL_HANDLE;
+                continue;
+            }
+
             std::string shader_path = _folder_path + "/" + std::string(magic_enum::enum_name(pipeline_enum)) + ".spv";
             std::ranges::transform(shader_path, shader_path.begin(), [](unsigned char character)
                                    { return static_cast<char>(std::tolower(character)); });
 
-            pipelines[i] = createComputePipeline(shader_path);
+            pipelines[i] = createComputePipeline(shader_path, is_coop_pipeline);
         }
     }
 

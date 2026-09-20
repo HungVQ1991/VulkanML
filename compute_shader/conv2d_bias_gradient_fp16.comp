@@ -1,0 +1,55 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer Grad_Output_Buffer {
+    float16_t grad_output[];
+};
+
+layout(std430, set = 0, binding = 1) writeonly buffer Grad_Bias_Buffer {
+    float grad_bias[];
+};
+
+layout(push_constant) uniform Push_Constants {
+    uint batch_size;
+    uint in_h;
+    uint in_w;
+    uint in_c;
+    uint out_h;
+    uint out_w;
+    uint out_c;
+    uint kernel_size;
+    uint stride;
+    uint padding;
+} params;
+
+shared float sdata[256];
+
+void main() {
+    uint c = gl_WorkGroupID.x;
+    if (c >= params.out_c) return;
+
+    uint tid = gl_LocalInvocationID.x;
+    uint M = params.batch_size * params.out_h * params.out_w;
+
+    float sum = 0.0;
+    for (uint m = tid; m < M; m += 256) {
+        sum += float(grad_output[m * params.out_c + c]);
+    }
+
+    sdata[tid] = sum;
+    barrier();
+
+    for (uint s = 128; s > 0; s >>= 1) {
+        if (tid < s) {
+            sdata[tid] += sdata[tid + s];
+        }
+        barrier();
+    }
+
+    if (tid == 0) {
+        grad_bias[c] = sdata[0];
+    }
+}

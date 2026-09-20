@@ -472,7 +472,15 @@ public:
                                         dims.batch_count, dims.rows_a, dims.columns_a, dims.columns_b},
                            Log_Level::LOG_DEBUG, true, 1, Log_Feature::DENSE_COMPUTE);
 
-        pushToGraph(data_type == Data_Type::FLOAT16 ? Compute_Pipeline::MATMUL_FP16 : Compute_Pipeline::MATMUL,
+        Compute_Pipeline pipeline = Compute_Pipeline::MATMUL;
+        if (data_type == Data_Type::FLOAT16)
+        {
+            pipeline = Execution_Engine::getInstance().isCooperativeMatrixEnabled()
+                ? Compute_Pipeline::MATMUL_COOPMAT_FP16
+                : Compute_Pipeline::MATMUL_FP16;
+        }
+
+        pushToGraph(pipeline,
                     {effective_self->storage, effective_other->storage, output_gpu.storage},
                     dims, (dims.columns_b + 15) / 16, (dims.rows_a + 15) / 16, dims.batch_count);
     }
@@ -855,7 +863,15 @@ public:
                                         constants.batch_count, constants.rows_x, constants.columns_x, constants.columns_weights},
                            Log_Level::LOG_DEBUG, true, 1, Log_Feature::DENSE_COMPUTE);
 
-        pushToGraph(data_type == Data_Type::FLOAT16 ? Compute_Pipeline::MATMUL_ADD_FP16 : Compute_Pipeline::MATMUL_ADD,
+        Compute_Pipeline pipeline = Compute_Pipeline::MATMUL_ADD;
+        if (data_type == Data_Type::FLOAT16)
+        {
+            pipeline = Execution_Engine::getInstance().isCooperativeMatrixEnabled()
+                ? Compute_Pipeline::MATMUL_ADD_COOPMAT_FP16
+                : Compute_Pipeline::MATMUL_ADD_FP16;
+        }
+
+        pushToGraph(pipeline,
                     {effective_self->storage, effective_w->storage, effective_b->storage, output_gpu.storage}, constants,
                     (constants.columns_weights + 15) / 16, (constants.rows_x + 15) / 16, constants.batch_count);
     }
@@ -981,7 +997,8 @@ public:
     void conv2dBackwardWeight(const Tensor_Impl &output_gradient, Tensor_Impl &weight_gradient, Tensor_Impl &bias_gradient,
                               std::uint32_t input_height, std::uint32_t input_width, std::uint32_t input_channels,
                               std::uint32_t output_height, std::uint32_t output_width, std::uint32_t output_channels,
-                              std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const override
+                              std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding,
+                              Tensor_Impl *im2col_scratch = nullptr) const override
     {
         auto contig_self = ensureContiguousSelf();
         const auto *effective_self = contig_self ? contig_self.get() : this;
@@ -994,7 +1011,10 @@ public:
         auto &b_grad_gpu = castToGpu(bias_gradient);
 
         std::uint32_t batch_size = static_cast<std::uint32_t>(getRows());
-        w_grad_gpu.reshape(1, kernel_size * kernel_size * input_channels * output_channels);
+        std::uint32_t K = kernel_size * kernel_size * input_channels;
+        std::uint32_t M = batch_size * output_height * output_width;
+
+        w_grad_gpu.reshape(1, K * output_channels);
         b_grad_gpu.reshape(1, output_channels);
 
         struct Conv2d_Constants
@@ -1012,9 +1032,61 @@ public:
         } constants{batch_size, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding};
 
         bool is_fp16 = (effective_self->getDataType() == Data_Type::FLOAT16 && effective_grad->getDataType() == Data_Type::FLOAT16);
-        Compute_Pipeline pipeline = is_fp16 ? Compute_Pipeline::CONV2D_BACKWARD_PASS_WEIGHT_BIAS_GRADIENT_FP16 : Compute_Pipeline::CONV2D_BACKWARD_PASS_WEIGHT_BIAS_GRADIENT;
-        pushToGraph(pipeline, {effective_self->storage, effective_grad->storage, w_grad_gpu.storage, b_grad_gpu.storage}, constants,
-                    (output_channels + 15) / 16, (input_channels + 15) / 16, kernel_size * kernel_size);
+
+        std::shared_ptr<Gpu_Tensor_Impl> local_scratch;
+        Gpu_Tensor_Impl *effective_scratch = nullptr;
+
+        auto *gpu_scratch_candidate = dynamic_cast<Gpu_Tensor_Impl *>(im2col_scratch);
+        if (gpu_scratch_candidate != nullptr)
+        {
+            effective_scratch = gpu_scratch_candidate;
+            if (is_fp16)
+            {
+                effective_scratch->setDataType(Data_Type::FLOAT16);
+            }
+            else
+            {
+                effective_scratch->setDataType(Data_Type::FLOAT32);
+            }
+            effective_scratch->reshape(K, M);
+        }
+        else
+        {
+            local_scratch = std::make_shared<Gpu_Tensor_Impl>(Shape{K, M}, is_fp16 ? Data_Type::FLOAT16 : Data_Type::FLOAT32);
+            effective_scratch = local_scratch.get();
+        }
+
+        // 1. im2col_transposed: unrolls input patches directly into [K, M]
+        Compute_Pipeline im2col_pipeline = is_fp16 ? Compute_Pipeline::CONV2D_IM2COL_TRANSPOSED_FP16 : Compute_Pipeline::CONV2D_IM2COL_TRANSPOSED;
+        pushToGraph(im2col_pipeline, {effective_self->storage, effective_scratch->storage}, constants,
+                    (M + 15) / 16, (K + 15) / 16, 1);
+
+        // 2. Weight gradient: dW = col_transposed [K, M] * out_grad [M, output_channels] -> [K, output_channels]
+        Matrix_Dimensions matmul_dims{
+            .batch_count = 1,
+            .rows_a = K,
+            .columns_a = M,
+            .columns_b = output_channels,
+            .broadcast_b = 0};
+
+        if (is_fp16)
+        {
+            Compute_Pipeline dw_pipeline = Execution_Engine::getInstance().isCooperativeMatrixEnabled()
+                ? Compute_Pipeline::CONV2D_WEIGHT_GRADIENT_COOPMAT_FP16
+                : Compute_Pipeline::CONV2D_WEIGHT_GRADIENT_FP16;
+            pushToGraph(dw_pipeline, {effective_scratch->storage, effective_grad->storage, w_grad_gpu.storage}, matmul_dims,
+                        (output_channels + 15) / 16, (K + 15) / 16, 1);
+        }
+        else
+        {
+            pushToGraph(Compute_Pipeline::MATMUL, {effective_scratch->storage, effective_grad->storage, w_grad_gpu.storage}, matmul_dims,
+                        (output_channels + 15) / 16, (K + 15) / 16, 1);
+        }
+
+        // 3. Bias gradient: dB = sum over M of out_grad [M, output_channels] -> [output_channels]
+        Compute_Pipeline bias_pipeline = is_fp16 ? Compute_Pipeline::CONV2D_BIAS_GRADIENT_FP16 : Compute_Pipeline::CONV2D_BIAS_GRADIENT;
+        pushToGraph(bias_pipeline, {effective_grad->storage, b_grad_gpu.storage}, constants,
+                    output_channels, 1, 1);
     }
 
     void maxpool2d(Tensor_Impl &output, Tensor_Impl &output_mask,

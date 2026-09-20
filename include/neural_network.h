@@ -540,7 +540,7 @@ public:
         Logger::logMessage(Input_Format{"Neural_Network::saveTrainingCheckpoint: Saving checkpoint to {}, epoch={}",
                                         _file_path,
                                         _current_epoch},
-                           Log_Level::LOG_DEBUG,
+                           Log_Level::LOG_INFO,
                            true,
                            0,
                            Log_Feature::MODEL_SERIALIZATION);
@@ -790,6 +790,10 @@ public:
         {
             layer->setTrainingMode(_is_training_mode);
         }
+        if (execution_target == Execution_Target::VULKAN_GPU)
+        {
+            Execution_Engine::getInstance().invalidateStaticGraph();
+        }
     }
 
     void setGradientAccumulation(bool _enable) noexcept
@@ -830,4 +834,9 @@ public:
     bool isStepLearningRatePerBatch() const noexcept { return is_step_lr_per_batch; }
     void setGradientAccumulationEnabled(bool _enable) noexcept { setGradientAccumulation(_enable); }
     void setTargetSynchronized(bool _synced) noexcept { is_target_synchronized = _synced; }
+    void enableCooperationMatrix(bool _enable = true) { Execution_Engine::getInstance().setCooperativeMatrixEnabled(_enable); }
+    void enableStaticGraph(bool _enable = true) noexcept { Execution_Engine::getInstance().setStaticGraphEnabled(_enable); }
+    void setStaticGraphEnabled(bool _enable) noexcept { Execution_Engine::getInstance().setStaticGraphEnabled(_enable); }
+    bool isStaticGraphEnabled() const noexcept { return Execution_Engine::getInstance().isStaticGraphEnabled(); }
+    void invalidateStaticGraph() noexcept { Execution_Engine::getInstance().invalidateStaticGraph(); }
 };

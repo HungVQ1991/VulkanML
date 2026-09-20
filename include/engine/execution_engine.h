@@ -35,6 +35,7 @@ private:
 
     std::unordered_map<std::size_t, Cached_Graph_Template> cached_graph_templates;
     bool is_graph_cache_enabled = true;
+    bool is_static_graph_enabled = false;
 
     std::size_t computeGraphSignature(const Compute_Graph &graph) const
     {
@@ -175,6 +176,15 @@ public:
         if (graph_executor)
         {
             graph_executor->invalidate();
+            graph_executor->invalidateStaticGraph();
+        }
+    }
+
+    void invalidateStaticGraph() noexcept
+    {
+        if (graph_executor)
+        {
+            graph_executor->invalidateStaticGraph();
         }
     }
 
@@ -226,7 +236,49 @@ public:
                            0,
                            Log_Feature::DISPATCH_EXECUTION);
 
-        if (is_graph_cache_enabled && !current_graph.getNodes().empty())
+        if (is_static_graph_enabled)
+        {
+            if (is_graph_cache_enabled && !current_graph.getNodes().empty())
+            {
+                std::size_t graph_signature = computeGraphSignature(current_graph);
+                auto template_iterator = cached_graph_templates.find(graph_signature);
+                if (template_iterator == cached_graph_templates.end())
+                {
+                    auto [inserted_iterator, is_inserted] = cached_graph_templates.emplace(graph_signature, Graph_Optimizer::buildCachedTemplate(current_graph));
+                    template_iterator = inserted_iterator;
+                    precompileTemplatePipelines(template_iterator->second);
+                }
+
+                auto &cached_graph = template_iterator->second.instantiated_graphs[current_frame_index];
+                Graph_Optimizer::applyCachedTemplateInPlace(current_graph, template_iterator->second, cached_graph);
+
+                if (!graph_executor->isStaticBaked(current_frame_index) ||
+                    graph_executor->getStaticGraphSignature(current_frame_index) != graph_signature ||
+                    !graph_executor->isStaticGraphBuffersMatching(cached_graph, current_frame_index))
+                {
+                    graph_executor->bakeStaticGraph(cached_graph, current_frame_index, graph_signature);
+                }
+
+                graph_executor->executeStaticGraph(cached_graph, context->getTransferTasks(), current_frame_index, _external_fence);
+            }
+            else if (!current_graph.getNodes().empty())
+            {
+                Graph_Optimizer::optimize(current_graph);
+                std::size_t graph_signature = computeGraphSignature(current_graph);
+                if (!graph_executor->isStaticBaked(current_frame_index) ||
+                    graph_executor->getStaticGraphSignature(current_frame_index) != graph_signature ||
+                    !graph_executor->isStaticGraphBuffersMatching(current_graph, current_frame_index))
+                {
+                    graph_executor->bakeStaticGraph(current_graph, current_frame_index, graph_signature);
+                }
+                graph_executor->executeStaticGraph(current_graph, context->getTransferTasks(), current_frame_index, _external_fence);
+            }
+            else
+            {
+                graph_executor->compileAndExecute(current_graph, context->getTransferTasks(), current_frame_index, _external_fence);
+            }
+        }
+        else if (is_graph_cache_enabled && !current_graph.getNodes().empty())
         {
             std::size_t graph_signature = computeGraphSignature(current_graph);
             auto template_iterator = cached_graph_templates.find(graph_signature);
@@ -344,4 +396,18 @@ public:
         }
     }
     void enableGraphCaching(bool _is_enabled) { setGraphCachingEnabled(_is_enabled); }
+
+    bool isStaticGraphEnabled() const noexcept { return is_static_graph_enabled; }
+    void setStaticGraphEnabled(bool _enable) noexcept
+    {
+        if (is_static_graph_enabled != _enable)
+        {
+            is_static_graph_enabled = _enable;
+            invalidateStaticGraph();
+        }
+    }
+    void enableStaticGraph(bool _enable = true) noexcept
+    {
+        setStaticGraphEnabled(_enable);
+    }
 };

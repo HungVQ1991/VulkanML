@@ -1,0 +1,60 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer Input_Buffer {
+    float16_t input_data[];
+};
+
+layout(std430, set = 0, binding = 1) writeonly buffer Col_Buffer {
+    float16_t col_data[];
+};
+
+layout(push_constant) uniform Push_Constants {
+    uint batch_size;
+    uint in_h;
+    uint in_w;
+    uint in_c;
+    uint out_h;
+    uint out_w;
+    uint out_c;
+    uint kernel_size;
+    uint stride;
+    uint padding;
+} params;
+
+void main() {
+    uint m = gl_GlobalInvocationID.x;
+    uint k = gl_GlobalInvocationID.y;
+
+    uint M = params.batch_size * params.out_h * params.out_w;
+    uint K = params.kernel_size * params.kernel_size * params.in_c;
+
+    if (m >= M || k >= K) return;
+
+    uint out_spatial = params.out_h * params.out_w;
+    uint n = m / out_spatial;
+    uint spatial_idx = m % out_spatial;
+    uint out_y = spatial_idx / params.out_w;
+    uint out_x = spatial_idx % params.out_w;
+
+    uint c_in = k % params.in_c;
+    uint k_spatial = k / params.in_c;
+    uint kx = k_spatial % params.kernel_size;
+    uint ky = k_spatial / params.kernel_size;
+
+    int in_y = int(out_y * params.stride + ky) - int(params.padding);
+    int in_x = int(out_x * params.stride + kx) - int(params.padding);
+
+    float16_t val = float16_t(0.0);
+    if (in_y >= 0 && in_y < int(params.in_h) && in_x >= 0 && in_x < int(params.in_w)) {
+        uint in_row_stride = params.in_w * params.in_c;
+        uint in_batch_stride = params.in_h * in_row_stride;
+        uint in_idx = n * in_batch_stride + uint(in_y) * in_row_stride + uint(in_x) * params.in_c + c_in;
+        val = input_data[in_idx];
+    }
+
+    col_data[k * M + m] = val;
+}

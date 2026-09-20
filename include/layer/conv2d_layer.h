@@ -46,6 +46,8 @@ private:
     Tensor output_tensor_fp16;
     Tensor input_gradient_tensor_fp16;
     Tensor output_gradient_tensor_fp16;
+    Tensor im2col_scratch;
+    Tensor im2col_scratch_fp16;
 
     void initializeWeights()
     {
@@ -101,6 +103,8 @@ public:
           output_tensor_fp16(0, 0, _execution_target),
           input_gradient_tensor_fp16(0, 0, _execution_target),
           output_gradient_tensor_fp16(0, 0, _execution_target),
+          im2col_scratch(0, 0, _execution_target),
+          im2col_scratch_fp16(0, 0, _execution_target),
           is_forward_completed(false)
     {
         output_height = (input_height + 2 * padding - kernel_size) / stride + 1;
@@ -206,13 +210,13 @@ public:
 
             if (!is_accumulated)
             {
-                input_tensor_fp16.conv2dBackwardWeight(output_gradient_tensor_fp16, weights_gradient_tensor, biases_gradient_tensor, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding);
+                input_tensor_fp16.conv2dBackwardWeight(output_gradient_tensor_fp16, weights_gradient_tensor, biases_gradient_tensor, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding, &im2col_scratch_fp16);
             }
             else
             {
                 Tensor step_weights_grad(weights_gradient_tensor.getShape(), execution_target);
                 Tensor step_biases_grad(biases_gradient_tensor.getShape(), execution_target);
-                input_tensor_fp16.conv2dBackwardWeight(output_gradient_tensor_fp16, step_weights_grad, step_biases_grad, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding);
+                input_tensor_fp16.conv2dBackwardWeight(output_gradient_tensor_fp16, step_weights_grad, step_biases_grad, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding, &im2col_scratch_fp16);
                 weights_gradient_tensor = weights_gradient_tensor + step_weights_grad;
                 biases_gradient_tensor = biases_gradient_tensor + step_biases_grad;
             }
@@ -233,13 +237,13 @@ public:
         {
             if (!is_accumulated)
             {
-                input_tensor.conv2dBackwardWeight(_output_gradient, weights_gradient_tensor, biases_gradient_tensor, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding);
+                input_tensor.conv2dBackwardWeight(_output_gradient, weights_gradient_tensor, biases_gradient_tensor, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding, &im2col_scratch);
             }
             else
             {
                 Tensor step_weights_grad(weights_gradient_tensor.getShape(), execution_target);
                 Tensor step_biases_grad(biases_gradient_tensor.getShape(), execution_target);
-                input_tensor.conv2dBackwardWeight(_output_gradient, step_weights_grad, step_biases_grad, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding);
+                input_tensor.conv2dBackwardWeight(_output_gradient, step_weights_grad, step_biases_grad, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding, &im2col_scratch);
                 weights_gradient_tensor = weights_gradient_tensor + step_weights_grad;
                 biases_gradient_tensor = biases_gradient_tensor + step_biases_grad;
             }
@@ -423,6 +427,9 @@ public:
         input_tensor_fp16.setExecutionTarget(_new_execution_target);
         output_tensor_fp16.setExecutionTarget(_new_execution_target);
         input_gradient_tensor_fp16.setExecutionTarget(_new_execution_target);
+        output_gradient_tensor_fp16.setExecutionTarget(_new_execution_target);
+        im2col_scratch.setExecutionTarget(_new_execution_target);
+        im2col_scratch_fp16.setExecutionTarget(_new_execution_target);
     }
     void setOutputChannels(std::uint32_t _channels) noexcept { output_channels = _channels; }
     void setInputChannels(std::uint32_t _channels) noexcept { input_channels = _channels; }

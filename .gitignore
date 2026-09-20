@@ -29,3 +29,5 @@ train_mujoco.cpp
 include/environment/
 .editorconfig
 .prettierrc
+include/tokenizer/
+token.cpp

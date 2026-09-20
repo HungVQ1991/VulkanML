@@ -513,5 +513,53 @@
     "output_count": 1,
     "supports_cooperative_matrix": false,
     "code": "if (global_id >= {pc_0}) return; {out_0}[global_id] = float({in_0}[global_id]);"
+  },
+  "CONV2D_IM2COL_TRANSPOSED": {
+    "op_class": "STANDALONE",
+    "input_count": 1,
+    "output_count": 1,
+    "supports_cooperative_matrix": false
+  },
+  "CONV2D_IM2COL_TRANSPOSED_FP16": {
+    "op_class": "STANDALONE",
+    "input_count": 1,
+    "output_count": 1,
+    "supports_cooperative_matrix": false
+  },
+  "CONV2D_BIAS_GRADIENT": {
+    "op_class": "STANDALONE",
+    "input_count": 1,
+    "output_count": 1,
+    "supports_cooperative_matrix": false
+  },
+  "CONV2D_BIAS_GRADIENT_FP16": {
+    "op_class": "STANDALONE",
+    "input_count": 1,
+    "output_count": 1,
+    "supports_cooperative_matrix": false
+  },
+  "CONV2D_WEIGHT_GRADIENT_COOPMAT_FP16": {
+    "op_class": "STANDALONE",
+    "input_count": 2,
+    "output_count": 1,
+    "supports_cooperative_matrix": true
+  },
+  "CONV2D_WEIGHT_GRADIENT_FP16": {
+    "op_class": "STANDALONE",
+    "input_count": 2,
+    "output_count": 1,
+    "supports_cooperative_matrix": false
+  },
+  "MATMUL_COOPMAT_FP16": {
+    "op_class": "STANDALONE",
+    "input_count": 2,
+    "output_count": 1,
+    "supports_cooperative_matrix": true
+  },
+  "MATMUL_ADD_COOPMAT_FP16": {
+    "op_class": "STANDALONE",
+    "input_count": 3,
+    "output_count": 1,
+    "supports_cooperative_matrix": true
   }
 }

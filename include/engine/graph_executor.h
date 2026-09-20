@@ -55,10 +55,39 @@ private:
     mutable std::vector<std::string> printed_terminal_shader_chains;
 
     VkCommandBuffer command_buffers[MAX_FRAMES_IN_FLIGHT]{VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkCommandBuffer transfer_command_buffers[MAX_FRAMES_IN_FLIGHT]{VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkCommandBuffer static_command_buffers[MAX_FRAMES_IN_FLIGHT]{VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkCommandBuffer epilogue_command_buffers[MAX_FRAMES_IN_FLIGHT]{VK_NULL_HANDLE, VK_NULL_HANDLE};
     VkDescriptorPool descriptor_pools[MAX_FRAMES_IN_FLIGHT]{VK_NULL_HANDLE, VK_NULL_HANDLE};
+
+    bool is_static_baked[MAX_FRAMES_IN_FLIGHT]{false, false};
+    std::size_t static_graph_signatures[MAX_FRAMES_IN_FLIGHT]{0, 0};
+    std::size_t static_split_indices[MAX_FRAMES_IN_FLIGHT]{0, 0};
+    std::array<std::vector<VkBuffer>, MAX_FRAMES_IN_FLIGHT> baked_buffer_handles{};
 
     std::vector<Persistent_Descriptor_Entry> persistent_descriptor_caches[MAX_FRAMES_IN_FLIGHT];
     std::vector<std::vector<Persistent_Descriptor_Entry>> fallback_descriptor_caches[MAX_FRAMES_IN_FLIGHT];
+
+    static bool isDynamicNode(const Compute_Node &_node) noexcept
+    {
+        if (_node.pipeline_id == Compute_Pipeline::ADAM_UPDATE ||
+            _node.pipeline_id == Compute_Pipeline::SGD_UPDATE)
+        {
+            return true;
+        }
+        if (_node.is_fused)
+        {
+            for (const auto &op : _node.fused_operations)
+            {
+                if (op.pipeline_id == Compute_Pipeline::ADAM_UPDATE ||
+                    op.pipeline_id == Compute_Pipeline::SGD_UPDATE)
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
 
     mutable std::vector<VkDescriptorBufferInfo> shared_descriptor_buffer_informations;
     mutable std::vector<VkWriteDescriptorSet> shared_write_descriptor_sets;
@@ -476,7 +505,10 @@ private:
             .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
             .commandBufferCount = MAX_FRAMES_IN_FLIGHT};
 
-        if (vkAllocateCommandBuffers(device, &allocate_information, command_buffers) != VK_SUCCESS)
+        if (vkAllocateCommandBuffers(device, &allocate_information, command_buffers) != VK_SUCCESS ||
+            vkAllocateCommandBuffers(device, &allocate_information, transfer_command_buffers) != VK_SUCCESS ||
+            vkAllocateCommandBuffers(device, &allocate_information, static_command_buffers) != VK_SUCCESS ||
+            vkAllocateCommandBuffers(device, &allocate_information, epilogue_command_buffers) != VK_SUCCESS)
         {
             Logger::logMessage("Graph_Executor::initializeResources: Failed to allocate command buffers",
                                Log_Level::LOG_ERROR,
@@ -660,6 +692,9 @@ public:
             }
         }
         vkFreeCommandBuffers(device, context.getCommandPool(), MAX_FRAMES_IN_FLIGHT, command_buffers);
+        vkFreeCommandBuffers(device, context.getCommandPool(), MAX_FRAMES_IN_FLIGHT, transfer_command_buffers);
+        vkFreeCommandBuffers(device, context.getCommandPool(), MAX_FRAMES_IN_FLIGHT, static_command_buffers);
+        vkFreeCommandBuffers(device, context.getCommandPool(), MAX_FRAMES_IN_FLIGHT, epilogue_command_buffers);
     }
 
     void getExternalBufferIndices(const Compute_Node &_node, std::vector<std::uint32_t> &_output_indices) const
@@ -1227,6 +1262,21 @@ public:
             }
             persistent_descriptor_caches[i].clear();
             fallback_descriptor_caches[i].clear();
+            is_static_baked[i] = false;
+            static_graph_signatures[i] = 0;
+            static_split_indices[i] = 0;
+            baked_buffer_handles[i].clear();
+        }
+    }
+
+    void invalidateStaticGraph() noexcept
+    {
+        for (std::uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        {
+            is_static_baked[i] = false;
+            static_graph_signatures[i] = 0;
+            static_split_indices[i] = 0;
+            baked_buffer_handles[i].clear();
         }
     }
 
@@ -1240,6 +1290,192 @@ public:
                                0,
                                Log_Feature::DISPATCH_EXECUTION);
             return;
+        }
+    }
+
+    void recordComputeNodes(VkCommandBuffer _command_buffer,
+                            const std::vector<Compute_Node> &_nodes,
+                            std::size_t _start_index,
+                            std::size_t _end_index,
+                            std::uint32_t _frame_index)
+    {
+        if (_start_index >= _end_index || _start_index >= _nodes.size())
+        {
+            return;
+        }
+
+        std::size_t end_idx = std::min(_end_index, _nodes.size());
+        VkDevice device = context.getDevice();
+
+        if (persistent_descriptor_caches[_frame_index].size() < end_idx)
+        {
+            persistent_descriptor_caches[_frame_index].resize(end_idx);
+        }
+
+        for (std::size_t i = _start_index; i < end_idx; ++i)
+        {
+            const Compute_Node &node = _nodes[i];
+
+            for (const auto &vector_ptr : node.buffers)
+            {
+                if (vector_ptr)
+                {
+                    vector_ptr->markAsUsedInFrame(_frame_index);
+                }
+                else
+                {
+                    Logger::logMessage(Input_Format{"Graph_Executor::recordComputeNodes: Null gpu::vector buffer encountered in compute node {}", i},
+                                       Log_Level::LOG_WARNING,
+                                       true,
+                                       0,
+                                       Log_Feature::DISPATCH_EXECUTION);
+                }
+            }
+
+            bool is_fused_successful = false;
+            if (node.is_fused && node.fused_operations.size() > 1)
+            {
+                try
+                {
+                    VkPipeline target_pipeline = node.cached_pipeline;
+                    if (target_pipeline == VK_NULL_HANDLE)
+                    {
+                        std::string glsl_code = node.fused_glsl_code.empty() ? generateFusedGlsl(node) : node.fused_glsl_code;
+                        target_pipeline = pipeline_cache_manager.getOrCreatePipeline(glsl_code);
+                    }
+
+                    if (target_pipeline != VK_NULL_HANDLE)
+                    {
+                        const std::vector<std::uint32_t> &external_indices = !node.cached_external_buffer_indices.empty()
+                                                                                 ? node.cached_external_buffer_indices
+                                                                                 : (getExternalBufferIndices(node, shared_external_buffer_indices), shared_external_buffer_indices);
+
+                        shared_fused_buffers.clear();
+                        for (std::uint32_t buffer_index : external_indices)
+                        {
+                            if (buffer_index < node.buffers.size())
+                            {
+                                shared_fused_buffers.push_back(node.buffers[buffer_index]);
+                            }
+                        }
+
+                        auto &entry = persistent_descriptor_caches[_frame_index][i];
+                        if (entry.descriptor_set == VK_NULL_HANDLE)
+                        {
+                            VkDescriptorSetLayout layout = network.getDescriptorSetLayout();
+                            VkDescriptorSetAllocateInfo allocate_information{
+                                .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                                .pNext = nullptr,
+                                .descriptorPool = descriptor_pools[_frame_index],
+                                .descriptorSetCount = 1,
+                                .pSetLayouts = &layout};
+
+                            if (vkAllocateDescriptorSets(device, &allocate_information, &entry.descriptor_set) != VK_SUCCESS)
+                            {
+                                Logger::logMessage(Input_Format{"Graph_Executor::recordComputeNodes: Failed to allocate persistent descriptor set for fused node {}", i},
+                                                   Log_Level::LOG_ERROR,
+                                                   true,
+                                                   0,
+                                                   Log_Feature::DISPATCH_EXECUTION);
+                                throw std::runtime_error("Failed to allocate descriptor set");
+                            }
+                        }
+
+                        if (!isBuffersMatching(entry, external_indices, shared_fused_buffers))
+                        {
+                            updateDescriptorSet(entry.descriptor_set, external_indices, shared_fused_buffers);
+                            entry.bound_binding_indices = external_indices;
+                            entry.bound_buffers.resize(shared_fused_buffers.size());
+                            for (std::size_t j = 0; j < shared_fused_buffers.size(); ++j)
+                            {
+                                entry.bound_buffers[j] = shared_fused_buffers[j] ? shared_fused_buffers[j]->getBuffer() : VK_NULL_HANDLE;
+                            }
+                        }
+
+                        vkCmdBindPipeline(_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, target_pipeline);
+                        vkCmdBindDescriptorSets(_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, network.getPipelineLayout(), 0, 1, &entry.descriptor_set, 0, nullptr);
+
+                        if (!node.push_constants_data.empty())
+                        {
+                            std::uint32_t push_constants_size = std::min<std::uint32_t>(static_cast<std::uint32_t>(node.push_constants_data.size()), 128);
+                            vkCmdPushConstants(_command_buffer, network.getPipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0, push_constants_size, node.push_constants_data.data());
+                        }
+
+                        vkCmdDispatch(_command_buffer, node.workgroup_count_x, node.workgroup_count_y, node.workgroup_count_z);
+                        is_fused_successful = true;
+                    }
+                }
+                catch (const std::exception &exception)
+                {
+                    Logger::logMessage(Input_Format{"Graph_Executor::recordComputeNodes: Fused shader execution failed for node [{}] ({}), initiating fallback execution", i, exception.what()},
+                                       Log_Level::LOG_WARNING,
+                                       true,
+                                       0,
+                                       Log_Feature::DISPATCH_EXECUTION | Log_Feature::OPERATOR_FUSION);
+                    is_fused_successful = false;
+                }
+            }
+
+            if (!is_fused_successful)
+            {
+                if (node.is_fused && node.fused_operations.size() > 1)
+                {
+                    executeFallbackNode(_command_buffer, node, i, _frame_index);
+                }
+                else
+                {
+                    auto &entry = persistent_descriptor_caches[_frame_index][i];
+                    if (entry.descriptor_set == VK_NULL_HANDLE)
+                    {
+                        VkDescriptorSetLayout layout = network.getDescriptorSetLayout();
+                        VkDescriptorSetAllocateInfo allocate_information{
+                            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                            .pNext = nullptr,
+                            .descriptorPool = descriptor_pools[_frame_index],
+                            .descriptorSetCount = 1,
+                            .pSetLayouts = &layout};
+
+                        if (vkAllocateDescriptorSets(device, &allocate_information, &entry.descriptor_set) != VK_SUCCESS)
+                        {
+                            Logger::logMessage(Input_Format{"Graph_Executor::recordComputeNodes: Failed to allocate descriptor set for node {}", i},
+                                               Log_Level::LOG_ERROR,
+                                               true,
+                                               0,
+                                               Log_Feature::DISPATCH_EXECUTION);
+                            throw std::runtime_error("Failed to allocate descriptor set");
+                        }
+                    }
+
+                    if (!isBuffersMatching(entry, node.buffers))
+                    {
+                        updateDescriptorSet(entry.descriptor_set, node.buffers);
+                        entry.bound_binding_indices.clear();
+                        entry.bound_buffers.resize(node.buffers.size());
+                        for (std::size_t j = 0; j < node.buffers.size(); ++j)
+                        {
+                            entry.bound_buffers[j] = node.buffers[j] ? node.buffers[j]->getBuffer() : VK_NULL_HANDLE;
+                        }
+                    }
+
+                    VkPipeline target_pipeline = network.getPipeline(node.pipeline_id);
+
+                    vkCmdBindPipeline(_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, target_pipeline);
+                    vkCmdBindDescriptorSets(_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, network.getPipelineLayout(), 0, 1, &entry.descriptor_set, 0, nullptr);
+
+                    if (!node.push_constants_data.empty())
+                    {
+                        std::uint32_t push_constants_size = std::min<std::uint32_t>(static_cast<std::uint32_t>(node.push_constants_data.size()), 128);
+                        vkCmdPushConstants(_command_buffer, network.getPipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0, push_constants_size, node.push_constants_data.data());
+                    }
+
+                    vkCmdDispatch(_command_buffer, node.workgroup_count_x, node.workgroup_count_y, node.workgroup_count_z);
+                }
+            }
+
+            if (node.is_barrier_required_after)
+            {
+                insertBufferMemoryBarriers(_command_buffer, getNodeWrittenBuffers(node));
+            }
         }
     }
 
@@ -1337,176 +1573,7 @@ public:
                 0, nullptr);
         }
 
-        if (persistent_descriptor_caches[_frame_index].size() < nodes.size())
-        {
-            persistent_descriptor_caches[_frame_index].resize(nodes.size());
-        }
-
-        for (std::size_t i = 0; i < nodes.size(); ++i)
-        {
-            const Compute_Node &node = nodes[i];
-
-            for (const auto &vector_ptr : node.buffers)
-            {
-                if (vector_ptr)
-                {
-                    vector_ptr->markAsUsedInFrame(_frame_index);
-                }
-                else
-                {
-                    Logger::logMessage(Input_Format{"Graph_Executor::compileAndExecute: Null gpu::vector buffer encountered in compute node {}", i},
-                                       Log_Level::LOG_WARNING,
-                                       true,
-                                       0,
-                                       Log_Feature::DISPATCH_EXECUTION);
-                }
-            }
-
-            bool is_fused_successful = false;
-            if (node.is_fused && node.fused_operations.size() > 1)
-            {
-                try
-                {
-                    VkPipeline target_pipeline = node.cached_pipeline;
-                    if (target_pipeline == VK_NULL_HANDLE)
-                    {
-                        std::string glsl_code = node.fused_glsl_code.empty() ? generateFusedGlsl(node) : node.fused_glsl_code;
-                        target_pipeline = pipeline_cache_manager.getOrCreatePipeline(glsl_code);
-                    }
-
-                    if (target_pipeline != VK_NULL_HANDLE)
-                    {
-                        const std::vector<std::uint32_t> &external_indices = !node.cached_external_buffer_indices.empty()
-                                                                                 ? node.cached_external_buffer_indices
-                                                                                 : (getExternalBufferIndices(node, shared_external_buffer_indices), shared_external_buffer_indices);
-
-                        shared_fused_buffers.clear();
-                        for (std::uint32_t buffer_index : external_indices)
-                        {
-                            if (buffer_index < node.buffers.size())
-                            {
-                                shared_fused_buffers.push_back(node.buffers[buffer_index]);
-                            }
-                        }
-
-                        auto &entry = persistent_descriptor_caches[_frame_index][i];
-                        if (entry.descriptor_set == VK_NULL_HANDLE)
-                        {
-                            VkDescriptorSetLayout layout = network.getDescriptorSetLayout();
-                            VkDescriptorSetAllocateInfo allocate_information{
-                                .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-                                .pNext = nullptr,
-                                .descriptorPool = descriptor_pools[_frame_index],
-                                .descriptorSetCount = 1,
-                                .pSetLayouts = &layout};
-
-                            if (vkAllocateDescriptorSets(device, &allocate_information, &entry.descriptor_set) != VK_SUCCESS)
-                            {
-                                Logger::logMessage(Input_Format{"Graph_Executor::compileAndExecute: Failed to allocate persistent descriptor set for fused node {}", i},
-                                                   Log_Level::LOG_ERROR,
-                                                   true,
-                                                   0,
-                                                   Log_Feature::DISPATCH_EXECUTION);
-                                throw std::runtime_error("Failed to allocate descriptor set");
-                            }
-                        }
-
-                        if (!isBuffersMatching(entry, external_indices, shared_fused_buffers))
-                        {
-                            updateDescriptorSet(entry.descriptor_set, external_indices, shared_fused_buffers);
-                            entry.bound_binding_indices = external_indices;
-                            entry.bound_buffers.resize(shared_fused_buffers.size());
-                            for (std::size_t j = 0; j < shared_fused_buffers.size(); ++j)
-                            {
-                                entry.bound_buffers[j] = shared_fused_buffers[j] ? shared_fused_buffers[j]->getBuffer() : VK_NULL_HANDLE;
-                            }
-                        }
-
-                        vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, target_pipeline);
-                        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, network.getPipelineLayout(), 0, 1, &entry.descriptor_set, 0, nullptr);
-
-                        if (!node.push_constants_data.empty())
-                        {
-                            std::uint32_t push_constants_size = std::min<std::uint32_t>(static_cast<std::uint32_t>(node.push_constants_data.size()), 128);
-                            vkCmdPushConstants(command_buffer, network.getPipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0, push_constants_size, node.push_constants_data.data());
-                        }
-
-                        vkCmdDispatch(command_buffer, node.workgroup_count_x, node.workgroup_count_y, node.workgroup_count_z);
-                        is_fused_successful = true;
-                    }
-                }
-                catch (const std::exception &exception)
-                {
-                    Logger::logMessage(Input_Format{"Graph_Executor::compileAndExecute: Fused shader execution failed for node [{}] ({}), initiating fallback execution", i, exception.what()},
-                                       Log_Level::LOG_WARNING,
-                                       true,
-                                       0,
-                                       Log_Feature::DISPATCH_EXECUTION | Log_Feature::OPERATOR_FUSION);
-                    is_fused_successful = false;
-                }
-            }
-
-            if (!is_fused_successful)
-            {
-                if (node.is_fused && node.fused_operations.size() > 1)
-                {
-                    executeFallbackNode(command_buffer, node, i, _frame_index);
-                }
-                else
-                {
-                    auto &entry = persistent_descriptor_caches[_frame_index][i];
-                    if (entry.descriptor_set == VK_NULL_HANDLE)
-                    {
-                        VkDescriptorSetLayout layout = network.getDescriptorSetLayout();
-                        VkDescriptorSetAllocateInfo allocate_information{
-                            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-                            .pNext = nullptr,
-                            .descriptorPool = descriptor_pools[_frame_index],
-                            .descriptorSetCount = 1,
-                            .pSetLayouts = &layout};
-
-                        if (vkAllocateDescriptorSets(device, &allocate_information, &entry.descriptor_set) != VK_SUCCESS)
-                        {
-                            Logger::logMessage(Input_Format{"Graph_Executor::compileAndExecute: Failed to allocate descriptor set for node {}", i},
-                                               Log_Level::LOG_ERROR,
-                                               true,
-                                               0,
-                                               Log_Feature::DISPATCH_EXECUTION);
-                            throw std::runtime_error("Failed to allocate descriptor set");
-                        }
-                    }
-
-                    if (!isBuffersMatching(entry, node.buffers))
-                    {
-                        updateDescriptorSet(entry.descriptor_set, node.buffers);
-                        entry.bound_binding_indices.clear();
-                        entry.bound_buffers.resize(node.buffers.size());
-                        for (std::size_t j = 0; j < node.buffers.size(); ++j)
-                        {
-                            entry.bound_buffers[j] = node.buffers[j] ? node.buffers[j]->getBuffer() : VK_NULL_HANDLE;
-                        }
-                    }
-
-                    VkPipeline target_pipeline = network.getPipeline(node.pipeline_id);
-
-                    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, target_pipeline);
-                    vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, network.getPipelineLayout(), 0, 1, &entry.descriptor_set, 0, nullptr);
-
-                    if (!node.push_constants_data.empty())
-                    {
-                        std::uint32_t push_constants_size = std::min<std::uint32_t>(static_cast<std::uint32_t>(node.push_constants_data.size()), 128);
-                        vkCmdPushConstants(command_buffer, network.getPipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0, push_constants_size, node.push_constants_data.data());
-                    }
-
-                    vkCmdDispatch(command_buffer, node.workgroup_count_x, node.workgroup_count_y, node.workgroup_count_z);
-                }
-            }
-
-            if (node.is_barrier_required_after)
-            {
-                insertBufferMemoryBarriers(command_buffer, getNodeWrittenBuffers(node));
-            }
-        }
+        recordComputeNodes(command_buffer, nodes, 0, nodes.size(), _frame_index);
 
         if (vkEndCommandBuffer(command_buffer) != VK_SUCCESS)
         {
@@ -1544,6 +1611,277 @@ public:
         if (_external_fence != VK_NULL_HANDLE && _external_fence != context.getFrameFence(_frame_index))
         {
             vkQueueSubmit(context.getComputeQueue(), 0, nullptr, context.getFrameFence(_frame_index));
+        }
+    }
+
+    void bakeStaticGraph(const Compute_Graph &_graph, std::uint32_t _frame_index, std::size_t _signature)
+    {
+        if (_frame_index >= MAX_FRAMES_IN_FLIGHT)
+        {
+            return;
+        }
+
+        const auto &nodes = _graph.getNodes();
+        if (nodes.empty())
+        {
+            return;
+        }
+
+        std::size_t split_index = nodes.size();
+        for (std::size_t i = 0; i < nodes.size(); ++i)
+        {
+            if (isDynamicNode(nodes[i]))
+            {
+                split_index = i;
+                break;
+            }
+        }
+
+        static_split_indices[_frame_index] = split_index;
+        static_graph_signatures[_frame_index] = _signature;
+
+        VkCommandBuffer static_cmd = static_command_buffers[_frame_index];
+
+        if (vkResetCommandBuffer(static_cmd, 0) != VK_SUCCESS)
+        {
+            Logger::logMessage(Input_Format{"Graph_Executor::bakeStaticGraph: Failed to reset static command buffer for frame {}", _frame_index},
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::DISPATCH_EXECUTION);
+            throw std::runtime_error("Failed to reset static command buffer");
+        }
+
+        VkCommandBufferBeginInfo begin_information{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .pInheritanceInfo = nullptr};
+
+        if (vkBeginCommandBuffer(static_cmd, &begin_information) != VK_SUCCESS)
+        {
+            Logger::logMessage(Input_Format{"Graph_Executor::bakeStaticGraph: Failed to begin static command buffer for frame {}", _frame_index},
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::DISPATCH_EXECUTION);
+            throw std::runtime_error("Failed to begin static command buffer");
+        }
+
+        if (split_index > 0)
+        {
+            recordComputeNodes(static_cmd, nodes, 0, split_index, _frame_index);
+        }
+
+        if (vkEndCommandBuffer(static_cmd) != VK_SUCCESS)
+        {
+            Logger::logMessage(Input_Format{"Graph_Executor::bakeStaticGraph: Failed to end static command buffer for frame {}", _frame_index},
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::DISPATCH_EXECUTION);
+            throw std::runtime_error("Failed to end static command buffer");
+        }
+
+        baked_buffer_handles[_frame_index].clear();
+        for (std::size_t i = 0; i < split_index; ++i)
+        {
+            for (const auto &buf : nodes[i].buffers)
+            {
+                baked_buffer_handles[_frame_index].push_back(buf ? buf->getBuffer() : VK_NULL_HANDLE);
+            }
+        }
+
+        is_static_baked[_frame_index] = true;
+
+        Logger::logMessage(Input_Format{"Graph_Executor::bakeStaticGraph: Successfully baked static graph for frame {} (static nodes: {}, epilogue nodes: {})",
+                                        _frame_index, split_index, nodes.size() - split_index},
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::DISPATCH_EXECUTION);
+    }
+
+    bool isStaticGraphBuffersMatching(const Compute_Graph &_graph, std::uint32_t _frame_index) const
+    {
+        if (_frame_index >= MAX_FRAMES_IN_FLIGHT || !is_static_baked[_frame_index])
+        {
+            return false;
+        }
+
+        const auto &nodes = _graph.getNodes();
+        std::size_t split_index = static_split_indices[_frame_index];
+        if (split_index > nodes.size())
+        {
+            return false;
+        }
+
+        const auto &baked = baked_buffer_handles[_frame_index];
+        std::size_t handle_index = 0;
+
+        for (std::size_t i = 0; i < split_index; ++i)
+        {
+            for (const auto &buf : nodes[i].buffers)
+            {
+                if (handle_index >= baked.size())
+                {
+                    return false;
+                }
+                VkBuffer current_handle = buf ? buf->getBuffer() : VK_NULL_HANDLE;
+                if (current_handle != baked[handle_index])
+                {
+                    Logger::logMessage(Input_Format{"isStaticGraphBuffersMatching: Mismatch at node {} (pipeline {}), buffer index {} | current_handle={}, baked_handle={}",
+                                                    i, static_cast<int>(nodes[i].pipeline_id), handle_index,
+                                                    reinterpret_cast<void*>(current_handle), reinterpret_cast<void*>(baked[handle_index])},
+                                       Log_Level::LOG_DEBUG, true, 2, Log_Feature::DISPATCH_EXECUTION);
+                    return false;
+                }
+                handle_index++;
+            }
+        }
+
+        return (handle_index == baked.size());
+    }
+
+    void executeStaticGraph(const Compute_Graph &_graph,
+                            const std::vector<Buffer_Transfer_Task> &_transfer_tasks,
+                            std::uint32_t _frame_index,
+                            VkFence _external_fence = VK_NULL_HANDLE)
+    {
+        if (_frame_index >= MAX_FRAMES_IN_FLIGHT)
+        {
+            return;
+        }
+
+        const auto &nodes = _graph.getNodes();
+        std::size_t split_index = static_split_indices[_frame_index];
+
+        context.resetFrameFence(_frame_index);
+
+        std::array<VkCommandBuffer, 3> submit_command_buffers{};
+        std::uint32_t submit_count = 0;
+
+        if (!_transfer_tasks.empty())
+        {
+            VkCommandBuffer transfer_cmd = transfer_command_buffers[_frame_index];
+
+            if (vkResetCommandBuffer(transfer_cmd, 0) != VK_SUCCESS)
+            {
+                throw std::runtime_error("Failed to reset transfer command buffer");
+            }
+
+            VkCommandBufferBeginInfo begin_information{
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                .pNext = nullptr,
+                .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+                .pInheritanceInfo = nullptr};
+
+            if (vkBeginCommandBuffer(transfer_cmd, &begin_information) != VK_SUCCESS)
+            {
+                throw std::runtime_error("Failed to begin transfer command buffer");
+            }
+
+            for (const auto &task : _transfer_tasks)
+            {
+                if (task.size == 0 || task.source_buffer == VK_NULL_HANDLE || task.destination_buffer == VK_NULL_HANDLE)
+                {
+                    continue;
+                }
+
+                VkBufferCopy copy_region{
+                    .srcOffset = task.source_offset,
+                    .dstOffset = task.destination_offset,
+                    .size = task.size};
+
+                vkCmdCopyBuffer(transfer_cmd, task.source_buffer, task.destination_buffer, 1, &copy_region);
+            }
+
+            VkMemoryBarrier transfer_memory_barrier{
+                .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+                .pNext = nullptr,
+                .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                .dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT};
+
+            vkCmdPipelineBarrier(
+                transfer_cmd,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0, 1, &transfer_memory_barrier,
+                0, nullptr,
+                0, nullptr);
+
+            if (vkEndCommandBuffer(transfer_cmd) != VK_SUCCESS)
+            {
+                throw std::runtime_error("Failed to end transfer command buffer");
+            }
+
+            submit_command_buffers[submit_count++] = transfer_cmd;
+        }
+
+        if (split_index > 0 && is_static_baked[_frame_index])
+        {
+            submit_command_buffers[submit_count++] = static_command_buffers[_frame_index];
+        }
+
+        if (split_index < nodes.size())
+        {
+            VkCommandBuffer epilogue_cmd = epilogue_command_buffers[_frame_index];
+
+            if (vkResetCommandBuffer(epilogue_cmd, 0) != VK_SUCCESS)
+            {
+                throw std::runtime_error("Failed to reset epilogue command buffer");
+            }
+
+            VkCommandBufferBeginInfo begin_information{
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                .pNext = nullptr,
+                .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+                .pInheritanceInfo = nullptr};
+
+            if (vkBeginCommandBuffer(epilogue_cmd, &begin_information) != VK_SUCCESS)
+            {
+                throw std::runtime_error("Failed to begin epilogue command buffer");
+            }
+
+            recordComputeNodes(epilogue_cmd, nodes, split_index, nodes.size(), _frame_index);
+
+            if (vkEndCommandBuffer(epilogue_cmd) != VK_SUCCESS)
+            {
+                throw std::runtime_error("Failed to end epilogue command buffer");
+            }
+
+            submit_command_buffers[submit_count++] = epilogue_cmd;
+        }
+
+        if (submit_count > 0)
+        {
+            VkSubmitInfo submit_information{
+                .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                .pNext = nullptr,
+                .waitSemaphoreCount = 0,
+                .pWaitSemaphores = nullptr,
+                .pWaitDstStageMask = nullptr,
+                .commandBufferCount = submit_count,
+                .pCommandBuffers = submit_command_buffers.data(),
+                .signalSemaphoreCount = 0,
+                .pSignalSemaphores = nullptr};
+
+            VkFence primary_fence = (_external_fence != VK_NULL_HANDLE) ? _external_fence : context.getFrameFence(_frame_index);
+
+            if (vkQueueSubmit(context.getComputeQueue(), 1, &submit_information, primary_fence) != VK_SUCCESS)
+            {
+                Logger::logMessage(Input_Format{"Graph_Executor::executeStaticGraph: Failed to submit command buffer for frame {}", _frame_index},
+                                   Log_Level::LOG_ERROR,
+                                   true,
+                                   0,
+                                   Log_Feature::DISPATCH_EXECUTION);
+                throw std::runtime_error("Failed to submit command buffer");
+            }
+
+            if (_external_fence != VK_NULL_HANDLE && _external_fence != context.getFrameFence(_frame_index))
+            {
+                vkQueueSubmit(context.getComputeQueue(), 0, nullptr, context.getFrameFence(_frame_index));
+            }
         }
     }
 
@@ -1626,6 +1964,31 @@ public:
             return VK_NULL_HANDLE;
         }
         return descriptor_pools[_frame_index];
+    }
+
+    VkCommandBuffer getTransferCommandBuffer(std::uint32_t _frame_index) const noexcept
+    {
+        return (_frame_index < MAX_FRAMES_IN_FLIGHT) ? transfer_command_buffers[_frame_index] : VK_NULL_HANDLE;
+    }
+    VkCommandBuffer getStaticCommandBuffer(std::uint32_t _frame_index) const noexcept
+    {
+        return (_frame_index < MAX_FRAMES_IN_FLIGHT) ? static_command_buffers[_frame_index] : VK_NULL_HANDLE;
+    }
+    VkCommandBuffer getEpilogueCommandBuffer(std::uint32_t _frame_index) const noexcept
+    {
+        return (_frame_index < MAX_FRAMES_IN_FLIGHT) ? epilogue_command_buffers[_frame_index] : VK_NULL_HANDLE;
+    }
+    bool isStaticBaked(std::uint32_t _frame_index) const noexcept
+    {
+        return (_frame_index < MAX_FRAMES_IN_FLIGHT) ? is_static_baked[_frame_index] : false;
+    }
+    std::size_t getStaticGraphSignature(std::uint32_t _frame_index) const noexcept
+    {
+        return (_frame_index < MAX_FRAMES_IN_FLIGHT) ? static_graph_signatures[_frame_index] : 0;
+    }
+    std::size_t getStaticSplitIndex(std::uint32_t _frame_index) const noexcept
+    {
+        return (_frame_index < MAX_FRAMES_IN_FLIGHT) ? static_split_indices[_frame_index] : 0;
     }
 
     void setPrintedTerminalShaderChains(const std::vector<std::string> &_chains) { printed_terminal_shader_chains = _chains; }

@@ -18,6 +18,7 @@ private:
     Tensor input_tensor;
     Tensor output_tensor;
     Tensor input_gradient_tensor;
+    Tensor input_fp32;
     bool is_fused_with_loss = false;
     bool is_forward_completed = false;
     Execution_Target execution_target = Execution_Target::CPU;
@@ -28,6 +29,7 @@ public:
         : input_tensor(0, 0, _execution_target),
           output_tensor(0, 0, _execution_target),
           input_gradient_tensor(0, 0, _execution_target),
+          input_fp32(0, 0, _execution_target),
           is_fused_with_loss(_is_fused_with_loss),
           execution_target(_execution_target),
           is_forward_completed(false)
@@ -49,7 +51,6 @@ public:
         input_tensor = _input_tensor;
         if (input_tensor.getDataType() == Data_Type::FLOAT16)
         {
-            Tensor input_fp32(input_tensor.getExecutionTarget());
             input_tensor.to(Data_Type::FLOAT32, input_fp32);
             input_fp32.softmax(output_tensor);
         }

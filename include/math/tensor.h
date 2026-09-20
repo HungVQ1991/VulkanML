@@ -297,10 +297,13 @@ public:
     void conv2dBackwardWeight(const Tensor &output_gradient, Tensor &weight_gradient, Tensor &bias_gradient,
                               std::uint32_t input_height, std::uint32_t input_width, std::uint32_t input_channels,
                               std::uint32_t output_height, std::uint32_t output_width, std::uint32_t output_channels,
-                              std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const
+                              std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding,
+                              Tensor *im2col_scratch = nullptr) const
     {
         implementation->conv2dBackwardWeight(*output_gradient.implementation, *weight_gradient.implementation, *bias_gradient.implementation,
-                                             input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding);
+                                             input_height, input_width, input_channels, output_height, output_width, output_channels,
+                                             kernel_size, stride, padding,
+                                             im2col_scratch ? im2col_scratch->implementation.get() : nullptr);
     }
 
     void maxpool2d(Tensor &output, Tensor &output_mask,

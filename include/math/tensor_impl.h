@@ -144,7 +144,8 @@ public:
     virtual void conv2dBackwardWeight(const Tensor_Impl &output_gradient, Tensor_Impl &weight_gradient, Tensor_Impl &bias_gradient,
                                       std::uint32_t input_height, std::uint32_t input_width, std::uint32_t input_channels,
                                       std::uint32_t output_height, std::uint32_t output_width, std::uint32_t output_channels,
-                                      std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const = 0;
+                                      std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding,
+                                      Tensor_Impl *im2col_scratch = nullptr) const = 0;
 
     virtual void maxpool2d(Tensor_Impl &output, Tensor_Impl &output_mask,
                            std::uint32_t input_height, std::uint32_t input_width, std::uint32_t channels,

@@ -2111,6 +2111,110 @@ bool testLossScalerAndAmp()
     return true;
 }
 
+bool testStaticCommandBuffer()
+{
+    Execution_Engine &engine = Execution_Engine::getInstance();
+    engine.waitIdle();
+
+    Neural_Network nn(Execution_Target::VULKAN_GPU);
+    nn.enableStaticGraph(true);
+    if (!nn.isStaticGraphEnabled())
+    {
+        return false;
+    }
+
+    nn.addLayer<Linear_Layer>(4, 8, Execution_Target::VULKAN_GPU);
+    nn.addLayer<Gelu_Layer>(Execution_Target::VULKAN_GPU);
+    nn.addLayer<Linear_Layer>(8, 2, Execution_Target::VULKAN_GPU);
+
+    nn.setOptimizer<Adam_Optimizer>(0.01f);
+    nn.setCostFunction<Mse_Cost>();
+    nn.setTrainingMode(true);
+
+    // Initial check: static graph not baked yet
+    if (engine.getGraphExecutor().isStaticBaked(0) || engine.getGraphExecutor().isStaticBaked(1))
+    {
+        return false;
+    }
+
+    // Step 1: Batch 1 -> should bake first frame
+    std::uint32_t f0 = engine.getContext().getCurrentFrame();
+    Tensor in1(2, 4, std::vector<float>{1.0f, 0.5f, -0.5f, 2.0f, -1.0f, 0.0f, 1.5f, -2.0f}, Execution_Target::VULKAN_GPU);
+    Tensor tgt1(2, 2, std::vector<float>{0.5f, -0.5f, 1.0f, 0.0f}, Execution_Target::VULKAN_GPU);
+    nn.trainStep(in1, tgt1);
+    engine.waitIdle();
+
+    if (!engine.getGraphExecutor().isStaticBaked(f0))
+    {
+        return false;
+    }
+
+    // Step 2: Batch 2 -> should bake second frame
+    std::uint32_t f1 = engine.getContext().getCurrentFrame();
+    Tensor in2(2, 4, std::vector<float>{0.2f, -0.3f, 0.8f, 1.1f, -0.5f, 0.4f, -1.2f, 0.7f}, Execution_Target::VULKAN_GPU);
+    Tensor tgt2(2, 2, std::vector<float>{0.1f, 0.9f, -0.3f, 0.4f}, Execution_Target::VULKAN_GPU);
+    nn.trainStep(in2, tgt2);
+    engine.waitIdle();
+
+    if (!engine.getGraphExecutor().isStaticBaked(f1))
+    {
+        return false;
+    }
+
+    // Both frames are now baked
+    if (!engine.getGraphExecutor().isStaticBaked(0) || !engine.getGraphExecutor().isStaticBaked(1))
+    {
+        return false;
+    }
+
+    // Step 3: Batch 3 -> should REPLAY baked frame without re-baking
+    nn.trainStep(in1, tgt1);
+    engine.waitIdle();
+
+    if (!engine.getGraphExecutor().isStaticBaked(0) || !engine.getGraphExecutor().isStaticBaked(1))
+    {
+        return false;
+    }
+
+    // Switch to evaluation mode: should invalidate static graph
+    nn.setTrainingMode(false);
+    if (engine.getGraphExecutor().isStaticBaked(0) || engine.getGraphExecutor().isStaticBaked(1))
+    {
+        return false;
+    }
+
+    // Inference forward:
+    std::uint32_t f_inf = engine.getContext().getCurrentFrame();
+    Matrix test_in(2, 4, std::vector<float>{1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f}, Execution_Target::VULKAN_GPU);
+    Matrix pred = nn.forward(test_in);
+    engine.executeGraph();
+    engine.waitIdle();
+
+    // Now current frame of inference should be baked
+    if (!engine.getGraphExecutor().isStaticBaked(f_inf))
+    {
+        return false;
+    }
+
+    // Replay inference on second batch
+    Matrix pred2 = nn.forward(test_in);
+    engine.executeGraph();
+    engine.waitIdle();
+
+    auto pred_data = pred.getData();
+    if (pred_data.size() != 4)
+    {
+        return false;
+    }
+
+    // Clean up
+    nn.enableStaticGraph(false);
+    engine.invalidateStaticGraph();
+    engine.waitIdle();
+
+    return true;
+}
+
 void runTestSuite(Execution_Target exec_target, const std::string& target_name)
 {
     std::cout << "   RUNNING TEST SUITE ON " << target_name << "\n";
@@ -2198,6 +2302,7 @@ int main()
     std::cout << "  FP16 CPU Support & Precision Cast: " << (testFp16SupportAndCastingCpu() ? "PASS" : "FAIL") << "\n";
     std::cout << "  FP16 GPU Support & Precision Cast: " << (testFp16SupportAndCastingGpu() ? "PASS" : "FAIL") << "\n";
     std::cout << "  Loss Scaler & Mixed Precision AMP: " << (testLossScalerAndAmp() ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Static Command Buffer (Replay):    " << (testStaticCommandBuffer() ? "PASS" : "FAIL") << "\n";
     std::cout << "========================================\n";
 
     return 0;
