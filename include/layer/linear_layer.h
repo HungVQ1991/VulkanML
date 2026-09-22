@@ -36,9 +36,9 @@ private:
     Tensor input_gradient_tensor_fp16;
     Tensor output_gradient_tensor_fp16;
 
-    std::size_t input_dimension = 0;
+    size_t input_dimension = 0;
     float initialization_gain = 2.0f;
-    std::size_t output_dimension = 0;
+    size_t output_dimension = 0;
     bool is_forward_completed = false;
     Execution_Target execution_target = Execution_Target::CPU;
 
@@ -62,8 +62,8 @@ public:
           is_forward_completed(false)
     {}
 
-    Linear_Layer(std::size_t _input_dimension,
-                 std::size_t _output_dimension,
+    Linear_Layer(size_t _input_dimension,
+                 size_t _output_dimension,
                  Execution_Target _execution_target = Execution_Target::CPU,
                  float _initialization_gain = 2.0f)
         : weights(0, 0, _execution_target),
@@ -277,8 +277,8 @@ public:
 
     void saveConfiguration(std::ofstream &_output_file_stream) const override
     {
-        std::uint32_t input_dimension_value = static_cast<std::uint32_t>(input_dimension);
-        std::uint32_t output_dimension_value = static_cast<std::uint32_t>(output_dimension);
+        uint32_t input_dimension_value = static_cast<uint32_t>(input_dimension);
+        uint32_t output_dimension_value = static_cast<uint32_t>(output_dimension);
         _output_file_stream.write(reinterpret_cast<const char *>(&input_dimension_value), sizeof(input_dimension_value));
         _output_file_stream.write(reinterpret_cast<const char *>(&output_dimension_value), sizeof(output_dimension_value));
     }
@@ -315,7 +315,7 @@ public:
         output_dimension = weights.getColumns();
     }
 
-    std::function<float(std::mt19937&)> getPopulationParameterInitializer(std::size_t param_index) const override
+    std::function<float(std::mt19937&)> getPopulationParameterInitializer(size_t param_index) const override
     {
         if (param_index == 0)
         {
@@ -331,7 +331,7 @@ public:
             return 0.0f;
         };
     }
-    std::vector<float> getPopulationParameter(std::size_t param_index) const override
+    std::vector<float> getPopulationParameter(size_t param_index) const override
     {
         if (param_index == 0)
         {
@@ -358,8 +358,8 @@ public:
     const Tensor &getBiases() const override { return biases; }
     const Tensor &getInput() const override { return input_tensor; }
     const Tensor &getOutput() const override { return output_tensor; }
-    std::size_t getOutputDimension() const noexcept { return output_dimension; }
-    std::size_t getInputDimension() const noexcept { return input_dimension; }
+    size_t getOutputDimension() const noexcept { return output_dimension; }
+    size_t getInputDimension() const noexcept { return input_dimension; }
     Execution_Target getExecutionTarget() const override { return execution_target; }
     float getInitializationGain() const noexcept { return initialization_gain; }
     Layer_Type getLayerType() const noexcept override { return Layer_Type::LINEAR; }
@@ -367,7 +367,7 @@ public:
     bool isForwardCompleted() const noexcept { return is_forward_completed; }
     bool hasParameters() const noexcept override { return true; }
 
-    void setPopulationParameter(std::size_t param_index, std::vector<float> flat_data) override
+    void setPopulationParameter(size_t param_index, std::vector<float> flat_data) override
     {
         if (param_index == 0)
         {
@@ -421,8 +421,8 @@ public:
     void setInputGradient(const Tensor &_tensor) { input_gradient_tensor = _tensor; }
     void setInput(const Tensor &_tensor) { input_tensor = _tensor; }
     void setOutput(const Tensor &_tensor) { output_tensor = _tensor; }
-    void setOutputDimension(std::size_t _output_dimension) noexcept { output_dimension = _output_dimension; }
-    void setInputDimension(std::size_t _input_dimension) noexcept { input_dimension = _input_dimension; }
+    void setOutputDimension(size_t _output_dimension) noexcept { output_dimension = _output_dimension; }
+    void setInputDimension(size_t _input_dimension) noexcept { input_dimension = _input_dimension; }
     void setExecutionTarget(Execution_Target _new_execution_target) override
     {
         if (execution_target == _new_execution_target)

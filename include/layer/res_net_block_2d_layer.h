@@ -50,16 +50,16 @@ public:
     {}
 
     Res_Net_Block_2d_Layer(
-        std::uint32_t _height,
-        std::uint32_t _width,
-        std::uint32_t _in_channels,
-        std::uint32_t _out_channels,
-        std::uint32_t _stride = 1,
+        uint32_t _height,
+        uint32_t _width,
+        uint32_t _in_channels,
+        uint32_t _out_channels,
+        uint32_t _stride = 1,
         Execution_Target _execution_target = Execution_Target::CPU)
         : Res_Net_Block_2d_Layer(_execution_target)
     {
-        std::uint32_t out_h = (_height + _stride - 1) / _stride;
-        std::uint32_t out_w = (_width + _stride - 1) / _stride;
+        uint32_t out_h = (_height + _stride - 1) / _stride;
+        uint32_t out_w = (_width + _stride - 1) / _stride;
 
         addMainLayer<Conv2d_Layer>(_height, _width, _in_channels, _out_channels, 3, _stride, 1, _execution_target);
         addMainLayer<Batch_Norm_2d_Layer>(out_h, out_w, _out_channels, 1e-5f, 0.1f, _execution_target);
@@ -253,8 +253,8 @@ public:
 
     void saveConfiguration(std::ofstream &_output_file_stream) const override
     {
-        std::uint64_t main_count = static_cast<std::uint64_t>(main_branch.size());
-        std::uint64_t shortcut_count = static_cast<std::uint64_t>(shortcut_branch.size());
+        uint64_t main_count = static_cast<uint64_t>(main_branch.size());
+        uint64_t shortcut_count = static_cast<uint64_t>(shortcut_branch.size());
         std::uint8_t has_post_act = (post_activation != nullptr) ? 1 : 0;
 
         _output_file_stream.write(reinterpret_cast<const char *>(&main_count), sizeof(main_count));
@@ -345,12 +345,12 @@ public:
         }
     }
 
-    std::function<float(std::mt19937&)> getPopulationParameterInitializer(std::size_t param_index) const override
+    std::function<float(std::mt19937&)> getPopulationParameterInitializer(size_t param_index) const override
     {
-        std::size_t current_offset = 0;
+        size_t current_offset = 0;
         for (const auto& layer : main_branch)
         {
-            std::size_t count = layer->getPopulationParameterDims().size();
+            size_t count = layer->getPopulationParameterDims().size();
             if (param_index < current_offset + count)
             {
                 return layer->getPopulationParameterInitializer(param_index - current_offset);
@@ -359,7 +359,7 @@ public:
         }
         for (const auto& layer : shortcut_branch)
         {
-            std::size_t count = layer->getPopulationParameterDims().size();
+            size_t count = layer->getPopulationParameterDims().size();
             if (param_index < current_offset + count)
             {
                 return layer->getPopulationParameterInitializer(param_index - current_offset);
@@ -368,7 +368,7 @@ public:
         }
         if (post_activation)
         {
-            std::size_t count = post_activation->getPopulationParameterDims().size();
+            size_t count = post_activation->getPopulationParameterDims().size();
             if (param_index < current_offset + count)
             {
                 return post_activation->getPopulationParameterInitializer(param_index - current_offset);
@@ -397,12 +397,12 @@ public:
         }
         return total_params;
     }
-    std::vector<float> getPopulationParameter(std::size_t param_index) const override
+    std::vector<float> getPopulationParameter(size_t param_index) const override
     {
-        std::size_t current_offset = 0;
+        size_t current_offset = 0;
         for (const auto &layer : main_branch)
         {
-            std::size_t count = layer->getPopulationParameterDims().size();
+            size_t count = layer->getPopulationParameterDims().size();
             if (param_index < current_offset + count)
             {
                 return layer->getPopulationParameter(param_index - current_offset);
@@ -411,7 +411,7 @@ public:
         }
         for (const auto &layer : shortcut_branch)
         {
-            std::size_t count = layer->getPopulationParameterDims().size();
+            size_t count = layer->getPopulationParameterDims().size();
             if (param_index < current_offset + count)
             {
                 return layer->getPopulationParameter(param_index - current_offset);
@@ -420,7 +420,7 @@ public:
         }
         if (post_activation)
         {
-            std::size_t count = post_activation->getPopulationParameterDims().size();
+            size_t count = post_activation->getPopulationParameterDims().size();
             if (param_index < current_offset + count)
             {
                 return post_activation->getPopulationParameter(param_index - current_offset);
@@ -508,12 +508,12 @@ public:
     bool isForwardCompleted() const noexcept { return is_forward_completed; }
     bool hasParameters() const noexcept override { return true; }
 
-    void setPopulationParameter(std::size_t param_index, std::vector<float> flat_data) override
+    void setPopulationParameter(size_t param_index, std::vector<float> flat_data) override
     {
-        std::size_t current_offset = 0;
+        size_t current_offset = 0;
         for (auto& layer : main_branch)
         {
-            std::size_t count = layer->getPopulationParameterDims().size();
+            size_t count = layer->getPopulationParameterDims().size();
             if (param_index < current_offset + count)
             {
                 layer->setPopulationParameter(param_index - current_offset, std::move(flat_data));
@@ -523,7 +523,7 @@ public:
         }
         for (auto& layer : shortcut_branch)
         {
-            std::size_t count = layer->getPopulationParameterDims().size();
+            size_t count = layer->getPopulationParameterDims().size();
             if (param_index < current_offset + count)
             {
                 layer->setPopulationParameter(param_index - current_offset, std::move(flat_data));
@@ -533,7 +533,7 @@ public:
         }
         if (post_activation)
         {
-            std::size_t count = post_activation->getPopulationParameterDims().size();
+            size_t count = post_activation->getPopulationParameterDims().size();
             if (param_index < current_offset + count)
             {
                 post_activation->setPopulationParameter(param_index - current_offset, std::move(flat_data));

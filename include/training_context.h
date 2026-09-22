@@ -20,7 +20,7 @@
 class Training_Context
 {
 private:
-    std::size_t current_epoch = 0;
+    size_t current_epoch = 0;
     std::unique_ptr<ICost_Function> cost_function;
     std::unique_ptr<ILearning_Rate> learning_rate_scheduler;
     std::unique_ptr<IOptimizer> optimizer;
@@ -211,8 +211,8 @@ public:
         {
         case Layer_Type::LINEAR:
         {
-            std::uint32_t input_dimension = 0;
-            std::uint32_t output_dimension = 0;
+            uint32_t input_dimension = 0;
+            uint32_t output_dimension = 0;
             _input_file_stream.read(reinterpret_cast<char *>(&input_dimension), sizeof(input_dimension));
             _input_file_stream.read(reinterpret_cast<char *>(&output_dimension), sizeof(output_dimension));
             if (input_dimension == 0 || output_dimension == 0)
@@ -227,13 +227,13 @@ public:
         }
         case Layer_Type::CONV2D:
         {
-            std::uint32_t input_height = 0;
-            std::uint32_t input_width = 0;
-            std::uint32_t input_channels = 0;
-            std::uint32_t output_channels = 0;
-            std::uint32_t kernel_size = 0;
-            std::uint32_t stride = 0;
-            std::uint32_t padding = 0;
+            uint32_t input_height = 0;
+            uint32_t input_width = 0;
+            uint32_t input_channels = 0;
+            uint32_t output_channels = 0;
+            uint32_t kernel_size = 0;
+            uint32_t stride = 0;
+            uint32_t padding = 0;
             _input_file_stream.read(reinterpret_cast<char *>(&input_height), sizeof(input_height));
             _input_file_stream.read(reinterpret_cast<char *>(&input_width), sizeof(input_width));
             _input_file_stream.read(reinterpret_cast<char *>(&input_channels), sizeof(input_channels));
@@ -245,7 +245,7 @@ public:
         }
         case Layer_Type::BATCH_NORM:
         {
-            std::uint32_t feature_count = 0;
+            uint32_t feature_count = 0;
             float epsilon = 0.0f;
             float momentum = 0.0f;
             _input_file_stream.read(reinterpret_cast<char *>(&feature_count), sizeof(feature_count));
@@ -255,9 +255,9 @@ public:
         }
         case Layer_Type::BATCH_NORM_2D:
         {
-            std::uint32_t input_height = 0;
-            std::uint32_t input_width = 0;
-            std::uint32_t channels = 0;
+            uint32_t input_height = 0;
+            uint32_t input_width = 0;
+            uint32_t channels = 0;
             float epsilon = 0.0f;
             float momentum = 0.0f;
             _input_file_stream.read(reinterpret_cast<char *>(&input_height), sizeof(input_height));
@@ -269,9 +269,9 @@ public:
         }
         case Layer_Type::GLOBAL_AVG_POOL_2D:
         {
-            std::uint32_t input_height = 0;
-            std::uint32_t input_width = 0;
-            std::uint32_t channels = 0;
+            uint32_t input_height = 0;
+            uint32_t input_width = 0;
+            uint32_t channels = 0;
             _input_file_stream.read(reinterpret_cast<char *>(&input_height), sizeof(input_height));
             _input_file_stream.read(reinterpret_cast<char *>(&input_width), sizeof(input_width));
             _input_file_stream.read(reinterpret_cast<char *>(&channels), sizeof(channels));
@@ -279,12 +279,12 @@ public:
         }
         case Layer_Type::MAX_POOL_2D:
         {
-            std::uint32_t input_height = 0;
-            std::uint32_t input_width = 0;
-            std::uint32_t channels = 0;
-            std::uint32_t kernel_size = 0;
-            std::uint32_t stride = 0;
-            std::uint32_t padding = 0;
+            uint32_t input_height = 0;
+            uint32_t input_width = 0;
+            uint32_t channels = 0;
+            uint32_t kernel_size = 0;
+            uint32_t stride = 0;
+            uint32_t padding = 0;
             _input_file_stream.read(reinterpret_cast<char *>(&input_height), sizeof(input_height));
             _input_file_stream.read(reinterpret_cast<char *>(&input_width), sizeof(input_width));
             _input_file_stream.read(reinterpret_cast<char *>(&channels), sizeof(channels));
@@ -295,21 +295,21 @@ public:
         }
         case Layer_Type::RES_NET_BLOCK_2D:
         {
-            std::uint64_t main_count = 0;
-            std::uint64_t shortcut_count = 0;
+            uint64_t main_count = 0;
+            uint64_t shortcut_count = 0;
             std::uint8_t has_post_act = 0;
             _input_file_stream.read(reinterpret_cast<char *>(&main_count), sizeof(main_count));
             _input_file_stream.read(reinterpret_cast<char *>(&shortcut_count), sizeof(shortcut_count));
             _input_file_stream.read(reinterpret_cast<char *>(&has_post_act), sizeof(has_post_act));
 
             auto block = std::make_unique<Res_Net_Block_2d_Layer>(_execution_target);
-            for (std::uint64_t i = 0; i < main_count; ++i)
+            for (uint64_t i = 0; i < main_count; ++i)
             {
                 Layer_Type sub_type;
                 _input_file_stream.read(reinterpret_cast<char *>(&sub_type), sizeof(sub_type));
                 block->addMainLayer(constructLayerFromConfig(_input_file_stream, sub_type, _execution_target));
             }
-            for (std::uint64_t i = 0; i < shortcut_count; ++i)
+            for (uint64_t i = 0; i < shortcut_count; ++i)
             {
                 Layer_Type sub_type;
                 _input_file_stream.read(reinterpret_cast<char *>(&sub_type), sizeof(sub_type));
@@ -325,21 +325,21 @@ public:
         }
         case Layer_Type::PPO_ACTOR_CRITIC:
         {
-            std::uint64_t actor_output_dimension = 0;
-            std::uint64_t actor_count = 0;
-            std::uint64_t critic_count = 0;
+            uint64_t actor_output_dimension = 0;
+            uint64_t actor_count = 0;
+            uint64_t critic_count = 0;
             _input_file_stream.read(reinterpret_cast<char *>(&actor_output_dimension), sizeof(actor_output_dimension));
             _input_file_stream.read(reinterpret_cast<char *>(&actor_count), sizeof(actor_count));
             _input_file_stream.read(reinterpret_cast<char *>(&critic_count), sizeof(critic_count));
 
             auto ppo_layer = std::make_unique<PPO_Actor_Critic_Layer>(actor_output_dimension, _execution_target);
-            for (std::uint64_t i = 0; i < actor_count; ++i)
+            for (uint64_t i = 0; i < actor_count; ++i)
             {
                 Layer_Type sub_type;
                 _input_file_stream.read(reinterpret_cast<char *>(&sub_type), sizeof(sub_type));
                 ppo_layer->addActorLayer(constructLayerFromConfig(_input_file_stream, sub_type, _execution_target));
             }
-            for (std::uint64_t i = 0; i < critic_count; ++i)
+            for (uint64_t i = 0; i < critic_count; ++i)
             {
                 Layer_Type sub_type;
                 _input_file_stream.read(reinterpret_cast<char *>(&sub_type), sizeof(sub_type));
@@ -349,10 +349,10 @@ public:
         }
         case Layer_Type::RES_NET_20:
         {
-            std::uint32_t input_height = 0;
-            std::uint32_t input_width = 0;
-            std::uint32_t input_channels = 0;
-            std::uint32_t num_classes = 0;
+            uint32_t input_height = 0;
+            uint32_t input_width = 0;
+            uint32_t input_channels = 0;
+            uint32_t num_classes = 0;
             _input_file_stream.read(reinterpret_cast<char *>(&input_height), sizeof(input_height));
             _input_file_stream.read(reinterpret_cast<char *>(&input_width), sizeof(input_width));
             _input_file_stream.read(reinterpret_cast<char *>(&input_channels), sizeof(input_channels));
@@ -408,9 +408,9 @@ public:
             return false;
         }
 
-        std::uint32_t epoch_value = 0;
+        uint32_t epoch_value = 0;
         _input_file_stream.read(reinterpret_cast<char *>(&epoch_value), sizeof(epoch_value));
-        current_epoch = static_cast<std::size_t>(epoch_value);
+        current_epoch = static_cast<size_t>(epoch_value);
         Logger::logMessage(Input_Format{"Training_Context::loadHeader: Current epoch = {}", current_epoch},
                            Log_Level::LOG_INFO,
                            true,
@@ -458,7 +458,7 @@ public:
     ILearning_Rate &getLearningRate() noexcept { return *learning_rate_scheduler; }
     const IOptimizer &getOptimizer() const noexcept { return *optimizer; }
     IOptimizer &getOptimizer() noexcept { return *optimizer; }
-    std::size_t getCurrentEpoch() const noexcept { return current_epoch; }
+    size_t getCurrentEpoch() const noexcept { return current_epoch; }
     bool hasCostFunction() const noexcept { return cost_function != nullptr; }
 
     void setLearningRate(std::unique_ptr<ILearning_Rate> _learning_rate_scheduler)
@@ -501,5 +501,5 @@ public:
     }
 
     void setLearningRateScheduler(std::unique_ptr<ILearning_Rate> _learning_rate_scheduler) { setLearningRate(std::move(_learning_rate_scheduler)); }
-    void setCurrentEpoch(std::size_t _epoch) noexcept { current_epoch = _epoch; }
+    void setCurrentEpoch(size_t _epoch) noexcept { current_epoch = _epoch; }
 };

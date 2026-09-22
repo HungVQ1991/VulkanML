@@ -33,14 +33,14 @@ struct Persistent_Descriptor_Entry
 {
     VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
     std::vector<VkBuffer> bound_buffers;
-    std::vector<std::uint32_t> bound_binding_indices;
+    std::vector<uint32_t> bound_binding_indices;
 
     const std::vector<VkBuffer> &getBoundBuffers() const noexcept { return bound_buffers; }
-    const std::vector<std::uint32_t> &getBoundBindingIndices() const noexcept { return bound_binding_indices; }
+    const std::vector<uint32_t> &getBoundBindingIndices() const noexcept { return bound_binding_indices; }
     VkDescriptorSet getDescriptorSet() const noexcept { return descriptor_set; }
 
     void setBoundBuffers(const std::vector<VkBuffer> &_buffers) { bound_buffers = _buffers; }
-    void setBoundBindingIndices(const std::vector<std::uint32_t> &_indices) { bound_binding_indices = _indices; }
+    void setBoundBindingIndices(const std::vector<uint32_t> &_indices) { bound_binding_indices = _indices; }
     void setDescriptorSet(VkDescriptorSet _set) noexcept { descriptor_set = _set; }
 };
 
@@ -61,8 +61,8 @@ private:
     VkDescriptorPool descriptor_pools[MAX_FRAMES_IN_FLIGHT]{VK_NULL_HANDLE, VK_NULL_HANDLE};
 
     bool is_static_baked[MAX_FRAMES_IN_FLIGHT]{false, false};
-    std::size_t static_graph_signatures[MAX_FRAMES_IN_FLIGHT]{0, 0};
-    std::size_t static_split_indices[MAX_FRAMES_IN_FLIGHT]{0, 0};
+    size_t static_graph_signatures[MAX_FRAMES_IN_FLIGHT]{0, 0};
+    size_t static_split_indices[MAX_FRAMES_IN_FLIGHT]{0, 0};
     std::array<std::vector<VkBuffer>, MAX_FRAMES_IN_FLIGHT> baked_buffer_handles{};
 
     std::vector<Persistent_Descriptor_Entry> persistent_descriptor_caches[MAX_FRAMES_IN_FLIGHT];
@@ -92,10 +92,10 @@ private:
     mutable std::vector<VkDescriptorBufferInfo> shared_descriptor_buffer_informations;
     mutable std::vector<VkWriteDescriptorSet> shared_write_descriptor_sets;
     mutable std::vector<std::shared_ptr<gpu::vector>> shared_fused_buffers;
-    mutable std::vector<std::uint32_t> shared_external_buffer_indices;
+    mutable std::vector<uint32_t> shared_external_buffer_indices;
 
     static bool isBuffersMatching(const Persistent_Descriptor_Entry &_entry,
-                                  const std::vector<std::uint32_t> &_binding_indices,
+                                  const std::vector<uint32_t> &_binding_indices,
                                   const std::vector<std::shared_ptr<gpu::vector>> &_buffers)
     {
         if (_entry.descriptor_set == VK_NULL_HANDLE)
@@ -106,14 +106,14 @@ private:
         {
             return false;
         }
-        for (std::size_t i = 0; i < _binding_indices.size(); ++i)
+        for (size_t i = 0; i < _binding_indices.size(); ++i)
         {
             if (_entry.bound_binding_indices[i] != _binding_indices[i])
             {
                 return false;
             }
         }
-        for (std::size_t i = 0; i < _buffers.size(); ++i)
+        for (size_t i = 0; i < _buffers.size(); ++i)
         {
             VkBuffer current_vulkan_buffer = _buffers[i] ? _buffers[i]->getBuffer() : VK_NULL_HANDLE;
             if (_entry.bound_buffers[i] != current_vulkan_buffer)
@@ -135,7 +135,7 @@ private:
         {
             return false;
         }
-        for (std::size_t i = 0; i < _buffers.size(); ++i)
+        for (size_t i = 0; i < _buffers.size(); ++i)
         {
             VkBuffer current_vulkan_buffer = _buffers[i] ? _buffers[i]->getBuffer() : VK_NULL_HANDLE;
             if (_entry.bound_buffers[i] != current_vulkan_buffer)
@@ -152,22 +152,22 @@ private:
         const std::vector<bool> &_is_input_register_flags,
         const std::vector<std::string> &_output_identifiers,
         const std::vector<bool> &_is_output_register_flags,
-        const std::vector<std::uint32_t> &_output_buffer_indices,
-        const std::unordered_set<std::uint32_t> &_external_buffer_indices_set,
-        std::uint32_t _push_constants_word_offset,
+        const std::vector<uint32_t> &_output_buffer_indices,
+        const std::unordered_set<uint32_t> &_external_buffer_indices_set,
+        uint32_t _push_constants_word_offset,
         const std::vector<std::shared_ptr<gpu::vector>> &_node_buffers = {})
     {
-        for (std::size_t i = 0; i < _input_identifiers.size(); ++i)
+        for (size_t i = 0; i < _input_identifiers.size(); ++i)
         {
             std::string token_prefix = std::format("{{in_{}}}[", i);
             std::string token_plain = std::format("{{in_{}}}", i);
 
             if (_is_input_register_flags[i])
             {
-                std::size_t position = 0;
+                size_t position = 0;
                 while ((position = _text.find(token_prefix, position)) != std::string::npos)
                 {
-                    std::size_t end_position = _text.find(']', position);
+                    size_t end_position = _text.find(']', position);
                     if (end_position != std::string::npos)
                     {
                         _text.replace(position, end_position - position + 1, _input_identifiers[i]);
@@ -180,7 +180,7 @@ private:
                 }
             }
 
-            std::size_t position = 0;
+            size_t position = 0;
             while ((position = _text.find(token_plain, position)) != std::string::npos)
             {
                 _text.replace(position, token_plain.length(), _input_identifiers[i]);
@@ -188,20 +188,20 @@ private:
             }
         }
 
-        for (std::size_t i = 0; i < _output_identifiers.size(); ++i)
+        for (size_t i = 0; i < _output_identifiers.size(); ++i)
         {
             std::string token_prefix = std::format("{{out_{}}}[", i);
             std::string token_plain = std::format("{{out_{}}}", i);
 
             if (_is_output_register_flags[i])
             {
-                std::uint32_t real_buffer_index = (i < _output_buffer_indices.size()) ? _output_buffer_indices[i] : 0;
+                uint32_t real_buffer_index = (i < _output_buffer_indices.size()) ? _output_buffer_indices[i] : 0;
                 bool is_external = _external_buffer_indices_set.contains(real_buffer_index);
 
-                std::size_t position = 0;
+                size_t position = 0;
                 while ((position = _text.find(token_prefix, position)) != std::string::npos)
                 {
-                    std::size_t end_position = _text.find(']', position);
+                    size_t end_position = _text.find(']', position);
                     if (end_position != std::string::npos)
                     {
                         std::string index_expression = _text.substr(position + token_prefix.length(), end_position - (position + token_prefix.length()));
@@ -210,7 +210,7 @@ private:
 
                         if (is_external)
                         {
-                            std::size_t semicolon_position = _text.find(';', position);
+                            size_t semicolon_position = _text.find(';', position);
                             if (semicolon_position != std::string::npos)
                             {
                                 std::string target_type = "float";
@@ -231,7 +231,7 @@ private:
                 }
             }
 
-            std::size_t position = 0;
+            size_t position = 0;
             while ((position = _text.find(token_plain, position)) != std::string::npos)
             {
                 _text.replace(position, token_plain.length(), _output_identifiers[i]);
@@ -242,7 +242,7 @@ private:
         for (int i = 31; i >= 0; --i)
         {
             std::string token = std::format("{{pc_{}}}", i);
-            std::size_t position = 0;
+            size_t position = 0;
             while ((position = _text.find(token, position)) != std::string::npos)
             {
                 std::string replacement = std::format("pc.data[{}]", _push_constants_word_offset + i);
@@ -258,7 +258,7 @@ private:
         std::vector<std::shared_ptr<gpu::vector>> written_buffers;
         if (_node.is_fused)
         {
-            for (std::uint32_t out_idx : _node.external_output_indices)
+            for (uint32_t out_idx : _node.external_output_indices)
             {
                 if (out_idx < _node.buffers.size() && _node.buffers[out_idx])
                 {
@@ -268,11 +268,11 @@ private:
             for (const auto &op : _node.fused_operations)
             {
                 const auto &meta = shader_dictionary.getMetadata(op.pipeline_id);
-                for (std::uint32_t p_idx : meta.persistent_output_indices)
+                for (uint32_t p_idx : meta.persistent_output_indices)
                 {
                     if (p_idx < op.output_buffer_indices.size())
                     {
-                        std::uint32_t buf_idx = op.output_buffer_indices[p_idx];
+                        uint32_t buf_idx = op.output_buffer_indices[p_idx];
                         if (buf_idx < _node.buffers.size() && _node.buffers[buf_idx])
                         {
                             written_buffers.push_back(_node.buffers[buf_idx]);
@@ -281,11 +281,11 @@ private:
                 }
                 if (op.pipeline_id == Compute_Pipeline::ADAM_UPDATE)
                 {
-                    for (std::size_t idx : {0, 2, 3})
+                    for (size_t idx : {0, 2, 3})
                     {
                         if (idx < op.input_buffer_indices.size())
                         {
-                            std::uint32_t buf_idx = op.input_buffer_indices[idx];
+                            uint32_t buf_idx = op.input_buffer_indices[idx];
                             if (buf_idx < _node.buffers.size() && _node.buffers[buf_idx])
                             {
                                 written_buffers.push_back(_node.buffers[buf_idx]);
@@ -297,7 +297,7 @@ private:
                 {
                     if (!op.input_buffer_indices.empty())
                     {
-                        std::uint32_t buf_idx = op.input_buffer_indices[0];
+                        uint32_t buf_idx = op.input_buffer_indices[0];
                         if (buf_idx < _node.buffers.size() && _node.buffers[buf_idx])
                         {
                             written_buffers.push_back(_node.buffers[buf_idx]);
@@ -309,7 +309,7 @@ private:
         else
         {
             const auto &metadata = shader_dictionary.getMetadata(_node.pipeline_id);
-            for (std::uint32_t i = metadata.input_count;
+            for (uint32_t i = metadata.input_count;
                  i < metadata.input_count + metadata.output_count && i < _node.buffers.size();
                  ++i)
             {
@@ -320,7 +320,7 @@ private:
             }
             if (_node.pipeline_id == Compute_Pipeline::ADAM_UPDATE)
             {
-                for (std::size_t idx : {0, 2, 3})
+                for (size_t idx : {0, 2, 3})
                 {
                     if (idx < _node.buffers.size() && _node.buffers[idx])
                     {
@@ -379,12 +379,12 @@ private:
                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                 0,
                 0, nullptr,
-                static_cast<std::uint32_t>(buffer_barriers.size()), buffer_barriers.data(),
+                static_cast<uint32_t>(buffer_barriers.size()), buffer_barriers.data(),
                 0, nullptr);
         }
     }
 
-    void executeFallbackNode(VkCommandBuffer _command_buffer, const Compute_Node &_node, std::size_t _node_index, std::uint32_t _frame_index)
+    void executeFallbackNode(VkCommandBuffer _command_buffer, const Compute_Node &_node, size_t _node_index, uint32_t _frame_index)
     {
         VkDevice device = context.getDevice();
         VkDescriptorSetLayout layout = network.getDescriptorSetLayout();
@@ -400,19 +400,19 @@ private:
             node_fallback_entries.resize(_node.fused_operations.size());
         }
 
-        for (std::size_t operation_index = 0; operation_index < _node.fused_operations.size(); ++operation_index)
+        for (size_t operation_index = 0; operation_index < _node.fused_operations.size(); ++operation_index)
         {
             const auto &operation = _node.fused_operations[operation_index];
 
             shared_fused_buffers.clear();
-            for (std::uint32_t index : operation.input_buffer_indices)
+            for (uint32_t index : operation.input_buffer_indices)
             {
                 if (index < _node.buffers.size())
                 {
                     shared_fused_buffers.push_back(_node.buffers[index]);
                 }
             }
-            for (std::uint32_t index : operation.output_buffer_indices)
+            for (uint32_t index : operation.output_buffer_indices)
             {
                 if (index < _node.buffers.size())
                 {
@@ -446,7 +446,7 @@ private:
                 updateDescriptorSet(entry.descriptor_set, shared_fused_buffers);
                 entry.bound_binding_indices.clear();
                 entry.bound_buffers.resize(shared_fused_buffers.size());
-                for (std::size_t j = 0; j < shared_fused_buffers.size(); ++j)
+                for (size_t j = 0; j < shared_fused_buffers.size(); ++j)
                 {
                     entry.bound_buffers[j] = shared_fused_buffers[j] ? shared_fused_buffers[j]->getBuffer() : VK_NULL_HANDLE;
                 }
@@ -473,7 +473,7 @@ private:
             if (operation_index < _node.fused_operations.size() - 1)
             {
                 std::vector<std::shared_ptr<gpu::vector>> output_buffers;
-                for (std::uint32_t out_index : operation.output_buffer_indices)
+                for (uint32_t out_index : operation.output_buffer_indices)
                 {
                     if (out_index < _node.buffers.size() && _node.buffers[out_index])
                     {
@@ -529,7 +529,7 @@ private:
             .poolSizeCount = 1,
             .pPoolSizes = pool_sizes};
 
-        for (std::uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
             if (vkCreateDescriptorPool(device, &pool_create_information, nullptr, &descriptor_pools[i]) != VK_SUCCESS)
             {
@@ -561,12 +561,12 @@ private:
         }
 
         VkDevice device = context.getDevice();
-        std::size_t count = _buffers.size();
+        size_t count = _buffers.size();
 
         shared_descriptor_buffer_informations.clear();
         shared_write_descriptor_sets.clear();
 
-        for (std::size_t i = 0; i < count; ++i)
+        for (size_t i = 0; i < count; ++i)
         {
             if (!_buffers[i] || _buffers[i]->getBuffer() == VK_NULL_HANDLE)
             {
@@ -587,7 +587,7 @@ private:
                 .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                 .pNext = nullptr,
                 .dstSet = _descriptor_set,
-                .dstBinding = static_cast<std::uint32_t>(i),
+                .dstBinding = static_cast<uint32_t>(i),
                 .dstArrayElement = 0,
                 .descriptorCount = 1,
                 .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -596,19 +596,19 @@ private:
                 .pTexelBufferView = nullptr});
         }
 
-        for (std::size_t i = 0; i < shared_write_descriptor_sets.size(); ++i)
+        for (size_t i = 0; i < shared_write_descriptor_sets.size(); ++i)
         {
             shared_write_descriptor_sets[i].pBufferInfo = &shared_descriptor_buffer_informations[i];
         }
 
         if (!shared_write_descriptor_sets.empty())
         {
-            vkUpdateDescriptorSets(device, static_cast<std::uint32_t>(shared_write_descriptor_sets.size()), shared_write_descriptor_sets.data(), 0, nullptr);
+            vkUpdateDescriptorSets(device, static_cast<uint32_t>(shared_write_descriptor_sets.size()), shared_write_descriptor_sets.data(), 0, nullptr);
         }
     }
 
     void updateDescriptorSet(VkDescriptorSet _descriptor_set,
-                             const std::vector<std::uint32_t> &_binding_indices,
+                             const std::vector<uint32_t> &_binding_indices,
                              const std::vector<std::shared_ptr<gpu::vector>> &_buffers) const
     {
         if (_buffers.empty() || _binding_indices.size() != _buffers.size())
@@ -622,12 +622,12 @@ private:
         }
 
         VkDevice device = context.getDevice();
-        std::size_t count = _buffers.size();
+        size_t count = _buffers.size();
 
         shared_descriptor_buffer_informations.clear();
         shared_write_descriptor_sets.clear();
 
-        for (std::size_t i = 0; i < count; ++i)
+        for (size_t i = 0; i < count; ++i)
         {
             if (!_buffers[i] || _buffers[i]->getBuffer() == VK_NULL_HANDLE)
             {
@@ -652,14 +652,14 @@ private:
                 .pTexelBufferView = nullptr});
         }
 
-        for (std::size_t i = 0; i < shared_write_descriptor_sets.size(); ++i)
+        for (size_t i = 0; i < shared_write_descriptor_sets.size(); ++i)
         {
             shared_write_descriptor_sets[i].pBufferInfo = &shared_descriptor_buffer_informations[i];
         }
 
         if (!shared_write_descriptor_sets.empty())
         {
-            vkUpdateDescriptorSets(device, static_cast<std::uint32_t>(shared_write_descriptor_sets.size()), shared_write_descriptor_sets.data(), 0, nullptr);
+            vkUpdateDescriptorSets(device, static_cast<uint32_t>(shared_write_descriptor_sets.size()), shared_write_descriptor_sets.data(), 0, nullptr);
         }
     }
 
@@ -684,7 +684,7 @@ public:
                            0,
                            Log_Feature::DEVICE_MANAGEMENT | Log_Feature::DISPATCH_EXECUTION);
         VkDevice device = context.getDevice();
-        for (std::uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
             if (descriptor_pools[i] != VK_NULL_HANDLE)
             {
@@ -697,17 +697,17 @@ public:
         vkFreeCommandBuffers(device, context.getCommandPool(), MAX_FRAMES_IN_FLIGHT, epilogue_command_buffers);
     }
 
-    void getExternalBufferIndices(const Compute_Node &_node, std::vector<std::uint32_t> &_output_indices) const
+    void getExternalBufferIndices(const Compute_Node &_node, std::vector<uint32_t> &_output_indices) const
     {
         _output_indices.clear();
 
         std::array<std::int32_t, 64> last_write_operation_indices;
         last_write_operation_indices.fill(-1);
 
-        for (std::size_t operation_index = 0; operation_index < _node.fused_operations.size(); ++operation_index)
+        for (size_t operation_index = 0; operation_index < _node.fused_operations.size(); ++operation_index)
         {
             const auto &operation = _node.fused_operations[operation_index];
-            for (std::uint32_t output_index : operation.output_buffer_indices)
+            for (uint32_t output_index : operation.output_buffer_indices)
             {
                 if (output_index < last_write_operation_indices.size())
                 {
@@ -718,10 +718,10 @@ public:
 
         std::array<bool, 64> is_added_flags{};
 
-        for (std::size_t operation_index = 0; operation_index < _node.fused_operations.size(); ++operation_index)
+        for (size_t operation_index = 0; operation_index < _node.fused_operations.size(); ++operation_index)
         {
             const auto &operation = _node.fused_operations[operation_index];
-            for (std::uint32_t input_index : operation.input_buffer_indices)
+            for (uint32_t input_index : operation.input_buffer_indices)
             {
                 if (input_index < last_write_operation_indices.size())
                 {
@@ -734,7 +734,7 @@ public:
             }
         }
 
-        for (std::uint32_t external_index : _node.external_output_indices)
+        for (uint32_t external_index : _node.external_output_indices)
         {
             if (external_index < is_added_flags.size() && !is_added_flags[external_index])
             {
@@ -746,11 +746,11 @@ public:
         for (const auto &operation : _node.fused_operations)
         {
             const auto &metadata = shader_dictionary.getMetadata(operation.pipeline_id);
-            for (std::uint32_t persistent_output_local_index : metadata.persistent_output_indices)
+            for (uint32_t persistent_output_local_index : metadata.persistent_output_indices)
             {
                 if (persistent_output_local_index < operation.output_buffer_indices.size())
                 {
-                    std::uint32_t persistent_buffer_index = operation.output_buffer_indices[persistent_output_local_index];
+                    uint32_t persistent_buffer_index = operation.output_buffer_indices[persistent_output_local_index];
                     if (persistent_buffer_index < is_added_flags.size() && !is_added_flags[persistent_buffer_index])
                     {
                         _output_indices.push_back(persistent_buffer_index);
@@ -762,7 +762,7 @@ public:
 
         if (!_node.fused_operations.empty())
         {
-            for (std::uint32_t output_index : _node.fused_operations.back().output_buffer_indices)
+            for (uint32_t output_index : _node.fused_operations.back().output_buffer_indices)
             {
                 if (output_index < is_added_flags.size() && !is_added_flags[output_index])
                 {
@@ -775,9 +775,9 @@ public:
 
     std::string generateFusedGlsl(const Compute_Node &_node) const
     {
-        std::uint32_t local_size_x = 256;
-        std::uint32_t local_size_y = 1;
-        std::uint32_t local_size_z = 1;
+        uint32_t local_size_x = 256;
+        uint32_t local_size_y = 1;
+        uint32_t local_size_z = 1;
 
         Operation_Class primary_operation_class = Operation_Class::ELEMENTWISE;
         Compute_Pipeline primary_pipeline = Compute_Pipeline::ADD;
@@ -785,7 +785,7 @@ public:
         bool has_reduction = false;
         bool has_shared_memory = false;
         bool has_matrix_tiles = false;
-        std::uint32_t max_shared_memory_size = 0;
+        uint32_t max_shared_memory_size = 0;
 
         if (!_node.fused_operations.empty())
         {
@@ -816,7 +816,7 @@ public:
                     has_reduction = true;
                 }
 
-                std::uint32_t op_shared_memory_size = (is_coop && metadata.is_cooperative_matrix_support)
+                uint32_t op_shared_memory_size = (is_coop && metadata.is_cooperative_matrix_support)
                                                           ? metadata.cooperative_shared_memory_size
                                                           : metadata.shared_memory_size;
 
@@ -860,24 +860,24 @@ public:
             shader_generator.addSharedMemoryRaw("shared float tile_a[16][17];\nshared float tile_b[16][17];");
         }
 
-        std::vector<std::uint32_t> external_indices;
+        std::vector<uint32_t> external_indices;
         getExternalBufferIndices(_node, external_indices);
-        std::unordered_set<std::uint32_t> external_buffer_set(external_indices.begin(), external_indices.end());
+        std::unordered_set<uint32_t> external_buffer_set(external_indices.begin(), external_indices.end());
 
-        std::unordered_set<std::uint32_t> read_buffer_indices;
-        std::unordered_set<std::uint32_t> written_buffer_indices;
+        std::unordered_set<uint32_t> read_buffer_indices;
+        std::unordered_set<uint32_t> written_buffer_indices;
 
-        for (std::size_t op_idx = 0; op_idx < _node.fused_operations.size(); ++op_idx)
+        for (size_t op_idx = 0; op_idx < _node.fused_operations.size(); ++op_idx)
         {
             const auto &operation = _node.fused_operations[op_idx];
 
-            for (std::uint32_t input_index : operation.input_buffer_indices)
+            for (uint32_t input_index : operation.input_buffer_indices)
             {
                 bool is_passed_via_register = false;
-                for (std::size_t prev_idx = 0; prev_idx < op_idx; ++prev_idx)
+                for (size_t prev_idx = 0; prev_idx < op_idx; ++prev_idx)
                 {
                     const auto &prev_op = _node.fused_operations[prev_idx];
-                    for (std::uint32_t prev_out : prev_op.output_buffer_indices)
+                    for (uint32_t prev_out : prev_op.output_buffer_indices)
                     {
                         if (prev_out == input_index)
                         {
@@ -897,13 +897,13 @@ public:
                 }
             }
 
-            for (std::uint32_t output_index : operation.output_buffer_indices)
+            for (uint32_t output_index : operation.output_buffer_indices)
             {
                 written_buffer_indices.insert(output_index);
             }
         }
 
-        for (std::uint32_t buffer_index : external_indices)
+        for (uint32_t buffer_index : external_indices)
         {
             bool is_read = read_buffer_indices.contains(buffer_index);
             bool is_written = written_buffer_indices.contains(buffer_index) || _node.external_output_indices.contains(buffer_index);
@@ -928,7 +928,7 @@ public:
 
         shader_generator.setPushConstants("uint data[32];");
 
-        std::unordered_map<std::uint32_t, std::string> register_map;
+        std::unordered_map<uint32_t, std::string> register_map;
 
         if (primary_operation_class == Operation_Class::MATRIX_2D)
         {
@@ -1032,7 +1032,7 @@ public:
             shader_generator.addLogicSnippet("    if (global_id >= pc.data[0]) return;");
         }
 
-        for (std::size_t operation_index = 0; operation_index < _node.fused_operations.size(); ++operation_index)
+        for (size_t operation_index = 0; operation_index < _node.fused_operations.size(); ++operation_index)
         {
             const Fused_Operation &operation = _node.fused_operations[operation_index];
             const Snippet_Metadata &metadata = shader_dictionary.getMetadata(operation.pipeline_id);
@@ -1040,7 +1040,7 @@ public:
             std::vector<std::string> inputs;
             std::vector<bool> is_input_register_flags;
 
-            for (std::uint32_t input_index : operation.input_buffer_indices)
+            for (uint32_t input_index : operation.input_buffer_indices)
             {
                 if (register_map.contains(input_index))
                 {
@@ -1057,15 +1057,15 @@ public:
             std::vector<std::string> outputs;
             std::vector<bool> is_output_register_flags;
 
-            for (std::size_t local_output_index = 0; local_output_index < operation.output_buffer_indices.size(); ++local_output_index)
+            for (size_t local_output_index = 0; local_output_index < operation.output_buffer_indices.size(); ++local_output_index)
             {
-                std::uint32_t output_index = operation.output_buffer_indices[local_output_index];
+                uint32_t output_index = operation.output_buffer_indices[local_output_index];
                 bool is_accumulator = std::find(metadata.accumulator_output_indices.begin(),
                                                 metadata.accumulator_output_indices.end(),
-                                                static_cast<std::uint32_t>(local_output_index)) != metadata.accumulator_output_indices.end();
+                                                static_cast<uint32_t>(local_output_index)) != metadata.accumulator_output_indices.end();
                 bool is_persistent = std::find(metadata.persistent_output_indices.begin(),
                                                metadata.persistent_output_indices.end(),
-                                               static_cast<std::uint32_t>(local_output_index)) != metadata.persistent_output_indices.end();
+                                               static_cast<uint32_t>(local_output_index)) != metadata.persistent_output_indices.end();
 
                 if (is_accumulator || is_persistent)
                 {
@@ -1096,7 +1096,7 @@ public:
                                                   ? metadata.cooperative_glsl_template
                                                   : metadata.glsl_template;
 
-            std::uint32_t push_constants_word_offset = operation.push_constants_offset / 4;
+            uint32_t push_constants_word_offset = operation.push_constants_offset / 4;
             std::string snippet = replacePlaceholders(raw_template,
                                                       inputs,
                                                       is_input_register_flags,
@@ -1109,10 +1109,10 @@ public:
 
             auto remove_pattern = [](std::string &source_string, const std::string &prefix, const std::string &suffix)
             {
-                std::size_t start_position = source_string.find(prefix);
+                size_t start_position = source_string.find(prefix);
                 if (start_position != std::string::npos)
                 {
-                    std::size_t end_position = source_string.find(suffix, start_position);
+                    size_t end_position = source_string.find(suffix, start_position);
                     if (end_position != std::string::npos)
                     {
                         source_string.erase(start_position, (end_position + suffix.length()) - start_position);
@@ -1122,7 +1122,7 @@ public:
 
             auto remove_exact = [](std::string &source_string, const std::string &string_to_remove)
             {
-                std::size_t position = 0;
+                size_t position = 0;
                 while ((position = source_string.find(string_to_remove, position)) != std::string::npos)
                 {
                     source_string.erase(position, string_to_remove.length());
@@ -1197,7 +1197,7 @@ public:
                 {
                     std::string token = std::format("{{pc_{}}}", push_constant_index);
                     std::string replacement = std::format("pc.data[{}]", push_constants_word_offset + push_constant_index);
-                    std::size_t position = 0;
+                    size_t position = 0;
                     while ((position = resolved_expression.find(token, position)) != std::string::npos)
                     {
                         resolved_expression.replace(position, token.length(), replacement);
@@ -1223,7 +1223,7 @@ public:
         std::string glsl_code = shader_generator.build();
 
         std::string node_chain_name = "[";
-        for (std::size_t op_idx = 0; op_idx < _node.fused_operations.size(); ++op_idx)
+        for (size_t op_idx = 0; op_idx < _node.fused_operations.size(); ++op_idx)
         {
             node_chain_name += std::string(magic_enum::enum_name(_node.fused_operations[op_idx].pipeline_id));
             if (op_idx + 1 < _node.fused_operations.size())
@@ -1254,7 +1254,7 @@ public:
                            0,
                            Log_Feature::DISPATCH_EXECUTION);
         VkDevice device = context.getDevice();
-        for (std::uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
             if (descriptor_pools[i] != VK_NULL_HANDLE)
             {
@@ -1271,7 +1271,7 @@ public:
 
     void invalidateStaticGraph() noexcept
     {
-        for (std::uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
             is_static_baked[i] = false;
             static_graph_signatures[i] = 0;
@@ -1280,7 +1280,7 @@ public:
         }
     }
 
-    void resetFrameState(std::uint32_t _frame_index)
+    void resetFrameState(uint32_t _frame_index)
     {
         if (_frame_index >= MAX_FRAMES_IN_FLIGHT)
         {
@@ -1295,16 +1295,16 @@ public:
 
     void recordComputeNodes(VkCommandBuffer _command_buffer,
                             const std::vector<Compute_Node> &_nodes,
-                            std::size_t _start_index,
-                            std::size_t _end_index,
-                            std::uint32_t _frame_index)
+                            size_t _start_index,
+                            size_t _end_index,
+                            uint32_t _frame_index)
     {
         if (_start_index >= _end_index || _start_index >= _nodes.size())
         {
             return;
         }
 
-        std::size_t end_idx = std::min(_end_index, _nodes.size());
+        size_t end_idx = std::min(_end_index, _nodes.size());
         VkDevice device = context.getDevice();
 
         if (persistent_descriptor_caches[_frame_index].size() < end_idx)
@@ -1312,7 +1312,7 @@ public:
             persistent_descriptor_caches[_frame_index].resize(end_idx);
         }
 
-        for (std::size_t i = _start_index; i < end_idx; ++i)
+        for (size_t i = _start_index; i < end_idx; ++i)
         {
             const Compute_Node &node = _nodes[i];
 
@@ -1346,12 +1346,12 @@ public:
 
                     if (target_pipeline != VK_NULL_HANDLE)
                     {
-                        const std::vector<std::uint32_t> &external_indices = !node.cached_external_buffer_indices.empty()
+                        const std::vector<uint32_t> &external_indices = !node.cached_external_buffer_indices.empty()
                                                                                  ? node.cached_external_buffer_indices
                                                                                  : (getExternalBufferIndices(node, shared_external_buffer_indices), shared_external_buffer_indices);
 
                         shared_fused_buffers.clear();
-                        for (std::uint32_t buffer_index : external_indices)
+                        for (uint32_t buffer_index : external_indices)
                         {
                             if (buffer_index < node.buffers.size())
                             {
@@ -1386,7 +1386,7 @@ public:
                             updateDescriptorSet(entry.descriptor_set, external_indices, shared_fused_buffers);
                             entry.bound_binding_indices = external_indices;
                             entry.bound_buffers.resize(shared_fused_buffers.size());
-                            for (std::size_t j = 0; j < shared_fused_buffers.size(); ++j)
+                            for (size_t j = 0; j < shared_fused_buffers.size(); ++j)
                             {
                                 entry.bound_buffers[j] = shared_fused_buffers[j] ? shared_fused_buffers[j]->getBuffer() : VK_NULL_HANDLE;
                             }
@@ -1397,7 +1397,7 @@ public:
 
                         if (!node.push_constants_data.empty())
                         {
-                            std::uint32_t push_constants_size = std::min<std::uint32_t>(static_cast<std::uint32_t>(node.push_constants_data.size()), 128);
+                            uint32_t push_constants_size = std::min<uint32_t>(static_cast<uint32_t>(node.push_constants_data.size()), 128);
                             vkCmdPushConstants(_command_buffer, network.getPipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0, push_constants_size, node.push_constants_data.data());
                         }
 
@@ -1451,7 +1451,7 @@ public:
                         updateDescriptorSet(entry.descriptor_set, node.buffers);
                         entry.bound_binding_indices.clear();
                         entry.bound_buffers.resize(node.buffers.size());
-                        for (std::size_t j = 0; j < node.buffers.size(); ++j)
+                        for (size_t j = 0; j < node.buffers.size(); ++j)
                         {
                             entry.bound_buffers[j] = node.buffers[j] ? node.buffers[j]->getBuffer() : VK_NULL_HANDLE;
                         }
@@ -1464,7 +1464,7 @@ public:
 
                     if (!node.push_constants_data.empty())
                     {
-                        std::uint32_t push_constants_size = std::min<std::uint32_t>(static_cast<std::uint32_t>(node.push_constants_data.size()), 128);
+                        uint32_t push_constants_size = std::min<uint32_t>(static_cast<uint32_t>(node.push_constants_data.size()), 128);
                         vkCmdPushConstants(_command_buffer, network.getPipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0, push_constants_size, node.push_constants_data.data());
                     }
 
@@ -1481,7 +1481,7 @@ public:
 
     void compileAndExecute(const Compute_Graph &_graph,
                            const std::vector<Buffer_Transfer_Task> &_transfer_tasks,
-                           std::uint32_t _frame_index,
+                           uint32_t _frame_index,
                            VkFence _external_fence = VK_NULL_HANDLE)
     {
         if (_frame_index >= MAX_FRAMES_IN_FLIGHT)
@@ -1614,7 +1614,7 @@ public:
         }
     }
 
-    void bakeStaticGraph(const Compute_Graph &_graph, std::uint32_t _frame_index, std::size_t _signature)
+    void bakeStaticGraph(const Compute_Graph &_graph, uint32_t _frame_index, size_t _signature)
     {
         if (_frame_index >= MAX_FRAMES_IN_FLIGHT)
         {
@@ -1627,8 +1627,8 @@ public:
             return;
         }
 
-        std::size_t split_index = nodes.size();
-        for (std::size_t i = 0; i < nodes.size(); ++i)
+        size_t split_index = nodes.size();
+        for (size_t i = 0; i < nodes.size(); ++i)
         {
             if (isDynamicNode(nodes[i]))
             {
@@ -1684,7 +1684,7 @@ public:
         }
 
         baked_buffer_handles[_frame_index].clear();
-        for (std::size_t i = 0; i < split_index; ++i)
+        for (size_t i = 0; i < split_index; ++i)
         {
             for (const auto &buf : nodes[i].buffers)
             {
@@ -1702,7 +1702,7 @@ public:
                            Log_Feature::DISPATCH_EXECUTION);
     }
 
-    bool isStaticGraphBuffersMatching(const Compute_Graph &_graph, std::uint32_t _frame_index) const
+    bool isStaticGraphBuffersMatching(const Compute_Graph &_graph, uint32_t _frame_index) const
     {
         if (_frame_index >= MAX_FRAMES_IN_FLIGHT || !is_static_baked[_frame_index])
         {
@@ -1710,16 +1710,16 @@ public:
         }
 
         const auto &nodes = _graph.getNodes();
-        std::size_t split_index = static_split_indices[_frame_index];
+        size_t split_index = static_split_indices[_frame_index];
         if (split_index > nodes.size())
         {
             return false;
         }
 
         const auto &baked = baked_buffer_handles[_frame_index];
-        std::size_t handle_index = 0;
+        size_t handle_index = 0;
 
-        for (std::size_t i = 0; i < split_index; ++i)
+        for (size_t i = 0; i < split_index; ++i)
         {
             for (const auto &buf : nodes[i].buffers)
             {
@@ -1745,7 +1745,7 @@ public:
 
     void executeStaticGraph(const Compute_Graph &_graph,
                             const std::vector<Buffer_Transfer_Task> &_transfer_tasks,
-                            std::uint32_t _frame_index,
+                            uint32_t _frame_index,
                             VkFence _external_fence = VK_NULL_HANDLE)
     {
         if (_frame_index >= MAX_FRAMES_IN_FLIGHT)
@@ -1754,12 +1754,12 @@ public:
         }
 
         const auto &nodes = _graph.getNodes();
-        std::size_t split_index = static_split_indices[_frame_index];
+        size_t split_index = static_split_indices[_frame_index];
 
         context.resetFrameFence(_frame_index);
 
         std::array<VkCommandBuffer, 3> submit_command_buffers{};
-        std::uint32_t submit_count = 0;
+        uint32_t submit_count = 0;
 
         if (!_transfer_tasks.empty())
         {
@@ -1939,7 +1939,7 @@ public:
     const Vulkan_Network &getNetwork() const noexcept { return network; }
     const Vulkan_Context &getContext() const noexcept { return context; }
     const std::vector<std::string> &getPrintedTerminalShaderChains() const noexcept { return printed_terminal_shader_chains; }
-    VkCommandBuffer getCommandBuffer(std::uint32_t _frame_index) const
+    VkCommandBuffer getCommandBuffer(uint32_t _frame_index) const
     {
         if (_frame_index >= MAX_FRAMES_IN_FLIGHT)
         {
@@ -1952,7 +1952,7 @@ public:
         }
         return command_buffers[_frame_index];
     }
-    VkDescriptorPool getDescriptorPool(std::uint32_t _frame_index) const
+    VkDescriptorPool getDescriptorPool(uint32_t _frame_index) const
     {
         if (_frame_index >= MAX_FRAMES_IN_FLIGHT)
         {
@@ -1966,32 +1966,32 @@ public:
         return descriptor_pools[_frame_index];
     }
 
-    VkCommandBuffer getTransferCommandBuffer(std::uint32_t _frame_index) const noexcept
+    VkCommandBuffer getTransferCommandBuffer(uint32_t _frame_index) const noexcept
     {
         return (_frame_index < MAX_FRAMES_IN_FLIGHT) ? transfer_command_buffers[_frame_index] : VK_NULL_HANDLE;
     }
-    VkCommandBuffer getStaticCommandBuffer(std::uint32_t _frame_index) const noexcept
+    VkCommandBuffer getStaticCommandBuffer(uint32_t _frame_index) const noexcept
     {
         return (_frame_index < MAX_FRAMES_IN_FLIGHT) ? static_command_buffers[_frame_index] : VK_NULL_HANDLE;
     }
-    VkCommandBuffer getEpilogueCommandBuffer(std::uint32_t _frame_index) const noexcept
+    VkCommandBuffer getEpilogueCommandBuffer(uint32_t _frame_index) const noexcept
     {
         return (_frame_index < MAX_FRAMES_IN_FLIGHT) ? epilogue_command_buffers[_frame_index] : VK_NULL_HANDLE;
     }
-    bool isStaticBaked(std::uint32_t _frame_index) const noexcept
+    bool isStaticBaked(uint32_t _frame_index) const noexcept
     {
         return (_frame_index < MAX_FRAMES_IN_FLIGHT) ? is_static_baked[_frame_index] : false;
     }
-    std::size_t getStaticGraphSignature(std::uint32_t _frame_index) const noexcept
+    size_t getStaticGraphSignature(uint32_t _frame_index) const noexcept
     {
         return (_frame_index < MAX_FRAMES_IN_FLIGHT) ? static_graph_signatures[_frame_index] : 0;
     }
-    std::size_t getStaticSplitIndex(std::uint32_t _frame_index) const noexcept
+    size_t getStaticSplitIndex(uint32_t _frame_index) const noexcept
     {
         return (_frame_index < MAX_FRAMES_IN_FLIGHT) ? static_split_indices[_frame_index] : 0;
     }
 
     void setPrintedTerminalShaderChains(const std::vector<std::string> &_chains) { printed_terminal_shader_chains = _chains; }
-    void setCommandBuffer(std::uint32_t _frame_index, VkCommandBuffer _command_buffer) noexcept { if (_frame_index < MAX_FRAMES_IN_FLIGHT) command_buffers[_frame_index] = _command_buffer; }
-    void setDescriptorPool(std::uint32_t _frame_index, VkDescriptorPool _pool) noexcept { if (_frame_index < MAX_FRAMES_IN_FLIGHT) descriptor_pools[_frame_index] = _pool; }
+    void setCommandBuffer(uint32_t _frame_index, VkCommandBuffer _command_buffer) noexcept { if (_frame_index < MAX_FRAMES_IN_FLIGHT) command_buffers[_frame_index] = _command_buffer; }
+    void setDescriptorPool(uint32_t _frame_index, VkDescriptorPool _pool) noexcept { if (_frame_index < MAX_FRAMES_IN_FLIGHT) descriptor_pools[_frame_index] = _pool; }
 };

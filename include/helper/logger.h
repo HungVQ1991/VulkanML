@@ -38,7 +38,7 @@ enum class Log_Level : std::uint8_t
     LOG_LEVEL_END
 };
 
-enum class Log_Feature : std::uint64_t
+enum class Log_Feature : uint64_t
 {
     NONE = 0,
 
@@ -84,17 +84,17 @@ enum class Log_Feature : std::uint64_t
 
 constexpr Log_Feature operator|(Log_Feature lhs, Log_Feature rhs) noexcept
 {
-    return static_cast<Log_Feature>(static_cast<std::uint64_t>(lhs) | static_cast<std::uint64_t>(rhs));
+    return static_cast<Log_Feature>(static_cast<uint64_t>(lhs) | static_cast<uint64_t>(rhs));
 }
 
 constexpr Log_Feature operator&(Log_Feature lhs, Log_Feature rhs) noexcept
 {
-    return static_cast<Log_Feature>(static_cast<std::uint64_t>(lhs) & static_cast<std::uint64_t>(rhs));
+    return static_cast<Log_Feature>(static_cast<uint64_t>(lhs) & static_cast<uint64_t>(rhs));
 }
 
 constexpr Log_Feature operator~(Log_Feature feature) noexcept
 {
-    return static_cast<Log_Feature>(~static_cast<std::uint64_t>(feature));
+    return static_cast<Log_Feature>(~static_cast<uint64_t>(feature));
 }
 
 template <typename... Args>
@@ -157,10 +157,10 @@ struct Log_Record
 class Logger
 {
 private:
-    static constexpr std::size_t MAX_RING_BUFFER_ENTRIES = 2048;
-    static constexpr std::size_t MAX_LOG_FILES = 15;
+    static constexpr size_t MAX_RING_BUFFER_ENTRIES = 2048;
+    static constexpr size_t MAX_LOG_FILES = 15;
 
-    std::atomic<std::uint64_t> active_features{static_cast<std::uint64_t>(Log_Feature::ALL)};
+    std::atomic<uint64_t> active_features{static_cast<uint64_t>(Log_Feature::ALL)};
     std::atomic<bool> is_console_enabled{true};
     std::atomic<bool> is_file_logging_enabled{false};
     std::atomic<bool> is_force_all_console_enabled{false};
@@ -170,7 +170,7 @@ private:
     std::ofstream log_file_stream;
 
     std::deque<Log_Record> ring_buffer;
-    std::unordered_map<std::string, std::unordered_map<std::uint_least32_t, std::size_t>> call_site_counters;
+    std::unordered_map<std::string, std::unordered_map<std::uint_least32_t, size_t>> call_site_counters;
     std::mutex logger_mutex;
 
     Logger() = default;
@@ -359,7 +359,7 @@ private:
         const std::string base_name = date_buffer;
 
         current_log_file = log_directory / (base_name + ".log");
-        std::size_t suffix_index = 1;
+        size_t suffix_index = 1;
 
         while (std::filesystem::exists(current_log_file))
         {
@@ -403,7 +403,7 @@ public:
         const Input_Format<Args...> &_format,
         Log_Level _level = Log_Level::LOG_INFO,
         bool _print_to_console = false,
-        std::size_t _repetition_count = 0,
+        size_t _repetition_count = 0,
         Log_Feature _feature = Log_Feature::NONE,
         const std::source_location _location = std::source_location::current())
     {
@@ -415,8 +415,8 @@ public:
 
         if (_level == Log_Level::LOG_DEBUG)
         {
-            std::uint64_t current_features = instance.active_features.load(std::memory_order_relaxed);
-            if (_feature != Log_Feature::NONE && ((current_features & static_cast<std::uint64_t>(_feature)) == 0))
+            uint64_t current_features = instance.active_features.load(std::memory_order_relaxed);
+            if (_feature != Log_Feature::NONE && ((current_features & static_cast<uint64_t>(_feature)) == 0))
             {
                 return false;
             }
@@ -427,7 +427,7 @@ public:
         if (_repetition_count > 0)
         {
             auto &line_map = instance.call_site_counters[_location.file_name()];
-            std::size_t &current_count = line_map[_location.line()];
+            size_t &current_count = line_map[_location.line()];
             if (current_count >= _repetition_count)
             {
                 return false;
@@ -483,7 +483,7 @@ public:
         const std::string &_message,
         Log_Level _level = Log_Level::LOG_INFO,
         bool _print_to_console = false,
-        std::size_t _repetition_count = 0,
+        size_t _repetition_count = 0,
         Log_Feature _feature = Log_Feature::NONE,
         const std::source_location _location = std::source_location::current())
     {
@@ -495,8 +495,8 @@ public:
 
         if (_level == Log_Level::LOG_DEBUG)
         {
-            std::uint64_t current_features = instance.active_features.load(std::memory_order_relaxed);
-            if (_feature != Log_Feature::NONE && ((current_features & static_cast<std::uint64_t>(_feature)) == 0))
+            uint64_t current_features = instance.active_features.load(std::memory_order_relaxed);
+            if (_feature != Log_Feature::NONE && ((current_features & static_cast<uint64_t>(_feature)) == 0))
             {
                 return false;
             }
@@ -507,7 +507,7 @@ public:
         if (_repetition_count > 0)
         {
             auto &line_map = instance.call_site_counters[_location.file_name()];
-            std::size_t &current_count = line_map[_location.line()];
+            size_t &current_count = line_map[_location.line()];
             if (current_count >= _repetition_count)
             {
                 return false;
@@ -560,7 +560,7 @@ public:
     static void logFp16TensorStats(
         std::string_view tensor_name,
         const std::vector<float> &data,
-        std::size_t element_count,
+        size_t element_count,
         std::string_view data_type_name = "FLOAT16",
         Log_Level level = Log_Level::LOG_DEBUG,
         const std::source_location location = std::source_location::current())
@@ -572,10 +572,10 @@ public:
         float min_val = std::numeric_limits<float>::infinity();
         float max_val = -std::numeric_limits<float>::infinity();
         float sum_val = 0.0f;
-        std::size_t nan_count = 0;
-        std::size_t inf_count = 0;
-        std::size_t zero_count = 0;
-        std::size_t subnormal_count = 0;
+        size_t nan_count = 0;
+        size_t inf_count = 0;
+        size_t zero_count = 0;
+        size_t subnormal_count = 0;
 
         for (float val : data)
         {
@@ -660,8 +660,8 @@ public:
         std::lock_guard<std::mutex> lock(instance.logger_mutex);
         return instance.log_directory.string();
     }
-    static std::size_t getMaxRingBufferEntries() noexcept { return MAX_RING_BUFFER_ENTRIES; }
-    static std::size_t getMaxLogFiles() noexcept { return MAX_LOG_FILES; }
+    static size_t getMaxRingBufferEntries() noexcept { return MAX_RING_BUFFER_ENTRIES; }
+    static size_t getMaxLogFiles() noexcept { return MAX_LOG_FILES; }
     static Log_Feature getActiveFeatures() noexcept { return static_cast<Log_Feature>(getInstance().active_features.load(std::memory_order_relaxed)); }
     static bool isForceAllConsoleOutputEnabled() noexcept { return getInstance().is_force_all_console_enabled.load(std::memory_order_relaxed); }
     static bool isFileLoggingEnabled() noexcept { return getInstance().is_file_logging_enabled.load(std::memory_order_relaxed); }
@@ -685,7 +685,7 @@ public:
     static void enableFeature(Log_Feature _feature, bool _enable = true) noexcept
     {
         Logger &instance = getInstance();
-        std::uint64_t feature_mask = static_cast<std::uint64_t>(_feature);
+        uint64_t feature_mask = static_cast<uint64_t>(_feature);
         if (_enable)
         {
             instance.active_features.fetch_or(feature_mask, std::memory_order_relaxed);
@@ -696,7 +696,7 @@ public:
         }
     }
     static void setLogDirectory(const std::string &_directory) { initialize(_directory); }
-    static void setOnlyActiveFeatures(Log_Feature _feature_mask) noexcept { getInstance().active_features.store(static_cast<std::uint64_t>(_feature_mask), std::memory_order_relaxed); }
+    static void setOnlyActiveFeatures(Log_Feature _feature_mask) noexcept { getInstance().active_features.store(static_cast<uint64_t>(_feature_mask), std::memory_order_relaxed); }
     static void setForceAllConsoleOutput(bool _enable = true) noexcept { getInstance().is_force_all_console_enabled.store(_enable, std::memory_order_relaxed); }
     static void forceAllConsoleOutput(bool _enable = true) noexcept { setForceAllConsoleOutput(_enable); }
     static void enableFileLogging(bool _enable = true) noexcept { setFileLogging(_enable); }

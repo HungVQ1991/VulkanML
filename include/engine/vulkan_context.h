@@ -22,7 +22,7 @@
 #endif
 
 constexpr bool IS_DEBUG_VALIDATION_ENABLED = false;
-constexpr std::uint32_t MAX_FRAMES_IN_FLIGHT = 2;
+constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
 struct Resource_Garbage
 {
@@ -65,7 +65,7 @@ private:
     VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
     VkQueue compute_queue = VK_NULL_HANDLE;
     VkCommandPool command_pool = VK_NULL_HANDLE;
-    std::uint32_t compute_queue_family_index = 0;
+    uint32_t compute_queue_family_index = 0;
 
     bool is_cooperative_matrix_supported = false;
     bool is_cooperative_matrix_enabled = false;
@@ -88,7 +88,7 @@ private:
     };
     mutable std::vector<Staging_Garbage> staging_garbages[MAX_FRAMES_IN_FLIGHT];
 
-    mutable std::uint32_t current_frame = 0;
+    mutable uint32_t current_frame = 0;
     mutable std::vector<Buffer_Transfer_Task> pending_transfer_tasks;
 
     mutable VkFence fences[MAX_FRAMES_IN_FLIGHT]{VK_NULL_HANDLE, VK_NULL_HANDLE};
@@ -107,7 +107,7 @@ private:
             .pNext = nullptr,
             .flags = VK_FENCE_CREATE_SIGNALED_BIT};
 
-        for (std::uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
             if (vkCreateFence(device, &fence_create_information, nullptr, &fences[i]) != VK_SUCCESS)
             {
@@ -177,8 +177,8 @@ private:
         vkGetPhysicalDeviceProperties(_target_physical_device, &device_properties);
         const auto &limits = device_properties.limits;
 
-        constexpr std::uint32_t REQUIRED_STORAGE_BUFFERS = 32;
-        constexpr std::uint32_t REQUIRED_PUSH_CONSTANTS = 128;
+        constexpr uint32_t REQUIRED_STORAGE_BUFFERS = 32;
+        constexpr uint32_t REQUIRED_PUSH_CONSTANTS = 128;
 
         if (limits.maxPerStageDescriptorStorageBuffers < REQUIRED_STORAGE_BUFFERS)
         {
@@ -218,7 +218,7 @@ private:
 
     void selectPhysicalDevice()
     {
-        std::uint32_t device_count = 0;
+        uint32_t device_count = 0;
         vkEnumeratePhysicalDevices(instance, &device_count, nullptr);
 
         if (device_count == 0)
@@ -240,10 +240,10 @@ private:
             std::cout << prop.deviceName << "\n";
 
         }
-        constexpr std::array<std::size_t, 5> priority_order = {2, 1, 3, 4, 0};
+        constexpr std::array<size_t, 5> priority_order = {2, 1, 3, 4, 0};
         VkPhysicalDevice best_device = VK_NULL_HANDLE;
-        std::uint32_t best_compute_family_index = 0;
-        std::size_t best_rank = priority_order.size();
+        uint32_t best_compute_family_index = 0;
+        size_t best_rank = priority_order.size();
 
         for (const auto &device_candidate : devices)
         {
@@ -255,20 +255,20 @@ private:
             VkPhysicalDeviceProperties device_properties;
             vkGetPhysicalDeviceProperties(device_candidate, &device_properties);
 
-            std::uint32_t queue_family_count = 0;
+            uint32_t queue_family_count = 0;
             vkGetPhysicalDeviceQueueFamilyProperties(device_candidate, &queue_family_count, nullptr);
 
             std::vector<VkQueueFamilyProperties> queue_families(queue_family_count);
             vkGetPhysicalDeviceQueueFamilyProperties(device_candidate, &queue_family_count, queue_families.data());
 
-            for (std::uint32_t i = 0; i < queue_family_count; ++i)
+            for (uint32_t i = 0; i < queue_family_count; ++i)
             {
                 if (queue_families[i].queueFlags & VK_QUEUE_COMPUTE_BIT)
                 {
-                    auto it = std::find(priority_order.begin(), priority_order.end(), static_cast<std::size_t>(device_properties.deviceType));
+                    auto it = std::find(priority_order.begin(), priority_order.end(), static_cast<size_t>(device_properties.deviceType));
                     if (it != priority_order.end())
                     {
-                        std::size_t current_rank = static_cast<std::size_t>(std::distance(priority_order.begin(), it));
+                        size_t current_rank = static_cast<size_t>(std::distance(priority_order.begin(), it));
                         if (current_rank < best_rank)
                         {
                             best_rank = current_rank;
@@ -308,7 +308,7 @@ private:
             .queueCount = 1,
             .pQueuePriorities = &queue_priority};
 
-        std::uint32_t extension_count = 0;
+        uint32_t extension_count = 0;
         vkEnumerateDeviceExtensionProperties(physical_device, nullptr, &extension_count, nullptr);
         std::vector<VkExtensionProperties> available_extensions(extension_count);
         vkEnumerateDeviceExtensionProperties(physical_device, nullptr, &extension_count, available_extensions.data());
@@ -383,7 +383,7 @@ private:
             .pQueueCreateInfos = &queue_create_information,
             .enabledLayerCount = 0,
             .ppEnabledLayerNames = nullptr,
-            .enabledExtensionCount = static_cast<std::uint32_t>(required_extensions.size()),
+            .enabledExtensionCount = static_cast<uint32_t>(required_extensions.size()),
             .ppEnabledExtensionNames = required_extensions.empty() ? nullptr : required_extensions.data(),
             .pEnabledFeatures = &enabled_features};
 
@@ -417,7 +417,7 @@ private:
             return;
         }
 
-        std::uint32_t property_count = 0;
+        uint32_t property_count = 0;
         if (vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR(physical_device, &property_count, nullptr) != VK_SUCCESS || property_count == 0)
         {
             is_cooperative_matrix_supported = false;
@@ -540,7 +540,7 @@ public:
             vkDeviceWaitIdle(device);
         }
 
-        for (std::uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
             cleanGarbage(i);
 
@@ -585,7 +585,7 @@ public:
         return allocator->allocate(_memory_requirements, _memory_properties, physical_device);
     }
 
-    void deferDestruction(std::uint32_t _used_frame, VkBuffer _buffer, const Memory_Allocation &_allocation) const
+    void deferDestruction(uint32_t _used_frame, VkBuffer _buffer, const Memory_Allocation &_allocation) const
     {
         if (_buffer != VK_NULL_HANDLE || _allocation.memory != VK_NULL_HANDLE)
         {
@@ -605,11 +605,11 @@ public:
     }
 
 
-    std::uint32_t findMemoryType(std::uint32_t _type_filter, VkMemoryPropertyFlags _memory_properties) const
+    uint32_t findMemoryType(uint32_t _type_filter, VkMemoryPropertyFlags _memory_properties) const
     {
         VkPhysicalDeviceMemoryProperties physical_device_memory_properties;
         vkGetPhysicalDeviceMemoryProperties(physical_device, &physical_device_memory_properties);
-        for (std::uint32_t i = 0; i < physical_device_memory_properties.memoryTypeCount; ++i)
+        for (uint32_t i = 0; i < physical_device_memory_properties.memoryTypeCount; ++i)
         {
             if ((_type_filter & (1u << i)) && (physical_device_memory_properties.memoryTypes[i].propertyFlags & _memory_properties) == _memory_properties)
             {
@@ -624,7 +624,7 @@ public:
         throw std::runtime_error("Failed to find suitable memory type");
     }
 
-    void *allocateStagingSpace(std::uint32_t _frame_index, VkDeviceSize _size, VkBuffer &_out_buffer, VkDeviceSize &_out_offset) const
+    void *allocateStagingSpace(uint32_t _frame_index, VkDeviceSize _size, VkBuffer &_out_buffer, VkDeviceSize &_out_offset) const
     {
         std::lock_guard<std::mutex> lock(context_mutex);
 
@@ -742,7 +742,7 @@ public:
         return target_pointer;
     }
 
-    void resetFrameFence(std::uint32_t _frame_index) const
+    void resetFrameFence(uint32_t _frame_index) const
     {
         if (_frame_index >= MAX_FRAMES_IN_FLIGHT)
         {
@@ -777,7 +777,7 @@ public:
         }
     }
 
-    void resetStagingOffset(std::uint32_t _frame_index) const
+    void resetStagingOffset(uint32_t _frame_index) const
     {
         if (_frame_index >= MAX_FRAMES_IN_FLIGHT)
         {
@@ -916,7 +916,7 @@ public:
         vkFreeCommandBuffers(device, command_pool, 1, &command_buffer);
     }
 
-    void cleanGarbage(std::uint32_t _frame_index) const
+    void cleanGarbage(uint32_t _frame_index) const
     {
         if (_frame_index >= MAX_FRAMES_IN_FLIGHT)
         {
@@ -1048,28 +1048,28 @@ public:
         std::lock_guard<std::mutex> lock(context_mutex);
         return pending_transfer_tasks;
     }
-    VkDeviceSize getCurrentStagingOffset(std::uint32_t _frame_index) const noexcept { return current_offsets[_frame_index]; }
-    VkDeviceSize getStagingCapacity(std::uint32_t _frame_index) const noexcept { return staging_capacities[_frame_index]; }
-    VkBuffer getStagingBuffer(std::uint32_t _frame_index) const noexcept { return staging_buffers[_frame_index]; }
-    VkFence getFrameFence(std::uint32_t _frame_index) const noexcept { return fences[_frame_index]; }
+    VkDeviceSize getCurrentStagingOffset(uint32_t _frame_index) const noexcept { return current_offsets[_frame_index]; }
+    VkDeviceSize getStagingCapacity(uint32_t _frame_index) const noexcept { return staging_capacities[_frame_index]; }
+    VkBuffer getStagingBuffer(uint32_t _frame_index) const noexcept { return staging_buffers[_frame_index]; }
+    VkFence getFrameFence(uint32_t _frame_index) const noexcept { return fences[_frame_index]; }
     VkPhysicalDevice getPhysicalDevice() const noexcept { return physical_device; }
     VkPipelineCache getPipelineCache() const noexcept { return pipeline_cache; }
     VkCommandPool getCommandPool() const noexcept { return command_pool; }
     VkQueue getComputeQueue() const noexcept { return compute_queue; }
     VkInstance getInstance() const noexcept { return instance; }
     VkDevice getDevice() const noexcept { return device; }
-    std::uint32_t getComputeQueueFamilyIndex() const noexcept { return compute_queue_family_index; }
-    std::uint32_t getCurrentFrame() const noexcept { return current_frame; }
+    uint32_t getComputeQueueFamilyIndex() const noexcept { return compute_queue_family_index; }
+    uint32_t getCurrentFrame() const noexcept { return current_frame; }
     bool isCooperativeMatrixEnabled() const noexcept { return is_cooperative_matrix_supported && is_cooperative_matrix_enabled; }
     bool isCooperativeMatrixSupported() const noexcept { return is_cooperative_matrix_supported; }
     bool isFloat16Enabled() const noexcept { return is_float16_supported && is_float16_enabled; }
     bool isFloat16Supported() const noexcept { return is_float16_supported; }
-    bool isFrameReady(std::uint32_t _frame_index) const noexcept { return is_frame_ready[_frame_index]; }
+    bool isFrameReady(uint32_t _frame_index) const noexcept { return is_frame_ready[_frame_index]; }
 
     void setCooperativeMatrixProperties(const VkCooperativeMatrixPropertiesKHR &_properties) noexcept { cooperative_matrix_properties = _properties; }
     void registerFlushCallback(std::function<void(VkFence)> _callback) const { flush_callback = _callback; }
-    void setComputeQueueFamilyIndex(std::uint32_t _index) noexcept { compute_queue_family_index = _index; }
-    void setCurrentFrame(std::uint32_t _frame) const noexcept { current_frame = _frame; }
+    void setComputeQueueFamilyIndex(uint32_t _index) noexcept { compute_queue_family_index = _index; }
+    void setCurrentFrame(uint32_t _frame) const noexcept { current_frame = _frame; }
     void setCooperativeMatrixEnabled(bool _enable) noexcept
     {
         if (is_cooperative_matrix_supported)

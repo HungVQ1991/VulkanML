@@ -28,7 +28,7 @@ public:
         compile_options.SetTargetSpirv(shaderc_spirv_version_1_5);
     }
 
-    std::vector<std::uint32_t> compileGlslToSpirv(const std::string &_glsl_code, const std::string &_shader_name = "compute_shader") const
+    std::vector<uint32_t> compileGlslToSpirv(const std::string &_glsl_code, const std::string &_shader_name = "compute_shader") const
     {
         shaderc::SpvCompilationResult compilation_result = compiler.CompileGlslToSpv(
             _glsl_code,

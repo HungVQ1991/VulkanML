@@ -47,7 +47,7 @@ public:
             throw std::invalid_argument("Dimensions mismatch");
         }
 
-        std::size_t batch_size = _prediction_matrix.getRows();
+        size_t batch_size = _prediction_matrix.getRows();
         if (batch_size == 0 || _prediction_matrix.getColumns() == 0)
         {
             Logger::logMessage("Cce_Cost::computeLoss: Empty input matrix encountered",
@@ -88,7 +88,7 @@ public:
             throw std::invalid_argument("Cce_Cost::computeGradient: Dimensions mismatch");
         }
 
-        std::size_t batch_size = _prediction_matrix.getRows();
+        size_t batch_size = _prediction_matrix.getRows();
         if (batch_size == 0 || _prediction_matrix.getColumns() == 0)
         {
             Logger::logMessage("Cce_Cost::computeGradient: Empty input matrix encountered",

@@ -3036,8 +3036,8 @@ Returns an ordering that is similar to Python:
         }
     };
 
-    const auto l_index = static_cast<std::size_t>(lhs);
-    const auto r_index = static_cast<std::size_t>(rhs);
+    const auto l_index = static_cast<size_t>(lhs);
+    const auto r_index = static_cast<size_t>(rhs);
 #if JSON_HAS_THREE_WAY_COMPARISON
     if (l_index < order.size() && r_index < order.size())
     {
@@ -3162,11 +3162,11 @@ namespace detail
 struct position_t
 {
     /// the total number of characters read
-    std::size_t chars_read_total = 0;
+    size_t chars_read_total = 0;
     /// the number of characters read in the current line
-    std::size_t chars_read_current_line = 0;
+    size_t chars_read_current_line = 0;
     /// the number of lines read
-    std::size_t lines_read = 0;
+    size_t lines_read = 0;
 
     /// conversion to size_t to preserve SAX interface
     constexpr operator size_t() const
@@ -3249,7 +3249,7 @@ template <typename T, T... Ints>
 struct integer_sequence
 {
     using value_type = T;
-    static constexpr std::size_t size() noexcept
+    static constexpr size_t size() noexcept
     {
         return sizeof...(Ints);
     }
@@ -3528,7 +3528,7 @@ NLOHMANN_JSON_NAMESPACE_END
     template<typename U, typename... Args> class ArrayType = std::vector,
     class StringType = std::string, class BooleanType = bool,
     class NumberIntegerType = std::int64_t,
-    class NumberUnsignedType = std::uint64_t,
+    class NumberUnsignedType = uint64_t,
     class NumberFloatType = double,
     template<typename U> class AllocatorType = std::allocator,
     template<typename T, typename SFINAE = void> class JSONSerializer =
@@ -4358,32 +4358,32 @@ NLOHMANN_JSON_NAMESPACE_BEGIN
 namespace detail
 {
 
-inline std::size_t concat_length()
+inline size_t concat_length()
 {
     return 0;
 }
 
 template<typename... Args>
-inline std::size_t concat_length(const char* cstr, const Args& ... rest);
+inline size_t concat_length(const char* cstr, const Args& ... rest);
 
 template<typename StringType, typename... Args>
-inline std::size_t concat_length(const StringType& str, const Args& ... rest);
+inline size_t concat_length(const StringType& str, const Args& ... rest);
 
 template<typename... Args>
-inline std::size_t concat_length(const char /*c*/, const Args& ... rest)
+inline size_t concat_length(const char /*c*/, const Args& ... rest)
 {
     return 1 + concat_length(rest...);
 }
 
 template<typename... Args>
-inline std::size_t concat_length(const char* cstr, const Args& ... rest)
+inline size_t concat_length(const char* cstr, const Args& ... rest)
 {
     // cppcheck-suppress ignoredReturnValue
     return ::strlen(cstr) + concat_length(rest...);
 }
 
 template<typename StringType, typename... Args>
-inline std::size_t concat_length(const StringType& str, const Args& ... rest)
+inline size_t concat_length(const StringType& str, const Args& ... rest)
 {
     return str.size() + concat_length(rest...);
 }
@@ -4544,7 +4544,7 @@ class exception : public std::exception
             {
                 case value_t::array:
                 {
-                    for (std::size_t i = 0; i < current->m_parent->m_data.m_value.array->size(); ++i)
+                    for (size_t i = 0; i < current->m_parent->m_data.m_value.array->size(); ++i)
                     {
                         if (&current->m_parent->m_data.m_value.array->operator[](i) == current)
                         {
@@ -4644,7 +4644,7 @@ class parse_error : public exception
     }
 
     template<typename BasicJsonContext, enable_if_t<is_basic_json_context<BasicJsonContext>::value, int> = 0>
-    static parse_error create(int id_, std::size_t byte_, const std::string& what_arg, BasicJsonContext context)
+    static parse_error create(int id_, size_t byte_, const std::string& what_arg, BasicJsonContext context)
     {
         const std::string w = concat(exception::name("parse_error", id_), "parse error",
                                      (byte_ != 0 ? (concat(" at byte ", std::to_string(byte_))) : ""),
@@ -4661,10 +4661,10 @@ class parse_error : public exception
           n+1 is the index of the terminating null byte or the end of file.
           This also holds true when reading a byte vector (CBOR or MessagePack).
     */
-    const std::size_t byte;
+    const size_t byte;
 
   private:
-    parse_error(int id_, std::size_t byte_, const char* what_arg)
+    parse_error(int id_, size_t byte_, const char* what_arg)
         : exception(id_, what_arg), byte(byte_) {}
 
     static std::string position_string(const position_t& pos)
@@ -4986,38 +4986,38 @@ inline void from_json(const BasicJsonType& j, std::valarray<T>& l)
     });
 }
 
-template<typename BasicJsonType, typename T, std::size_t N>
+template<typename BasicJsonType, typename T, size_t N>
 auto from_json(const BasicJsonType& j, T (&arr)[N])  // NOLINT(cppcoreguidelines-avoid-c-arrays,hicpp-avoid-c-arrays,modernize-avoid-c-arrays)
 -> decltype(j.template get<T>(), void())
 {
-    for (std::size_t i = 0; i < N; ++i)
+    for (size_t i = 0; i < N; ++i)
     {
         arr[i] = j.at(i).template get<T>();
     }
 }
 
-template<typename BasicJsonType, typename T, std::size_t N1, std::size_t N2>
+template<typename BasicJsonType, typename T, size_t N1, size_t N2>
 auto from_json(const BasicJsonType& j, T (&arr)[N1][N2])  // NOLINT(cppcoreguidelines-avoid-c-arrays,hicpp-avoid-c-arrays,modernize-avoid-c-arrays)
 -> decltype(j.template get<T>(), void())
 {
-    for (std::size_t i1 = 0; i1 < N1; ++i1)
+    for (size_t i1 = 0; i1 < N1; ++i1)
     {
-        for (std::size_t i2 = 0; i2 < N2; ++i2)
+        for (size_t i2 = 0; i2 < N2; ++i2)
         {
             arr[i1][i2] = j.at(i1).at(i2).template get<T>();
         }
     }
 }
 
-template<typename BasicJsonType, typename T, std::size_t N1, std::size_t N2, std::size_t N3>
+template<typename BasicJsonType, typename T, size_t N1, size_t N2, size_t N3>
 auto from_json(const BasicJsonType& j, T (&arr)[N1][N2][N3])  // NOLINT(cppcoreguidelines-avoid-c-arrays,hicpp-avoid-c-arrays,modernize-avoid-c-arrays)
 -> decltype(j.template get<T>(), void())
 {
-    for (std::size_t i1 = 0; i1 < N1; ++i1)
+    for (size_t i1 = 0; i1 < N1; ++i1)
     {
-        for (std::size_t i2 = 0; i2 < N2; ++i2)
+        for (size_t i2 = 0; i2 < N2; ++i2)
         {
-            for (std::size_t i3 = 0; i3 < N3; ++i3)
+            for (size_t i3 = 0; i3 < N3; ++i3)
             {
                 arr[i1][i2][i3] = j.at(i1).at(i2).at(i3).template get<T>();
             }
@@ -5025,17 +5025,17 @@ auto from_json(const BasicJsonType& j, T (&arr)[N1][N2][N3])  // NOLINT(cppcoreg
     }
 }
 
-template<typename BasicJsonType, typename T, std::size_t N1, std::size_t N2, std::size_t N3, std::size_t N4>
+template<typename BasicJsonType, typename T, size_t N1, size_t N2, size_t N3, size_t N4>
 auto from_json(const BasicJsonType& j, T (&arr)[N1][N2][N3][N4])  // NOLINT(cppcoreguidelines-avoid-c-arrays,hicpp-avoid-c-arrays,modernize-avoid-c-arrays)
 -> decltype(j.template get<T>(), void())
 {
-    for (std::size_t i1 = 0; i1 < N1; ++i1)
+    for (size_t i1 = 0; i1 < N1; ++i1)
     {
-        for (std::size_t i2 = 0; i2 < N2; ++i2)
+        for (size_t i2 = 0; i2 < N2; ++i2)
         {
-            for (std::size_t i3 = 0; i3 < N3; ++i3)
+            for (size_t i3 = 0; i3 < N3; ++i3)
             {
-                for (std::size_t i4 = 0; i4 < N4; ++i4)
+                for (size_t i4 = 0; i4 < N4; ++i4)
                 {
                     arr[i1][i2][i3][i4] = j.at(i1).at(i2).at(i3).at(i4).template get<T>();
                 }
@@ -5050,12 +5050,12 @@ inline void from_json_array_impl(const BasicJsonType& j, typename BasicJsonType:
     arr = *j.template get_ptr<const typename BasicJsonType::array_t*>();
 }
 
-template<typename BasicJsonType, typename T, std::size_t N>
+template<typename BasicJsonType, typename T, size_t N>
 auto from_json_array_impl(const BasicJsonType& j, std::array<T, N>& arr,
                           priority_tag<2> /*unused*/)
 -> decltype(j.template get<T>(), void())
 {
-    for (std::size_t i = 0; i < N; ++i)
+    for (size_t i = 0; i < N; ++i)
     {
         arr[i] = j.at(i).template get<T>();
     }
@@ -5127,14 +5127,14 @@ void())
     from_json_array_impl(j, arr, priority_tag<3> {});
 }
 
-template < typename BasicJsonType, typename T, std::size_t... Idx >
+template < typename BasicJsonType, typename T, size_t... Idx >
 std::array<T, sizeof...(Idx)> from_json_inplace_array_impl(BasicJsonType&& j,
                      identity_tag<std::array<T, sizeof...(Idx)>> /*unused*/, index_sequence<Idx...> /*unused*/)
 {
     return { { std::forward<BasicJsonType>(j).at(Idx).template get<T>()... } };
 }
 
-template < typename BasicJsonType, typename T, std::size_t N >
+template < typename BasicJsonType, typename T, size_t N >
 auto from_json(BasicJsonType&& j, identity_tag<std::array<T, N>> tag)
 -> decltype(from_json_inplace_array_impl(std::forward<BasicJsonType>(j), tag, make_index_sequence<N> {}))
 {
@@ -5227,7 +5227,7 @@ inline void from_json(const BasicJsonType& j, ArithmeticType& val)
     }
 }
 
-template<typename BasicJsonType, typename... Args, std::size_t... Idx>
+template<typename BasicJsonType, typename... Args, size_t... Idx>
 std::tuple<Args...> from_json_tuple_impl_base(BasicJsonType&& j, index_sequence<Idx...> /*unused*/)
 {
     return std::make_tuple(std::forward<BasicJsonType>(j).at(Idx).template get<Args>()...);
@@ -5433,7 +5433,7 @@ namespace detail
 {
 
 template<typename StringType>
-void int_to_string(StringType& target, std::size_t value)
+void int_to_string(StringType& target, size_t value)
 {
     // For ADL
     using std::to_string;
@@ -5441,7 +5441,7 @@ void int_to_string(StringType& target, std::size_t value)
 }
 
 template<typename StringType>
-StringType to_string(std::size_t value)
+StringType to_string(size_t value)
 {
     StringType result;
     int_to_string(result, value);
@@ -5472,9 +5472,9 @@ template<typename IteratorType> class iteration_proxy_value
     /// the iterator
     IteratorType anchor{};
     /// an index for arrays (used to create key names)
-    std::size_t array_index = 0;
+    size_t array_index = 0;
     /// last stringified array index
-    mutable std::size_t array_index_last = 0;
+    mutable size_t array_index_last = 0;
     /// a string representation of the array index
     mutable string_type array_index_str = "0";
     /// an empty string (to return a reference for primitive values)
@@ -5482,7 +5482,7 @@ template<typename IteratorType> class iteration_proxy_value
 
   public:
     explicit iteration_proxy_value() = default;
-    explicit iteration_proxy_value(IteratorType it, std::size_t array_index_ = 0)
+    explicit iteration_proxy_value(IteratorType it, size_t array_index_ = 0)
     noexcept(std::is_nothrow_move_constructible<IteratorType>::value
              && std::is_nothrow_default_constructible<string_type>::value)
         : anchor(std::move(it))
@@ -5614,7 +5614,7 @@ template<typename IteratorType> class iteration_proxy
 // Structured Bindings Support
 // For further reference see https://blog.tartanllama.xyz/structured-bindings/
 // And see https://github.com/nlohmann/json/pull/1391
-template<std::size_t N, typename IteratorType, enable_if_t<N == 0, int> = 0>
+template<size_t N, typename IteratorType, enable_if_t<N == 0, int> = 0>
 auto get(const nlohmann::detail::iteration_proxy_value<IteratorType>& i) -> decltype(i.key())
 {
     return i.key();
@@ -5622,7 +5622,7 @@ auto get(const nlohmann::detail::iteration_proxy_value<IteratorType>& i) -> decl
 // Structured Bindings Support
 // For further reference see https://blog.tartanllama.xyz/structured-bindings/
 // And see https://github.com/nlohmann/json/pull/1391
-template<std::size_t N, typename IteratorType, enable_if_t<N == 1, int> = 0>
+template<size_t N, typename IteratorType, enable_if_t<N == 1, int> = 0>
 auto get(const nlohmann::detail::iteration_proxy_value<IteratorType>& i) -> decltype(i.value())
 {
     return i.value();
@@ -5645,9 +5645,9 @@ namespace std
 #endif
 template<typename IteratorType>
 class tuple_size<::nlohmann::detail::iteration_proxy_value<IteratorType>> // NOLINT(cert-dcl58-cpp)
-    : public std::integral_constant<std::size_t, 2> {};
+    : public std::integral_constant<size_t, 2> {};
 
-template<std::size_t N, typename IteratorType>
+template<size_t N, typename IteratorType>
 class tuple_element<N, ::nlohmann::detail::iteration_proxy_value<IteratorType >> // NOLINT(cert-dcl58-cpp)
 {
   public:
@@ -6044,7 +6044,7 @@ inline void to_json(BasicJsonType& j, typename BasicJsonType::object_t&& obj)
 }
 
 template <
-    typename BasicJsonType, typename T, std::size_t N,
+    typename BasicJsonType, typename T, size_t N,
     enable_if_t < !std::is_constructible<typename BasicJsonType::string_t,
                   const T(&)[N]>::value, // NOLINT(cppcoreguidelines-avoid-c-arrays,hicpp-avoid-c-arrays,modernize-avoid-c-arrays)
                   int > = 0 >
@@ -6067,7 +6067,7 @@ inline void to_json(BasicJsonType& j, const T& b)
     j = { {b.key(), b.value()} };
 }
 
-template<typename BasicJsonType, typename Tuple, std::size_t... Idx>
+template<typename BasicJsonType, typename Tuple, size_t... Idx>
 inline void to_json_tuple_impl(BasicJsonType& j, const Tuple& t, index_sequence<Idx...> /*unused*/)
 {
     j = { std::get<Idx>(t)... };
@@ -6194,7 +6194,7 @@ class byte_container_with_subtype : public BinaryType
 {
   public:
     using container_type = BinaryType;
-    using subtype_type = std::uint64_t;
+    using subtype_type = uint64_t;
 
     /// @sa https://json.nlohmann.me/api/byte_container_with_subtype/byte_container_with_subtype/
     byte_container_with_subtype() noexcept(noexcept(container_type()))
@@ -6304,7 +6304,7 @@ namespace detail
 {
 
 // boost::hash_combine
-inline std::size_t combine(std::size_t seed, std::size_t h) noexcept
+inline size_t combine(size_t seed, size_t h) noexcept
 {
     seed ^= h + 0x9e3779b9 + (seed << 6U) + (seed >> 2U);
     return seed;
@@ -6322,14 +6322,14 @@ null, 0, 0U, and false, etc.
 @return hash value of j
 */
 template<typename BasicJsonType>
-std::size_t hash(const BasicJsonType& j)
+size_t hash(const BasicJsonType& j)
 {
     using string_t = typename BasicJsonType::string_t;
     using number_integer_t = typename BasicJsonType::number_integer_t;
     using number_unsigned_t = typename BasicJsonType::number_unsigned_t;
     using number_float_t = typename BasicJsonType::number_float_t;
 
-    const auto type = static_cast<std::size_t>(j.type());
+    const auto type = static_cast<size_t>(j.type());
     switch (j.type())
     {
         case BasicJsonType::value_t::null:
@@ -6395,7 +6395,7 @@ std::size_t hash(const BasicJsonType& j)
             auto seed = combine(type, j.get_binary().size());
             const auto h = std::hash<bool> {}(j.get_binary().has_subtype());
             seed = combine(seed, h);
-            seed = combine(seed, static_cast<std::size_t>(j.get_binary().subtype()));
+            seed = combine(seed, static_cast<size_t>(j.get_binary().subtype()));
             for (const auto byte : j.get_binary())
             {
                 seed = combine(seed, std::hash<std::uint8_t> {}(byte));
@@ -6518,7 +6518,7 @@ class file_input_adapter
 
     // returns the number of characters successfully read
     template<class T>
-    std::size_t get_elements(T* dest, std::size_t count = 1)
+    size_t get_elements(T* dest, size_t count = 1)
     {
         return fread(dest, 1, sizeof(T) * count, m_file);
     }
@@ -6583,9 +6583,9 @@ class input_stream_adapter
     }
 
     template<class T>
-    std::size_t get_elements(T* dest, std::size_t count = 1)
+    size_t get_elements(T* dest, size_t count = 1)
     {
-        auto res = static_cast<std::size_t>(sb->sgetn(reinterpret_cast<char*>(dest), static_cast<std::streamsize>(count * sizeof(T))));
+        auto res = static_cast<size_t>(sb->sgetn(reinterpret_cast<char*>(dest), static_cast<std::streamsize>(count * sizeof(T))));
         if (JSON_HEDLEY_UNLIKELY(res < count * sizeof(T)))
         {
             is->clear(is->rdstate() | std::ios::eofbit);
@@ -6626,10 +6626,10 @@ class iterator_input_adapter
 
     // for general iterators, we cannot really do something better than falling back to processing the range one-by-one
     template<class T>
-    std::size_t get_elements(T* dest, std::size_t count = 1)
+    size_t get_elements(T* dest, size_t count = 1)
     {
         auto* ptr = reinterpret_cast<char*>(dest);
-        for (std::size_t read_index = 0; read_index < count * sizeof(T); ++read_index)
+        for (size_t read_index = 0; read_index < count * sizeof(T); ++read_index)
         {
             if (JSON_HEDLEY_LIKELY(current != end))
             {
@@ -6809,7 +6809,7 @@ class wide_string_input_adapter
 
     // parsing binary with wchar doesn't make sense, but since the parsing mode can be runtime, we need something here
     template<class T>
-    std::size_t get_elements(T* /*dest*/, std::size_t /*count*/ = 1)
+    size_t get_elements(T* /*dest*/, size_t /*count*/ = 1)
     {
         JSON_THROW(parse_error::create(112, 1, "wide string type cannot be interpreted as binary data", nullptr));
     }
@@ -6827,9 +6827,9 @@ class wide_string_input_adapter
     std::array<std::char_traits<char>::int_type, 4> utf8_bytes = {{0, 0, 0, 0}};
 
     /// index to the utf8_codes array for the next valid byte
-    std::size_t utf8_bytes_index = 0;
+    size_t utf8_bytes_index = 0;
     /// number of valid bytes in the utf8_codes array
-    std::size_t utf8_bytes_filled = 0;
+    size_t utf8_bytes_filled = 0;
 };
 
 template<typename IteratorType, typename Enable = void>
@@ -6956,7 +6956,7 @@ contiguous_bytes_input_adapter input_adapter(CharT b)
     return input_adapter(ptr, ptr + length); // cppcheck-suppress[nullPointerArithmeticRedundantCheck]
 }
 
-template<typename T, std::size_t N>
+template<typename T, size_t N>
 auto input_adapter(T (&array)[N]) -> decltype(input_adapter(array, array + N)) // NOLINT(cppcoreguidelines-avoid-c-arrays,hicpp-avoid-c-arrays,modernize-avoid-c-arrays)
 {
     return input_adapter(array, array + N);
@@ -6974,7 +6974,7 @@ class span_input_adapter
                    std::is_integral<typename std::remove_pointer<CharT>::type>::value&&
                    sizeof(typename std::remove_pointer<CharT>::type) == 1,
                    int >::type = 0 >
-    span_input_adapter(CharT b, std::size_t l)
+    span_input_adapter(CharT b, size_t l)
         : ia(reinterpret_cast<const char*>(b), reinterpret_cast<const char*>(b) + l) {}
 
     template<class IteratorType,
@@ -8322,11 +8322,11 @@ scan_number_done:
     @param[in] return_type   the token type to return on success
     */
     JSON_HEDLEY_NON_NULL(2)
-    token_type scan_literal(const char_type* literal_text, const std::size_t length,
+    token_type scan_literal(const char_type* literal_text, const size_t length,
                             token_type return_type)
     {
         JSON_ASSERT(char_traits<char_type>::to_char_type(current) == literal_text[0]);
-        for (std::size_t i = 1; i < length; ++i)
+        for (size_t i = 1; i < length; ++i)
         {
             if (JSON_HEDLEY_UNLIKELY(char_traits<char_type>::to_char_type(get()) != literal_text[i]))
             {
@@ -8658,7 +8658,7 @@ scan_number_done:
     /// the decimal point
     const char_int_type decimal_point_char = '.';
     /// the position of the decimal point in the input
-    std::size_t decimal_point_position = std::string::npos;
+    size_t decimal_point_position = std::string::npos;
 };
 
 }  // namespace detail
@@ -8744,7 +8744,7 @@ struct json_sax
     @return whether parsing should proceed
     @note binary formats may report the number of elements
     */
-    virtual bool start_object(std::size_t elements) = 0;
+    virtual bool start_object(size_t elements) = 0;
 
     /*!
     @brief an object key was read
@@ -8766,7 +8766,7 @@ struct json_sax
     @return whether parsing should proceed
     @note binary formats may report the number of elements
     */
-    virtual bool start_array(std::size_t elements) = 0;
+    virtual bool start_array(size_t elements) = 0;
 
     /*!
     @brief the end of an array was read
@@ -8781,7 +8781,7 @@ struct json_sax
     @param[in] ex          an exception object describing the error
     @return whether parsing should proceed (must return false)
     */
-    virtual bool parse_error(std::size_t position,
+    virtual bool parse_error(size_t position,
                              const std::string& last_token,
                              const detail::exception& ex) = 0;
 
@@ -8795,9 +8795,9 @@ struct json_sax
 
 namespace detail
 {
-constexpr std::size_t unknown_size()
+constexpr size_t unknown_size()
 {
-    return (std::numeric_limits<std::size_t>::max)();
+    return (std::numeric_limits<size_t>::max)();
 }
 
 /*!
@@ -8882,7 +8882,7 @@ class json_sax_dom_parser
         return true;
     }
 
-    bool start_object(std::size_t len)
+    bool start_object(size_t len)
     {
         ref_stack.push_back(handle_value(BasicJsonType::value_t::object));
 
@@ -8933,7 +8933,7 @@ class json_sax_dom_parser
         return true;
     }
 
-    bool start_array(std::size_t len)
+    bool start_array(size_t len)
     {
         ref_stack.push_back(handle_value(BasicJsonType::value_t::array));
 
@@ -8973,7 +8973,7 @@ class json_sax_dom_parser
     }
 
     template<class Exception>
-    bool parse_error(std::size_t /*unused*/, const std::string& /*unused*/,
+    bool parse_error(size_t /*unused*/, const std::string& /*unused*/,
                      const Exception& ex)
     {
         errored = true;
@@ -9190,7 +9190,7 @@ class json_sax_dom_callback_parser
         return true;
     }
 
-    bool start_object(std::size_t len)
+    bool start_object(size_t len)
     {
         // check callback for object start
         const bool keep = callback(static_cast<int>(ref_stack.size()), parse_event_t::object_start, discarded);
@@ -9289,7 +9289,7 @@ class json_sax_dom_callback_parser
         return true;
     }
 
-    bool start_array(std::size_t len)
+    bool start_array(size_t len)
     {
         const bool keep = callback(static_cast<int>(ref_stack.size()), parse_event_t::array_start, discarded);
         keep_stack.push_back(keep);
@@ -9368,7 +9368,7 @@ class json_sax_dom_callback_parser
     }
 
     template<class Exception>
-    bool parse_error(std::size_t /*unused*/, const std::string& /*unused*/,
+    bool parse_error(size_t /*unused*/, const std::string& /*unused*/,
                      const Exception& ex)
     {
         errored = true;
@@ -9601,7 +9601,7 @@ class json_sax_acceptor
         return true;
     }
 
-    bool start_object(std::size_t /*unused*/ = detail::unknown_size())
+    bool start_object(size_t /*unused*/ = detail::unknown_size())
     {
         return true;
     }
@@ -9616,7 +9616,7 @@ class json_sax_acceptor
         return true;
     }
 
-    bool start_array(std::size_t /*unused*/ = detail::unknown_size())
+    bool start_array(size_t /*unused*/ = detail::unknown_size())
     {
         return true;
     }
@@ -9626,7 +9626,7 @@ class json_sax_acceptor
         return true;
     }
 
-    bool parse_error(std::size_t /*unused*/, const std::string& /*unused*/, const detail::exception& /*unused*/)
+    bool parse_error(size_t /*unused*/, const std::string& /*unused*/, const detail::exception& /*unused*/)
     {
         return false;
     }
@@ -9694,7 +9694,7 @@ using binary_function_t =
 
 template<typename T>
 using start_object_function_t =
-    decltype(std::declval<T&>().start_object(std::declval<std::size_t>()));
+    decltype(std::declval<T&>().start_object(std::declval<size_t>()));
 
 template<typename T, typename String>
 using key_function_t =
@@ -9705,14 +9705,14 @@ using end_object_function_t = decltype(std::declval<T&>().end_object());
 
 template<typename T>
 using start_array_function_t =
-    decltype(std::declval<T&>().start_array(std::declval<std::size_t>()));
+    decltype(std::declval<T&>().start_array(std::declval<size_t>()));
 
 template<typename T>
 using end_array_function_t = decltype(std::declval<T&>().end_array());
 
 template<typename T, typename Exception>
 using parse_error_function_t = decltype(std::declval<T&>().parse_error(
-        std::declval<std::size_t>(), std::declval<const std::string&>(),
+        std::declval<size_t>(), std::declval<const std::string&>(),
         std::declval<const Exception&>()));
 
 template<typename SAX, typename BasicJsonType>
@@ -9785,18 +9785,18 @@ struct is_sax_static_asserts
         is_detected_exact<bool, binary_function_t, SAX, binary_t>::value,
         "Missing/invalid function: bool binary(binary_t&)");
     static_assert(is_detected_exact<bool, start_object_function_t, SAX>::value,
-                  "Missing/invalid function: bool start_object(std::size_t)");
+                  "Missing/invalid function: bool start_object(size_t)");
     static_assert(is_detected_exact<bool, key_function_t, SAX, string_t>::value,
                   "Missing/invalid function: bool key(string_t&)");
     static_assert(is_detected_exact<bool, end_object_function_t, SAX>::value,
                   "Missing/invalid function: bool end_object()");
     static_assert(is_detected_exact<bool, start_array_function_t, SAX>::value,
-                  "Missing/invalid function: bool start_array(std::size_t)");
+                  "Missing/invalid function: bool start_array(size_t)");
     static_assert(is_detected_exact<bool, end_array_function_t, SAX>::value,
                   "Missing/invalid function: bool end_array()");
     static_assert(
         is_detected_exact<bool, parse_error_function_t, SAX, exception_t>::value,
-        "Missing/invalid function: bool parse_error(std::size_t, const "
+        "Missing/invalid function: bool parse_error(size_t, const "
         "std::string&, const exception&)");
 };
 
@@ -10048,7 +10048,7 @@ class binary_reader
     @return whether a valid BSON-object/array was passed to the SAX parser
     */
     bool parse_bson_element_internal(const char_int_type element_type,
-                                     const std::size_t element_type_parse_position)
+                                     const size_t element_type_parse_position)
     {
         switch (element_type)
         {
@@ -10106,8 +10106,8 @@ class binary_reader
 
             case 0x11: // uint64
             {
-                std::uint64_t value{};
-                return get_number<std::uint64_t, true>(input_format_t::bson, value) && sax->number_unsigned(value);
+                uint64_t value{};
+                return get_number<uint64_t, true>(input_format_t::bson, value) && sax->number_unsigned(value);
             }
 
             default: // anything else not supported (yet)
@@ -10144,7 +10144,7 @@ class binary_reader
                 return false;
             }
 
-            const std::size_t element_type_parse_position = chars_read;
+            const size_t element_type_parse_position = chars_read;
             if (JSON_HEDLEY_UNLIKELY(!get_bson_cstr(key)))
             {
                 return false;
@@ -10245,19 +10245,19 @@ class binary_reader
 
             case 0x19: // Unsigned integer (two-byte uint16_t follows)
             {
-                std::uint16_t number{};
+                uint16_t number{};
                 return get_number(input_format_t::cbor, number) && sax->number_unsigned(number);
             }
 
             case 0x1A: // Unsigned integer (four-byte uint32_t follows)
             {
-                std::uint32_t number{};
+                uint32_t number{};
                 return get_number(input_format_t::cbor, number) && sax->number_unsigned(number);
             }
 
             case 0x1B: // Unsigned integer (eight-byte uint64_t follows)
             {
-                std::uint64_t number{};
+                uint64_t number{};
                 return get_number(input_format_t::cbor, number) && sax->number_unsigned(number);
             }
 
@@ -10296,19 +10296,19 @@ class binary_reader
 
             case 0x39: // Negative integer -1-n (two-byte uint16_t follows)
             {
-                std::uint16_t number{};
+                uint16_t number{};
                 return get_number(input_format_t::cbor, number) && sax->number_integer(static_cast<number_integer_t>(-1) - number);
             }
 
             case 0x3A: // Negative integer -1-n (four-byte uint32_t follows)
             {
-                std::uint32_t number{};
+                uint32_t number{};
                 return get_number(input_format_t::cbor, number) && sax->number_integer(static_cast<number_integer_t>(-1) - number);
             }
 
             case 0x3B: // Negative integer -1-n (eight-byte uint64_t follows)
             {
-                std::uint64_t number{};
+                uint64_t number{};
                 return get_number(input_format_t::cbor, number) && sax->number_integer(static_cast<number_integer_t>(-1)
                         - static_cast<number_integer_t>(number));
             }
@@ -10409,30 +10409,30 @@ class binary_reader
             case 0x96:
             case 0x97:
                 return get_cbor_array(
-                           conditional_static_cast<std::size_t>(static_cast<unsigned int>(current) & 0x1Fu), tag_handler);
+                           conditional_static_cast<size_t>(static_cast<unsigned int>(current) & 0x1Fu), tag_handler);
 
             case 0x98: // array (one-byte uint8_t for n follows)
             {
                 std::uint8_t len{};
-                return get_number(input_format_t::cbor, len) && get_cbor_array(static_cast<std::size_t>(len), tag_handler);
+                return get_number(input_format_t::cbor, len) && get_cbor_array(static_cast<size_t>(len), tag_handler);
             }
 
             case 0x99: // array (two-byte uint16_t for n follow)
             {
-                std::uint16_t len{};
-                return get_number(input_format_t::cbor, len) && get_cbor_array(static_cast<std::size_t>(len), tag_handler);
+                uint16_t len{};
+                return get_number(input_format_t::cbor, len) && get_cbor_array(static_cast<size_t>(len), tag_handler);
             }
 
             case 0x9A: // array (four-byte uint32_t for n follow)
             {
-                std::uint32_t len{};
-                return get_number(input_format_t::cbor, len) && get_cbor_array(conditional_static_cast<std::size_t>(len), tag_handler);
+                uint32_t len{};
+                return get_number(input_format_t::cbor, len) && get_cbor_array(conditional_static_cast<size_t>(len), tag_handler);
             }
 
             case 0x9B: // array (eight-byte uint64_t for n follow)
             {
-                std::uint64_t len{};
-                return get_number(input_format_t::cbor, len) && get_cbor_array(conditional_static_cast<std::size_t>(len), tag_handler);
+                uint64_t len{};
+                return get_number(input_format_t::cbor, len) && get_cbor_array(conditional_static_cast<size_t>(len), tag_handler);
             }
 
             case 0x9F: // array (indefinite length)
@@ -10463,30 +10463,30 @@ class binary_reader
             case 0xB5:
             case 0xB6:
             case 0xB7:
-                return get_cbor_object(conditional_static_cast<std::size_t>(static_cast<unsigned int>(current) & 0x1Fu), tag_handler);
+                return get_cbor_object(conditional_static_cast<size_t>(static_cast<unsigned int>(current) & 0x1Fu), tag_handler);
 
             case 0xB8: // map (one-byte uint8_t for n follows)
             {
                 std::uint8_t len{};
-                return get_number(input_format_t::cbor, len) && get_cbor_object(static_cast<std::size_t>(len), tag_handler);
+                return get_number(input_format_t::cbor, len) && get_cbor_object(static_cast<size_t>(len), tag_handler);
             }
 
             case 0xB9: // map (two-byte uint16_t for n follow)
             {
-                std::uint16_t len{};
-                return get_number(input_format_t::cbor, len) && get_cbor_object(static_cast<std::size_t>(len), tag_handler);
+                uint16_t len{};
+                return get_number(input_format_t::cbor, len) && get_cbor_object(static_cast<size_t>(len), tag_handler);
             }
 
             case 0xBA: // map (four-byte uint32_t for n follow)
             {
-                std::uint32_t len{};
-                return get_number(input_format_t::cbor, len) && get_cbor_object(conditional_static_cast<std::size_t>(len), tag_handler);
+                uint32_t len{};
+                return get_number(input_format_t::cbor, len) && get_cbor_object(conditional_static_cast<size_t>(len), tag_handler);
             }
 
             case 0xBB: // map (eight-byte uint64_t for n follow)
             {
-                std::uint64_t len{};
-                return get_number(input_format_t::cbor, len) && get_cbor_object(conditional_static_cast<std::size_t>(len), tag_handler);
+                uint64_t len{};
+                return get_number(input_format_t::cbor, len) && get_cbor_object(conditional_static_cast<size_t>(len), tag_handler);
             }
 
             case 0xBF: // map (indefinite length)
@@ -10534,19 +10534,19 @@ class binary_reader
                             }
                             case 0xD9:
                             {
-                                std::uint16_t subtype_to_ignore{};
+                                uint16_t subtype_to_ignore{};
                                 get_number(input_format_t::cbor, subtype_to_ignore);
                                 break;
                             }
                             case 0xDA:
                             {
-                                std::uint32_t subtype_to_ignore{};
+                                uint32_t subtype_to_ignore{};
                                 get_number(input_format_t::cbor, subtype_to_ignore);
                                 break;
                             }
                             case 0xDB:
                             {
-                                std::uint64_t subtype_to_ignore{};
+                                uint64_t subtype_to_ignore{};
                                 get_number(input_format_t::cbor, subtype_to_ignore);
                                 break;
                             }
@@ -10571,21 +10571,21 @@ class binary_reader
                             }
                             case 0xD9:
                             {
-                                std::uint16_t subtype{};
+                                uint16_t subtype{};
                                 get_number(input_format_t::cbor, subtype);
                                 b.set_subtype(detail::conditional_static_cast<typename binary_t::subtype_type>(subtype));
                                 break;
                             }
                             case 0xDA:
                             {
-                                std::uint32_t subtype{};
+                                uint32_t subtype{};
                                 get_number(input_format_t::cbor, subtype);
                                 b.set_subtype(detail::conditional_static_cast<typename binary_t::subtype_type>(subtype));
                                 break;
                             }
                             case 0xDB:
                             {
-                                std::uint64_t subtype{};
+                                uint64_t subtype{};
                                 get_number(input_format_t::cbor, subtype);
                                 b.set_subtype(detail::conditional_static_cast<typename binary_t::subtype_type>(subtype));
                                 break;
@@ -10738,19 +10738,19 @@ class binary_reader
 
             case 0x79: // UTF-8 string (two-byte uint16_t for n follow)
             {
-                std::uint16_t len{};
+                uint16_t len{};
                 return get_number(input_format_t::cbor, len) && get_string(input_format_t::cbor, len, result);
             }
 
             case 0x7A: // UTF-8 string (four-byte uint32_t for n follow)
             {
-                std::uint32_t len{};
+                uint32_t len{};
                 return get_number(input_format_t::cbor, len) && get_string(input_format_t::cbor, len, result);
             }
 
             case 0x7B: // UTF-8 string (eight-byte uint64_t for n follow)
             {
-                std::uint64_t len{};
+                uint64_t len{};
                 return get_number(input_format_t::cbor, len) && get_string(input_format_t::cbor, len, result);
             }
 
@@ -10835,21 +10835,21 @@ class binary_reader
 
             case 0x59: // Binary data (two-byte uint16_t for n follow)
             {
-                std::uint16_t len{};
+                uint16_t len{};
                 return get_number(input_format_t::cbor, len) &&
                        get_binary(input_format_t::cbor, len, result);
             }
 
             case 0x5A: // Binary data (four-byte uint32_t for n follow)
             {
-                std::uint32_t len{};
+                uint32_t len{};
                 return get_number(input_format_t::cbor, len) &&
                        get_binary(input_format_t::cbor, len, result);
             }
 
             case 0x5B: // Binary data (eight-byte uint64_t for n follow)
             {
-                std::uint64_t len{};
+                uint64_t len{};
                 return get_number(input_format_t::cbor, len) &&
                        get_binary(input_format_t::cbor, len, result);
             }
@@ -10883,7 +10883,7 @@ class binary_reader
     @param[in] tag_handler how CBOR tags should be treated
     @return whether array creation completed
     */
-    bool get_cbor_array(const std::size_t len,
+    bool get_cbor_array(const size_t len,
                         const cbor_tag_handler_t tag_handler)
     {
         if (JSON_HEDLEY_UNLIKELY(!sax->start_array(len)))
@@ -10893,7 +10893,7 @@ class binary_reader
 
         if (len != detail::unknown_size())
         {
-            for (std::size_t i = 0; i < len; ++i)
+            for (size_t i = 0; i < len; ++i)
             {
                 if (JSON_HEDLEY_UNLIKELY(!parse_cbor_internal(true, tag_handler)))
                 {
@@ -10921,7 +10921,7 @@ class binary_reader
     @param[in] tag_handler how CBOR tags should be treated
     @return whether object creation completed
     */
-    bool get_cbor_object(const std::size_t len,
+    bool get_cbor_object(const size_t len,
                          const cbor_tag_handler_t tag_handler)
     {
         if (JSON_HEDLEY_UNLIKELY(!sax->start_object(len)))
@@ -10934,7 +10934,7 @@ class binary_reader
             string_t key;
             if (len != detail::unknown_size())
             {
-                for (std::size_t i = 0; i < len; ++i)
+                for (size_t i = 0; i < len; ++i)
                 {
                     get();
                     if (JSON_HEDLEY_UNLIKELY(!get_cbor_string(key) || !sax->key(key)))
@@ -11133,7 +11133,7 @@ class binary_reader
             case 0x8D:
             case 0x8E:
             case 0x8F:
-                return get_msgpack_object(conditional_static_cast<std::size_t>(static_cast<unsigned int>(current) & 0x0Fu));
+                return get_msgpack_object(conditional_static_cast<size_t>(static_cast<unsigned int>(current) & 0x0Fu));
 
             // fixarray
             case 0x90:
@@ -11152,7 +11152,7 @@ class binary_reader
             case 0x9D:
             case 0x9E:
             case 0x9F:
-                return get_msgpack_array(conditional_static_cast<std::size_t>(static_cast<unsigned int>(current) & 0x0Fu));
+                return get_msgpack_array(conditional_static_cast<size_t>(static_cast<unsigned int>(current) & 0x0Fu));
 
             // fixstr
             case 0xA0:
@@ -11240,19 +11240,19 @@ class binary_reader
 
             case 0xCD: // uint 16
             {
-                std::uint16_t number{};
+                uint16_t number{};
                 return get_number(input_format_t::msgpack, number) && sax->number_unsigned(number);
             }
 
             case 0xCE: // uint 32
             {
-                std::uint32_t number{};
+                uint32_t number{};
                 return get_number(input_format_t::msgpack, number) && sax->number_unsigned(number);
             }
 
             case 0xCF: // uint 64
             {
-                std::uint64_t number{};
+                uint64_t number{};
                 return get_number(input_format_t::msgpack, number) && sax->number_unsigned(number);
             }
 
@@ -11282,26 +11282,26 @@ class binary_reader
 
             case 0xDC: // array 16
             {
-                std::uint16_t len{};
-                return get_number(input_format_t::msgpack, len) && get_msgpack_array(static_cast<std::size_t>(len));
+                uint16_t len{};
+                return get_number(input_format_t::msgpack, len) && get_msgpack_array(static_cast<size_t>(len));
             }
 
             case 0xDD: // array 32
             {
-                std::uint32_t len{};
-                return get_number(input_format_t::msgpack, len) && get_msgpack_array(conditional_static_cast<std::size_t>(len));
+                uint32_t len{};
+                return get_number(input_format_t::msgpack, len) && get_msgpack_array(conditional_static_cast<size_t>(len));
             }
 
             case 0xDE: // map 16
             {
-                std::uint16_t len{};
-                return get_number(input_format_t::msgpack, len) && get_msgpack_object(static_cast<std::size_t>(len));
+                uint16_t len{};
+                return get_number(input_format_t::msgpack, len) && get_msgpack_object(static_cast<size_t>(len));
             }
 
             case 0xDF: // map 32
             {
-                std::uint32_t len{};
-                return get_number(input_format_t::msgpack, len) && get_msgpack_object(conditional_static_cast<std::size_t>(len));
+                uint32_t len{};
+                return get_number(input_format_t::msgpack, len) && get_msgpack_object(conditional_static_cast<size_t>(len));
             }
 
             // negative fixint
@@ -11412,13 +11412,13 @@ class binary_reader
 
             case 0xDA: // str 16
             {
-                std::uint16_t len{};
+                uint16_t len{};
                 return get_number(input_format_t::msgpack, len) && get_string(input_format_t::msgpack, len, result);
             }
 
             case 0xDB: // str 32
             {
-                std::uint32_t len{};
+                uint32_t len{};
                 return get_number(input_format_t::msgpack, len) && get_string(input_format_t::msgpack, len, result);
             }
 
@@ -11461,14 +11461,14 @@ class binary_reader
 
             case 0xC5: // bin 16
             {
-                std::uint16_t len{};
+                uint16_t len{};
                 return get_number(input_format_t::msgpack, len) &&
                        get_binary(input_format_t::msgpack, len, result);
             }
 
             case 0xC6: // bin 32
             {
-                std::uint32_t len{};
+                uint32_t len{};
                 return get_number(input_format_t::msgpack, len) &&
                        get_binary(input_format_t::msgpack, len, result);
             }
@@ -11485,7 +11485,7 @@ class binary_reader
 
             case 0xC8: // ext 16
             {
-                std::uint16_t len{};
+                uint16_t len{};
                 std::int8_t subtype{};
                 return get_number(input_format_t::msgpack, len) &&
                        get_number(input_format_t::msgpack, subtype) &&
@@ -11495,7 +11495,7 @@ class binary_reader
 
             case 0xC9: // ext 32
             {
-                std::uint32_t len{};
+                uint32_t len{};
                 std::int8_t subtype{};
                 return get_number(input_format_t::msgpack, len) &&
                        get_number(input_format_t::msgpack, subtype) &&
@@ -11552,14 +11552,14 @@ class binary_reader
     @param[in] len  the length of the array
     @return whether array creation completed
     */
-    bool get_msgpack_array(const std::size_t len)
+    bool get_msgpack_array(const size_t len)
     {
         if (JSON_HEDLEY_UNLIKELY(!sax->start_array(len)))
         {
             return false;
         }
 
-        for (std::size_t i = 0; i < len; ++i)
+        for (size_t i = 0; i < len; ++i)
         {
             if (JSON_HEDLEY_UNLIKELY(!parse_msgpack_internal()))
             {
@@ -11574,7 +11574,7 @@ class binary_reader
     @param[in] len  the length of the object
     @return whether object creation completed
     */
-    bool get_msgpack_object(const std::size_t len)
+    bool get_msgpack_object(const size_t len)
     {
         if (JSON_HEDLEY_UNLIKELY(!sax->start_object(len)))
         {
@@ -11582,7 +11582,7 @@ class binary_reader
         }
 
         string_t key;
-        for (std::size_t i = 0; i < len; ++i)
+        for (size_t i = 0; i < len; ++i)
         {
             get();
             if (JSON_HEDLEY_UNLIKELY(!get_msgpack_string(key) || !sax->key(key)))
@@ -11680,7 +11680,7 @@ class binary_reader
                 {
                     break;
                 }
-                std::uint16_t len{};
+                uint16_t len{};
                 return get_number(input_format, len) && get_string(input_format, len, result);
             }
 
@@ -11690,7 +11690,7 @@ class binary_reader
                 {
                     break;
                 }
-                std::uint32_t len{};
+                uint32_t len{};
                 return get_number(input_format, len) && get_string(input_format, len, result);
             }
 
@@ -11700,7 +11700,7 @@ class binary_reader
                 {
                     break;
                 }
-                std::uint64_t len{};
+                uint64_t len{};
                 return get_number(input_format, len) && get_string(input_format, len, result);
             }
 
@@ -11727,7 +11727,7 @@ class binary_reader
     */
     bool get_ubjson_ndarray_size(std::vector<size_t>& dim)
     {
-        std::pair<std::size_t, char_int_type> size_and_type;
+        std::pair<size_t, char_int_type> size_and_type;
         size_t dimlen = 0;
         bool no_ndarray = true;
 
@@ -11742,7 +11742,7 @@ class binary_reader
             {
                 if (size_and_type.second != 'N')
                 {
-                    for (std::size_t i = 0; i < size_and_type.first; ++i)
+                    for (size_t i = 0; i < size_and_type.first; ++i)
                     {
                         if (JSON_HEDLEY_UNLIKELY(!get_ubjson_size_value(dimlen, no_ndarray, size_and_type.second)))
                         {
@@ -11754,7 +11754,7 @@ class binary_reader
             }
             else
             {
-                for (std::size_t i = 0; i < size_and_type.first; ++i)
+                for (size_t i = 0; i < size_and_type.first; ++i)
                 {
                     if (JSON_HEDLEY_UNLIKELY(!get_ubjson_size_value(dimlen, no_ndarray)))
                     {
@@ -11790,7 +11790,7 @@ class binary_reader
 
     @return whether size determination completed
     */
-    bool get_ubjson_size_value(std::size_t& result, bool& is_ndarray, char_int_type prefix = 0)
+    bool get_ubjson_size_value(size_t& result, bool& is_ndarray, char_int_type prefix = 0)
     {
         if (prefix == 0)
         {
@@ -11806,7 +11806,7 @@ class binary_reader
                 {
                     return false;
                 }
-                result = static_cast<std::size_t>(number);
+                result = static_cast<size_t>(number);
                 return true;
             }
 
@@ -11822,7 +11822,7 @@ class binary_reader
                     return sax->parse_error(chars_read, get_token_string(), parse_error::create(113, chars_read,
                                             exception_message(input_format, "count in an optimized container must be positive", "size"), nullptr));
                 }
-                result = static_cast<std::size_t>(number); // NOLINT(bugprone-signed-char-misuse,cert-str34-c): number is not a char
+                result = static_cast<size_t>(number); // NOLINT(bugprone-signed-char-misuse,cert-str34-c): number is not a char
                 return true;
             }
 
@@ -11838,7 +11838,7 @@ class binary_reader
                     return sax->parse_error(chars_read, get_token_string(), parse_error::create(113, chars_read,
                                             exception_message(input_format, "count in an optimized container must be positive", "size"), nullptr));
                 }
-                result = static_cast<std::size_t>(number);
+                result = static_cast<size_t>(number);
                 return true;
             }
 
@@ -11854,7 +11854,7 @@ class binary_reader
                     return sax->parse_error(chars_read, get_token_string(), parse_error::create(113, chars_read,
                                             exception_message(input_format, "count in an optimized container must be positive", "size"), nullptr));
                 }
-                result = static_cast<std::size_t>(number);
+                result = static_cast<size_t>(number);
                 return true;
             }
 
@@ -11870,12 +11870,12 @@ class binary_reader
                     return sax->parse_error(chars_read, get_token_string(), parse_error::create(113, chars_read,
                                             exception_message(input_format, "count in an optimized container must be positive", "size"), nullptr));
                 }
-                if (!value_in_range_of<std::size_t>(number))
+                if (!value_in_range_of<size_t>(number))
                 {
                     return sax->parse_error(chars_read, get_token_string(), out_of_range::create(408,
                                             exception_message(input_format, "integer value overflow", "size"), nullptr));
                 }
-                result = static_cast<std::size_t>(number);
+                result = static_cast<size_t>(number);
                 return true;
             }
 
@@ -11885,12 +11885,12 @@ class binary_reader
                 {
                     break;
                 }
-                std::uint16_t number{};
+                uint16_t number{};
                 if (JSON_HEDLEY_UNLIKELY(!get_number(input_format, number)))
                 {
                     return false;
                 }
-                result = static_cast<std::size_t>(number);
+                result = static_cast<size_t>(number);
                 return true;
             }
 
@@ -11900,12 +11900,12 @@ class binary_reader
                 {
                     break;
                 }
-                std::uint32_t number{};
+                uint32_t number{};
                 if (JSON_HEDLEY_UNLIKELY(!get_number(input_format, number)))
                 {
                     return false;
                 }
-                result = conditional_static_cast<std::size_t>(number);
+                result = conditional_static_cast<size_t>(number);
                 return true;
             }
 
@@ -11915,17 +11915,17 @@ class binary_reader
                 {
                     break;
                 }
-                std::uint64_t number{};
+                uint64_t number{};
                 if (JSON_HEDLEY_UNLIKELY(!get_number(input_format, number)))
                 {
                     return false;
                 }
-                if (!value_in_range_of<std::size_t>(number))
+                if (!value_in_range_of<size_t>(number))
                 {
                     return sax->parse_error(chars_read, get_token_string(), out_of_range::create(408,
                                             exception_message(input_format, "integer value overflow", "size"), nullptr));
                 }
-                result = detail::conditional_static_cast<std::size_t>(number);
+                result = detail::conditional_static_cast<size_t>(number);
                 return true;
             }
 
@@ -12013,7 +12013,7 @@ class binary_reader
 
     @return whether pair creation completed
     */
-    bool get_ubjson_size_type(std::pair<std::size_t, char_int_type>& result, bool inside_ndarray = false)
+    bool get_ubjson_size_type(std::pair<size_t, char_int_type>& result, bool inside_ndarray = false)
     {
         result.first = npos; // size
         result.second = 0; // type
@@ -12141,7 +12141,7 @@ class binary_reader
                 {
                     break;
                 }
-                std::uint16_t number{};
+                uint16_t number{};
                 return get_number(input_format, number) && sax->number_unsigned(number);
             }
 
@@ -12151,7 +12151,7 @@ class binary_reader
                 {
                     break;
                 }
-                std::uint32_t number{};
+                uint32_t number{};
                 return get_number(input_format, number) && sax->number_unsigned(number);
             }
 
@@ -12161,7 +12161,7 @@ class binary_reader
                 {
                     break;
                 }
-                std::uint64_t number{};
+                uint64_t number{};
                 return get_number(input_format, number) && sax->number_unsigned(number);
             }
 
@@ -12275,7 +12275,7 @@ class binary_reader
     */
     bool get_ubjson_array()
     {
-        std::pair<std::size_t, char_int_type> size_and_type;
+        std::pair<size_t, char_int_type> size_and_type;
         if (JSON_HEDLEY_UNLIKELY(!get_ubjson_size_type(size_and_type)))
         {
             return false;
@@ -12316,7 +12316,7 @@ class binary_reader
                 return false;
             }
 
-            for (std::size_t i = 0; i < size_and_type.first; ++i)
+            for (size_t i = 0; i < size_and_type.first; ++i)
             {
                 if (JSON_HEDLEY_UNLIKELY(!get_ubjson_value(size_and_type.second)))
                 {
@@ -12345,7 +12345,7 @@ class binary_reader
             {
                 if (size_and_type.second != 'N')
                 {
-                    for (std::size_t i = 0; i < size_and_type.first; ++i)
+                    for (size_t i = 0; i < size_and_type.first; ++i)
                     {
                         if (JSON_HEDLEY_UNLIKELY(!get_ubjson_value(size_and_type.second)))
                         {
@@ -12356,7 +12356,7 @@ class binary_reader
             }
             else
             {
-                for (std::size_t i = 0; i < size_and_type.first; ++i)
+                for (size_t i = 0; i < size_and_type.first; ++i)
                 {
                     if (JSON_HEDLEY_UNLIKELY(!parse_ubjson_internal()))
                     {
@@ -12390,7 +12390,7 @@ class binary_reader
     */
     bool get_ubjson_object()
     {
-        std::pair<std::size_t, char_int_type> size_and_type;
+        std::pair<size_t, char_int_type> size_and_type;
         if (JSON_HEDLEY_UNLIKELY(!get_ubjson_size_type(size_and_type)))
         {
             return false;
@@ -12414,7 +12414,7 @@ class binary_reader
 
             if (size_and_type.second != 0)
             {
-                for (std::size_t i = 0; i < size_and_type.first; ++i)
+                for (size_t i = 0; i < size_and_type.first; ++i)
                 {
                     if (JSON_HEDLEY_UNLIKELY(!get_ubjson_string(key) || !sax->key(key)))
                     {
@@ -12429,7 +12429,7 @@ class binary_reader
             }
             else
             {
-                for (std::size_t i = 0; i < size_and_type.first; ++i)
+                for (size_t i = 0; i < size_and_type.first; ++i)
                 {
                     if (JSON_HEDLEY_UNLIKELY(!get_ubjson_string(key) || !sax->key(key)))
                     {
@@ -12474,7 +12474,7 @@ class binary_reader
     bool get_ubjson_high_precision_number()
     {
         // get size of following number string
-        std::size_t size{};
+        size_t size{};
         bool no_ndarray = true;
         auto res = get_ubjson_size_value(size, no_ndarray);
         if (JSON_HEDLEY_UNLIKELY(!res))
@@ -12484,7 +12484,7 @@ class binary_reader
 
         // get number string
         std::vector<char> number_vector;
-        for (std::size_t i = 0; i < size; ++i)
+        for (size_t i = 0; i < size; ++i)
         {
             get();
             if (JSON_HEDLEY_UNLIKELY(!unexpect_eof(input_format, "number")))
@@ -12596,7 +12596,7 @@ class binary_reader
     template<class NumberType>
     static void byte_swap(NumberType& number)
     {
-        constexpr std::size_t sz = sizeof(number);
+        constexpr size_t sz = sizeof(number);
 #ifdef __cpp_lib_byteswap
         if constexpr (sz == 1)
         {
@@ -12609,7 +12609,7 @@ class binary_reader
         }
 #endif
         auto* ptr = reinterpret_cast<std::uint8_t*>(&number);
-        for (std::size_t i = 0; i < sz / 2; ++i)
+        for (size_t i = 0; i < sz / 2; ++i)
         {
             std::swap(ptr[i], ptr[sz - i - 1]);
         }
@@ -12781,7 +12781,7 @@ class binary_reader
     }
 
   private:
-    static JSON_INLINE_VARIABLE constexpr std::size_t npos = detail::unknown_size();
+    static JSON_INLINE_VARIABLE constexpr size_t npos = detail::unknown_size();
 
     /// input adapter
     InputAdapterType ia;
@@ -12790,7 +12790,7 @@ class binary_reader
     char_int_type current = char_traits<char_type>::eof();
 
     /// the number of characters read
-    std::size_t chars_read = 0;
+    size_t chars_read = 0;
 
     /// whether we can assume little endianness
     const bool is_little_endian = little_endianness();
@@ -12837,7 +12837,7 @@ class binary_reader
 
 #ifndef JSON_HAS_CPP_17
     template<typename BasicJsonType, typename InputAdapterType, typename SAX>
-    constexpr std::size_t binary_reader<BasicJsonType, InputAdapterType, SAX>::npos;
+    constexpr size_t binary_reader<BasicJsonType, InputAdapterType, SAX>::npos;
 #endif
 
 }  // namespace detail
@@ -14617,7 +14617,7 @@ class json_pointer
 
     /// @brief append an array index at the end of this JSON pointer
     /// @sa https://json.nlohmann.me/api/json_pointer/operator_slasheq/
-    json_pointer& operator/=(std::size_t array_idx)
+    json_pointer& operator/=(size_t array_idx)
     {
         return *this /= std::to_string(array_idx);
     }
@@ -14639,7 +14639,7 @@ class json_pointer
 
     /// @brief create a new JSON pointer by appending the array-index-token at the end of the JSON pointer
     /// @sa https://json.nlohmann.me/api/json_pointer/operator_slash/
-    friend json_pointer operator/(const json_pointer& lhs, std::size_t array_idx)
+    friend json_pointer operator/(const json_pointer& lhs, size_t array_idx)
     {
         return json_pointer(lhs) /= array_idx;
     }
@@ -14737,7 +14737,7 @@ class json_pointer
         const unsigned long long res = std::strtoull(p, &p_end, 10); // NOLINT(runtime/int)
         if (p == p_end // invalid input or empty string
                 || errno == ERANGE // out of range
-                || JSON_HEDLEY_UNLIKELY(static_cast<std::size_t>(p_end - p) != s.size())) // incomplete read
+                || JSON_HEDLEY_UNLIKELY(static_cast<size_t>(p_end - p) != s.size())) // incomplete read
         {
             JSON_THROW(detail::out_of_range::create(404, detail::concat("unresolved reference token '", s, "'"), nullptr));
         }
@@ -15116,7 +15116,7 @@ class json_pointer
                             // first char should be between '1' and '9'
                             return false;
                         }
-                        for (std::size_t i = 1; i < reference_token.size(); i++)
+                        for (size_t i = 1; i < reference_token.size(); i++)
                         {
                             if (JSON_HEDLEY_UNLIKELY(!('0' <= reference_token[i] && reference_token[i] <= '9')))
                             {
@@ -15188,7 +15188,7 @@ class json_pointer
         // - start: position after the previous slash
         for (
             // search for the first slash after the first character
-            std::size_t slash = reference_string.find_first_of('/', 1),
+            size_t slash = reference_string.find_first_of('/', 1),
             // set the beginning of the first reference token
             start = 1;
             // we can stop if start == 0 (if slash == string_t::npos)
@@ -15204,7 +15204,7 @@ class json_pointer
             auto reference_token = reference_string.substr(start, slash - start);
 
             // check reference tokens are properly escaped
-            for (std::size_t pos = reference_token.find_first_of('~');
+            for (size_t pos = reference_token.find_first_of('~');
                     pos != string_t::npos;
                     pos = reference_token.find_first_of('~', pos + 1))
             {
@@ -15252,7 +15252,7 @@ class json_pointer
                 else
                 {
                     // iterate array and use index as reference string
-                    for (std::size_t i = 0; i < value.m_data.m_value.array->size(); ++i)
+                    for (size_t i = 0; i < value.m_data.m_value.array->size(); ++i)
                     {
                         flatten(detail::concat<string_t>(reference_string, '/', std::to_string(i)),
                                 value.m_data.m_value.array->operator[](i), result);
@@ -15645,7 +15645,7 @@ namespace detail
 template<typename CharType> struct output_adapter_protocol
 {
     virtual void write_character(CharType c) = 0;
-    virtual void write_characters(const CharType* s, std::size_t length) = 0;
+    virtual void write_characters(const CharType* s, size_t length) = 0;
     virtual ~output_adapter_protocol() = default;
 
     output_adapter_protocol() = default;
@@ -15674,7 +15674,7 @@ class output_vector_adapter : public output_adapter_protocol<CharType>
     }
 
     JSON_HEDLEY_NON_NULL(2)
-    void write_characters(const CharType* s, std::size_t length) override
+    void write_characters(const CharType* s, size_t length) override
     {
         v.insert(v.end(), s, s + length);
     }
@@ -15699,7 +15699,7 @@ class output_stream_adapter : public output_adapter_protocol<CharType>
     }
 
     JSON_HEDLEY_NON_NULL(2)
-    void write_characters(const CharType* s, std::size_t length) override
+    void write_characters(const CharType* s, size_t length) override
     {
         stream.write(s, static_cast<std::streamsize>(length));
     }
@@ -15724,7 +15724,7 @@ class output_string_adapter : public output_adapter_protocol<CharType>
     }
 
     JSON_HEDLEY_NON_NULL(2)
-    void write_characters(const CharType* s, std::size_t length) override
+    void write_characters(const CharType* s, size_t length) override
     {
         str.append(s, length);
     }
@@ -15867,20 +15867,20 @@ class binary_writer
                         oa->write_character(to_char_type(0x18));
                         write_number(static_cast<std::uint8_t>(j.m_data.m_value.number_integer));
                     }
-                    else if (j.m_data.m_value.number_integer <= (std::numeric_limits<std::uint16_t>::max)())
+                    else if (j.m_data.m_value.number_integer <= (std::numeric_limits<uint16_t>::max)())
                     {
                         oa->write_character(to_char_type(0x19));
-                        write_number(static_cast<std::uint16_t>(j.m_data.m_value.number_integer));
+                        write_number(static_cast<uint16_t>(j.m_data.m_value.number_integer));
                     }
-                    else if (j.m_data.m_value.number_integer <= (std::numeric_limits<std::uint32_t>::max)())
+                    else if (j.m_data.m_value.number_integer <= (std::numeric_limits<uint32_t>::max)())
                     {
                         oa->write_character(to_char_type(0x1A));
-                        write_number(static_cast<std::uint32_t>(j.m_data.m_value.number_integer));
+                        write_number(static_cast<uint32_t>(j.m_data.m_value.number_integer));
                     }
                     else
                     {
                         oa->write_character(to_char_type(0x1B));
-                        write_number(static_cast<std::uint64_t>(j.m_data.m_value.number_integer));
+                        write_number(static_cast<uint64_t>(j.m_data.m_value.number_integer));
                     }
                 }
                 else
@@ -15897,20 +15897,20 @@ class binary_writer
                         oa->write_character(to_char_type(0x38));
                         write_number(static_cast<std::uint8_t>(positive_number));
                     }
-                    else if (positive_number <= (std::numeric_limits<std::uint16_t>::max)())
+                    else if (positive_number <= (std::numeric_limits<uint16_t>::max)())
                     {
                         oa->write_character(to_char_type(0x39));
-                        write_number(static_cast<std::uint16_t>(positive_number));
+                        write_number(static_cast<uint16_t>(positive_number));
                     }
-                    else if (positive_number <= (std::numeric_limits<std::uint32_t>::max)())
+                    else if (positive_number <= (std::numeric_limits<uint32_t>::max)())
                     {
                         oa->write_character(to_char_type(0x3A));
-                        write_number(static_cast<std::uint32_t>(positive_number));
+                        write_number(static_cast<uint32_t>(positive_number));
                     }
                     else
                     {
                         oa->write_character(to_char_type(0x3B));
-                        write_number(static_cast<std::uint64_t>(positive_number));
+                        write_number(static_cast<uint64_t>(positive_number));
                     }
                 }
                 break;
@@ -15927,20 +15927,20 @@ class binary_writer
                     oa->write_character(to_char_type(0x18));
                     write_number(static_cast<std::uint8_t>(j.m_data.m_value.number_unsigned));
                 }
-                else if (j.m_data.m_value.number_unsigned <= (std::numeric_limits<std::uint16_t>::max)())
+                else if (j.m_data.m_value.number_unsigned <= (std::numeric_limits<uint16_t>::max)())
                 {
                     oa->write_character(to_char_type(0x19));
-                    write_number(static_cast<std::uint16_t>(j.m_data.m_value.number_unsigned));
+                    write_number(static_cast<uint16_t>(j.m_data.m_value.number_unsigned));
                 }
-                else if (j.m_data.m_value.number_unsigned <= (std::numeric_limits<std::uint32_t>::max)())
+                else if (j.m_data.m_value.number_unsigned <= (std::numeric_limits<uint32_t>::max)())
                 {
                     oa->write_character(to_char_type(0x1A));
-                    write_number(static_cast<std::uint32_t>(j.m_data.m_value.number_unsigned));
+                    write_number(static_cast<uint32_t>(j.m_data.m_value.number_unsigned));
                 }
                 else
                 {
                     oa->write_character(to_char_type(0x1B));
-                    write_number(static_cast<std::uint64_t>(j.m_data.m_value.number_unsigned));
+                    write_number(static_cast<uint64_t>(j.m_data.m_value.number_unsigned));
                 }
                 break;
             }
@@ -15981,21 +15981,21 @@ class binary_writer
                     oa->write_character(to_char_type(0x78));
                     write_number(static_cast<std::uint8_t>(N));
                 }
-                else if (N <= (std::numeric_limits<std::uint16_t>::max)())
+                else if (N <= (std::numeric_limits<uint16_t>::max)())
                 {
                     oa->write_character(to_char_type(0x79));
-                    write_number(static_cast<std::uint16_t>(N));
+                    write_number(static_cast<uint16_t>(N));
                 }
-                else if (N <= (std::numeric_limits<std::uint32_t>::max)())
+                else if (N <= (std::numeric_limits<uint32_t>::max)())
                 {
                     oa->write_character(to_char_type(0x7A));
-                    write_number(static_cast<std::uint32_t>(N));
+                    write_number(static_cast<uint32_t>(N));
                 }
                 // LCOV_EXCL_START
-                else if (N <= (std::numeric_limits<std::uint64_t>::max)())
+                else if (N <= (std::numeric_limits<uint64_t>::max)())
                 {
                     oa->write_character(to_char_type(0x7B));
-                    write_number(static_cast<std::uint64_t>(N));
+                    write_number(static_cast<uint64_t>(N));
                 }
                 // LCOV_EXCL_STOP
 
@@ -16019,21 +16019,21 @@ class binary_writer
                     oa->write_character(to_char_type(0x98));
                     write_number(static_cast<std::uint8_t>(N));
                 }
-                else if (N <= (std::numeric_limits<std::uint16_t>::max)())
+                else if (N <= (std::numeric_limits<uint16_t>::max)())
                 {
                     oa->write_character(to_char_type(0x99));
-                    write_number(static_cast<std::uint16_t>(N));
+                    write_number(static_cast<uint16_t>(N));
                 }
-                else if (N <= (std::numeric_limits<std::uint32_t>::max)())
+                else if (N <= (std::numeric_limits<uint32_t>::max)())
                 {
                     oa->write_character(to_char_type(0x9A));
-                    write_number(static_cast<std::uint32_t>(N));
+                    write_number(static_cast<uint32_t>(N));
                 }
                 // LCOV_EXCL_START
-                else if (N <= (std::numeric_limits<std::uint64_t>::max)())
+                else if (N <= (std::numeric_limits<uint64_t>::max)())
                 {
                     oa->write_character(to_char_type(0x9B));
-                    write_number(static_cast<std::uint64_t>(N));
+                    write_number(static_cast<uint64_t>(N));
                 }
                 // LCOV_EXCL_STOP
 
@@ -16054,20 +16054,20 @@ class binary_writer
                         write_number(static_cast<std::uint8_t>(0xd8));
                         write_number(static_cast<std::uint8_t>(j.m_data.m_value.binary->subtype()));
                     }
-                    else if (j.m_data.m_value.binary->subtype() <= (std::numeric_limits<std::uint16_t>::max)())
+                    else if (j.m_data.m_value.binary->subtype() <= (std::numeric_limits<uint16_t>::max)())
                     {
                         write_number(static_cast<std::uint8_t>(0xd9));
-                        write_number(static_cast<std::uint16_t>(j.m_data.m_value.binary->subtype()));
+                        write_number(static_cast<uint16_t>(j.m_data.m_value.binary->subtype()));
                     }
-                    else if (j.m_data.m_value.binary->subtype() <= (std::numeric_limits<std::uint32_t>::max)())
+                    else if (j.m_data.m_value.binary->subtype() <= (std::numeric_limits<uint32_t>::max)())
                     {
                         write_number(static_cast<std::uint8_t>(0xda));
-                        write_number(static_cast<std::uint32_t>(j.m_data.m_value.binary->subtype()));
+                        write_number(static_cast<uint32_t>(j.m_data.m_value.binary->subtype()));
                     }
-                    else if (j.m_data.m_value.binary->subtype() <= (std::numeric_limits<std::uint64_t>::max)())
+                    else if (j.m_data.m_value.binary->subtype() <= (std::numeric_limits<uint64_t>::max)())
                     {
                         write_number(static_cast<std::uint8_t>(0xdb));
-                        write_number(static_cast<std::uint64_t>(j.m_data.m_value.binary->subtype()));
+                        write_number(static_cast<uint64_t>(j.m_data.m_value.binary->subtype()));
                     }
                 }
 
@@ -16082,21 +16082,21 @@ class binary_writer
                     oa->write_character(to_char_type(0x58));
                     write_number(static_cast<std::uint8_t>(N));
                 }
-                else if (N <= (std::numeric_limits<std::uint16_t>::max)())
+                else if (N <= (std::numeric_limits<uint16_t>::max)())
                 {
                     oa->write_character(to_char_type(0x59));
-                    write_number(static_cast<std::uint16_t>(N));
+                    write_number(static_cast<uint16_t>(N));
                 }
-                else if (N <= (std::numeric_limits<std::uint32_t>::max)())
+                else if (N <= (std::numeric_limits<uint32_t>::max)())
                 {
                     oa->write_character(to_char_type(0x5A));
-                    write_number(static_cast<std::uint32_t>(N));
+                    write_number(static_cast<uint32_t>(N));
                 }
                 // LCOV_EXCL_START
-                else if (N <= (std::numeric_limits<std::uint64_t>::max)())
+                else if (N <= (std::numeric_limits<uint64_t>::max)())
                 {
                     oa->write_character(to_char_type(0x5B));
-                    write_number(static_cast<std::uint64_t>(N));
+                    write_number(static_cast<uint64_t>(N));
                 }
                 // LCOV_EXCL_STOP
 
@@ -16121,21 +16121,21 @@ class binary_writer
                     oa->write_character(to_char_type(0xB8));
                     write_number(static_cast<std::uint8_t>(N));
                 }
-                else if (N <= (std::numeric_limits<std::uint16_t>::max)())
+                else if (N <= (std::numeric_limits<uint16_t>::max)())
                 {
                     oa->write_character(to_char_type(0xB9));
-                    write_number(static_cast<std::uint16_t>(N));
+                    write_number(static_cast<uint16_t>(N));
                 }
-                else if (N <= (std::numeric_limits<std::uint32_t>::max)())
+                else if (N <= (std::numeric_limits<uint32_t>::max)())
                 {
                     oa->write_character(to_char_type(0xBA));
-                    write_number(static_cast<std::uint32_t>(N));
+                    write_number(static_cast<uint32_t>(N));
                 }
                 // LCOV_EXCL_START
-                else if (N <= (std::numeric_limits<std::uint64_t>::max)())
+                else if (N <= (std::numeric_limits<uint64_t>::max)())
                 {
                     oa->write_character(to_char_type(0xBB));
-                    write_number(static_cast<std::uint64_t>(N));
+                    write_number(static_cast<uint64_t>(N));
                 }
                 // LCOV_EXCL_STOP
 
@@ -16193,23 +16193,23 @@ class binary_writer
                         oa->write_character(to_char_type(0xCC));
                         write_number(static_cast<std::uint8_t>(j.m_data.m_value.number_integer));
                     }
-                    else if (j.m_data.m_value.number_unsigned <= (std::numeric_limits<std::uint16_t>::max)())
+                    else if (j.m_data.m_value.number_unsigned <= (std::numeric_limits<uint16_t>::max)())
                     {
                         // uint 16
                         oa->write_character(to_char_type(0xCD));
-                        write_number(static_cast<std::uint16_t>(j.m_data.m_value.number_integer));
+                        write_number(static_cast<uint16_t>(j.m_data.m_value.number_integer));
                     }
-                    else if (j.m_data.m_value.number_unsigned <= (std::numeric_limits<std::uint32_t>::max)())
+                    else if (j.m_data.m_value.number_unsigned <= (std::numeric_limits<uint32_t>::max)())
                     {
                         // uint 32
                         oa->write_character(to_char_type(0xCE));
-                        write_number(static_cast<std::uint32_t>(j.m_data.m_value.number_integer));
+                        write_number(static_cast<uint32_t>(j.m_data.m_value.number_integer));
                     }
-                    else if (j.m_data.m_value.number_unsigned <= (std::numeric_limits<std::uint64_t>::max)())
+                    else if (j.m_data.m_value.number_unsigned <= (std::numeric_limits<uint64_t>::max)())
                     {
                         // uint 64
                         oa->write_character(to_char_type(0xCF));
-                        write_number(static_cast<std::uint64_t>(j.m_data.m_value.number_integer));
+                        write_number(static_cast<uint64_t>(j.m_data.m_value.number_integer));
                     }
                 }
                 else
@@ -16264,23 +16264,23 @@ class binary_writer
                     oa->write_character(to_char_type(0xCC));
                     write_number(static_cast<std::uint8_t>(j.m_data.m_value.number_integer));
                 }
-                else if (j.m_data.m_value.number_unsigned <= (std::numeric_limits<std::uint16_t>::max)())
+                else if (j.m_data.m_value.number_unsigned <= (std::numeric_limits<uint16_t>::max)())
                 {
                     // uint 16
                     oa->write_character(to_char_type(0xCD));
-                    write_number(static_cast<std::uint16_t>(j.m_data.m_value.number_integer));
+                    write_number(static_cast<uint16_t>(j.m_data.m_value.number_integer));
                 }
-                else if (j.m_data.m_value.number_unsigned <= (std::numeric_limits<std::uint32_t>::max)())
+                else if (j.m_data.m_value.number_unsigned <= (std::numeric_limits<uint32_t>::max)())
                 {
                     // uint 32
                     oa->write_character(to_char_type(0xCE));
-                    write_number(static_cast<std::uint32_t>(j.m_data.m_value.number_integer));
+                    write_number(static_cast<uint32_t>(j.m_data.m_value.number_integer));
                 }
-                else if (j.m_data.m_value.number_unsigned <= (std::numeric_limits<std::uint64_t>::max)())
+                else if (j.m_data.m_value.number_unsigned <= (std::numeric_limits<uint64_t>::max)())
                 {
                     // uint 64
                     oa->write_character(to_char_type(0xCF));
-                    write_number(static_cast<std::uint64_t>(j.m_data.m_value.number_integer));
+                    write_number(static_cast<uint64_t>(j.m_data.m_value.number_integer));
                 }
                 break;
             }
@@ -16306,17 +16306,17 @@ class binary_writer
                     oa->write_character(to_char_type(0xD9));
                     write_number(static_cast<std::uint8_t>(N));
                 }
-                else if (N <= (std::numeric_limits<std::uint16_t>::max)())
+                else if (N <= (std::numeric_limits<uint16_t>::max)())
                 {
                     // str 16
                     oa->write_character(to_char_type(0xDA));
-                    write_number(static_cast<std::uint16_t>(N));
+                    write_number(static_cast<uint16_t>(N));
                 }
-                else if (N <= (std::numeric_limits<std::uint32_t>::max)())
+                else if (N <= (std::numeric_limits<uint32_t>::max)())
                 {
                     // str 32
                     oa->write_character(to_char_type(0xDB));
-                    write_number(static_cast<std::uint32_t>(N));
+                    write_number(static_cast<uint32_t>(N));
                 }
 
                 // step 2: write the string
@@ -16335,17 +16335,17 @@ class binary_writer
                     // fixarray
                     write_number(static_cast<std::uint8_t>(0x90 | N));
                 }
-                else if (N <= (std::numeric_limits<std::uint16_t>::max)())
+                else if (N <= (std::numeric_limits<uint16_t>::max)())
                 {
                     // array 16
                     oa->write_character(to_char_type(0xDC));
-                    write_number(static_cast<std::uint16_t>(N));
+                    write_number(static_cast<uint16_t>(N));
                 }
-                else if (N <= (std::numeric_limits<std::uint32_t>::max)())
+                else if (N <= (std::numeric_limits<uint32_t>::max)())
                 {
                     // array 32
                     oa->write_character(to_char_type(0xDD));
-                    write_number(static_cast<std::uint32_t>(N));
+                    write_number(static_cast<uint32_t>(N));
                 }
 
                 // step 2: write each element
@@ -16406,23 +16406,23 @@ class binary_writer
                         write_number(static_cast<std::uint8_t>(N));
                     }
                 }
-                else if (N <= (std::numeric_limits<std::uint16_t>::max)())
+                else if (N <= (std::numeric_limits<uint16_t>::max)())
                 {
                     const std::uint8_t output_type = use_ext
                                                      ? 0xC8 // ext 16
                                                      : 0xC5; // bin 16
 
                     oa->write_character(to_char_type(output_type));
-                    write_number(static_cast<std::uint16_t>(N));
+                    write_number(static_cast<uint16_t>(N));
                 }
-                else if (N <= (std::numeric_limits<std::uint32_t>::max)())
+                else if (N <= (std::numeric_limits<uint32_t>::max)())
                 {
                     const std::uint8_t output_type = use_ext
                                                      ? 0xC9 // ext 32
                                                      : 0xC6; // bin 32
 
                     oa->write_character(to_char_type(output_type));
-                    write_number(static_cast<std::uint32_t>(N));
+                    write_number(static_cast<uint32_t>(N));
                 }
 
                 // step 1.5: if this is an ext type, write the subtype
@@ -16448,17 +16448,17 @@ class binary_writer
                     // fixmap
                     write_number(static_cast<std::uint8_t>(0x80 | (N & 0xF)));
                 }
-                else if (N <= (std::numeric_limits<std::uint16_t>::max)())
+                else if (N <= (std::numeric_limits<uint16_t>::max)())
                 {
                     // map 16
                     oa->write_character(to_char_type(0xDE));
-                    write_number(static_cast<std::uint16_t>(N));
+                    write_number(static_cast<uint16_t>(N));
                 }
-                else if (N <= (std::numeric_limits<std::uint32_t>::max)())
+                else if (N <= (std::numeric_limits<uint32_t>::max)())
                 {
                     // map 32
                     oa->write_character(to_char_type(0xDF));
-                    write_number(static_cast<std::uint32_t>(N));
+                    write_number(static_cast<uint32_t>(N));
                 }
 
                 // step 2: write each element
@@ -16707,7 +16707,7 @@ class binary_writer
     @return The size of a BSON document entry header, including the id marker
             and the entry name size (and its null-terminator).
     */
-    static std::size_t calc_bson_entry_header_size(const string_t& name, const BasicJsonType& j)
+    static size_t calc_bson_entry_header_size(const string_t& name, const BasicJsonType& j)
     {
         const auto it = name.find(static_cast<typename string_t::value_type>(0));
         if (JSON_HEDLEY_UNLIKELY(it != BasicJsonType::string_t::npos))
@@ -16754,7 +16754,7 @@ class binary_writer
     /*!
     @return The size of the BSON-encoded string in @a value
     */
-    static std::size_t calc_bson_string_size(const string_t& value)
+    static size_t calc_bson_string_size(const string_t& value)
     {
         return sizeof(std::int32_t) + value.size() + 1ul;
     }
@@ -16784,7 +16784,7 @@ class binary_writer
     /*!
     @return The size of the BSON-encoded integer @a value
     */
-    static std::size_t calc_bson_integer_size(const std::int64_t value)
+    static size_t calc_bson_integer_size(const std::int64_t value)
     {
         return (std::numeric_limits<std::int32_t>::min)() <= value && value <= (std::numeric_limits<std::int32_t>::max)()
                ? sizeof(std::int32_t)
@@ -16812,9 +16812,9 @@ class binary_writer
     /*!
     @return The size of the BSON-encoded unsigned integer in @a j
     */
-    static constexpr std::size_t calc_bson_unsigned_size(const std::uint64_t value) noexcept
+    static constexpr size_t calc_bson_unsigned_size(const uint64_t value) noexcept
     {
-        return (value <= static_cast<std::uint64_t>((std::numeric_limits<std::int32_t>::max)()))
+        return (value <= static_cast<uint64_t>((std::numeric_limits<std::int32_t>::max)()))
                ? sizeof(std::int32_t)
                : sizeof(std::int64_t);
     }
@@ -16825,12 +16825,12 @@ class binary_writer
     void write_bson_unsigned(const string_t& name,
                              const BasicJsonType& j)
     {
-        if (j.m_data.m_value.number_unsigned <= static_cast<std::uint64_t>((std::numeric_limits<std::int32_t>::max)()))
+        if (j.m_data.m_value.number_unsigned <= static_cast<uint64_t>((std::numeric_limits<std::int32_t>::max)()))
         {
             write_bson_entry_header(name, 0x10 /* int32 */);
             write_number<std::int32_t>(static_cast<std::int32_t>(j.m_data.m_value.number_unsigned), true);
         }
-        else if (j.m_data.m_value.number_unsigned <= static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()))
+        else if (j.m_data.m_value.number_unsigned <= static_cast<uint64_t>((std::numeric_limits<std::int64_t>::max)()))
         {
             write_bson_entry_header(name, 0x12 /* int64 */);
             write_number<std::int64_t>(static_cast<std::int64_t>(j.m_data.m_value.number_unsigned), true);
@@ -16838,7 +16838,7 @@ class binary_writer
         else
         {
             write_bson_entry_header(name, 0x11 /* uint64 */);
-            write_number<std::uint64_t>(static_cast<std::uint64_t>(j.m_data.m_value.number_unsigned), true);
+            write_number<uint64_t>(static_cast<uint64_t>(j.m_data.m_value.number_unsigned), true);
         }
     }
 
@@ -16855,11 +16855,11 @@ class binary_writer
     /*!
     @return The size of the BSON-encoded array @a value
     */
-    static std::size_t calc_bson_array_size(const typename BasicJsonType::array_t& value)
+    static size_t calc_bson_array_size(const typename BasicJsonType::array_t& value)
     {
-        std::size_t array_index = 0ul;
+        size_t array_index = 0ul;
 
-        const std::size_t embedded_document_size = std::accumulate(std::begin(value), std::end(value), static_cast<std::size_t>(0), [&array_index](std::size_t result, const typename BasicJsonType::array_t::value_type & el)
+        const size_t embedded_document_size = std::accumulate(std::begin(value), std::end(value), static_cast<size_t>(0), [&array_index](size_t result, const typename BasicJsonType::array_t::value_type & el)
         {
             return result + calc_bson_element_size(std::to_string(array_index++), el);
         });
@@ -16870,7 +16870,7 @@ class binary_writer
     /*!
     @return The size of the BSON-encoded binary array @a value
     */
-    static std::size_t calc_bson_binary_size(const typename BasicJsonType::binary_t& value)
+    static size_t calc_bson_binary_size(const typename BasicJsonType::binary_t& value)
     {
         return sizeof(std::int32_t) + value.size() + 1ul;
     }
@@ -16884,7 +16884,7 @@ class binary_writer
         write_bson_entry_header(name, 0x04); // array
         write_number<std::int32_t>(static_cast<std::int32_t>(calc_bson_array_size(value)), true);
 
-        std::size_t array_index = 0ul;
+        size_t array_index = 0ul;
 
         for (const auto& el : value)
         {
@@ -16912,7 +16912,7 @@ class binary_writer
     @brief Calculates the size necessary to serialize the JSON value @a j with its @a name
     @return The calculated size for the BSON document entry for @a j with the given @a name.
     */
-    static std::size_t calc_bson_element_size(const string_t& name,
+    static size_t calc_bson_element_size(const string_t& name,
             const BasicJsonType& j)
     {
         const auto header_size = calc_bson_entry_header_size(name, j);
@@ -17007,9 +17007,9 @@ class binary_writer
     @param[in] value  JSON value to serialize
     @pre       value.type() == value_t::object
     */
-    static std::size_t calc_bson_object_size(const typename BasicJsonType::object_t& value)
+    static size_t calc_bson_object_size(const typename BasicJsonType::object_t& value)
     {
-        const std::size_t document_size = std::accumulate(value.begin(), value.end(), static_cast<std::size_t>(0),
+        const size_t document_size = std::accumulate(value.begin(), value.end(), static_cast<size_t>(0),
                                           [](size_t result, const typename BasicJsonType::object_t::value_type & el)
         {
             return result += calc_bson_element_size(el.first, el.second);
@@ -17087,7 +17087,7 @@ class binary_writer
                                          const bool add_prefix,
                                          const bool use_bjdata)
     {
-        if (n <= static_cast<std::uint64_t>((std::numeric_limits<std::int8_t>::max)()))
+        if (n <= static_cast<uint64_t>((std::numeric_limits<std::int8_t>::max)()))
         {
             if (add_prefix)
             {
@@ -17103,7 +17103,7 @@ class binary_writer
             }
             write_number(static_cast<std::uint8_t>(n), use_bjdata);
         }
-        else if (n <= static_cast<std::uint64_t>((std::numeric_limits<std::int16_t>::max)()))
+        else if (n <= static_cast<uint64_t>((std::numeric_limits<std::int16_t>::max)()))
         {
             if (add_prefix)
             {
@@ -17117,9 +17117,9 @@ class binary_writer
             {
                 oa->write_character(to_char_type('u'));  // uint16 - bjdata only
             }
-            write_number(static_cast<std::uint16_t>(n), use_bjdata);
+            write_number(static_cast<uint16_t>(n), use_bjdata);
         }
-        else if (n <= static_cast<std::uint64_t>((std::numeric_limits<std::int32_t>::max)()))
+        else if (n <= static_cast<uint64_t>((std::numeric_limits<std::int32_t>::max)()))
         {
             if (add_prefix)
             {
@@ -17133,9 +17133,9 @@ class binary_writer
             {
                 oa->write_character(to_char_type('m'));  // uint32 - bjdata only
             }
-            write_number(static_cast<std::uint32_t>(n), use_bjdata);
+            write_number(static_cast<uint32_t>(n), use_bjdata);
         }
-        else if (n <= static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()))
+        else if (n <= static_cast<uint64_t>((std::numeric_limits<std::int64_t>::max)()))
         {
             if (add_prefix)
             {
@@ -17149,7 +17149,7 @@ class binary_writer
             {
                 oa->write_character(to_char_type('M'));  // uint64 - bjdata only
             }
-            write_number(static_cast<std::uint64_t>(n), use_bjdata);
+            write_number(static_cast<uint64_t>(n), use_bjdata);
         }
         else
         {
@@ -17160,7 +17160,7 @@ class binary_writer
 
             const auto number = BasicJsonType(n).dump();
             write_number_with_ubjson_prefix(number.size(), true, use_bjdata);
-            for (std::size_t i = 0; i < number.size(); ++i)
+            for (size_t i = 0; i < number.size(); ++i)
             {
                 oa->write_character(to_char_type(static_cast<std::uint8_t>(number[i])));
             }
@@ -17199,7 +17199,7 @@ class binary_writer
             }
             write_number(static_cast<std::int16_t>(n), use_bjdata);
         }
-        else if (use_bjdata && (static_cast<std::int64_t>((std::numeric_limits<std::uint16_t>::min)()) <= n && n <= static_cast<std::int64_t>((std::numeric_limits<std::uint16_t>::max)())))
+        else if (use_bjdata && (static_cast<std::int64_t>((std::numeric_limits<uint16_t>::min)()) <= n && n <= static_cast<std::int64_t>((std::numeric_limits<uint16_t>::max)())))
         {
             if (add_prefix)
             {
@@ -17215,7 +17215,7 @@ class binary_writer
             }
             write_number(static_cast<std::int32_t>(n), use_bjdata);
         }
-        else if (use_bjdata && (static_cast<std::int64_t>((std::numeric_limits<std::uint32_t>::min)()) <= n && n <= static_cast<std::int64_t>((std::numeric_limits<std::uint32_t>::max)())))
+        else if (use_bjdata && (static_cast<std::int64_t>((std::numeric_limits<uint32_t>::min)()) <= n && n <= static_cast<std::int64_t>((std::numeric_limits<uint32_t>::max)())))
         {
             if (add_prefix)
             {
@@ -17241,7 +17241,7 @@ class binary_writer
 
             const auto number = BasicJsonType(n).dump();
             write_number_with_ubjson_prefix(number.size(), true, use_bjdata);
-            for (std::size_t i = 0; i < number.size(); ++i)
+            for (size_t i = 0; i < number.size(); ++i)
             {
                 oa->write_character(to_char_type(static_cast<std::uint8_t>(number[i])));
             }
@@ -17276,7 +17276,7 @@ class binary_writer
                 {
                     return 'I';
                 }
-                if (use_bjdata && ((std::numeric_limits<std::uint16_t>::min)() <= j.m_data.m_value.number_integer && j.m_data.m_value.number_integer <= (std::numeric_limits<std::uint16_t>::max)()))
+                if (use_bjdata && ((std::numeric_limits<uint16_t>::min)() <= j.m_data.m_value.number_integer && j.m_data.m_value.number_integer <= (std::numeric_limits<uint16_t>::max)()))
                 {
                     return 'u';
                 }
@@ -17284,7 +17284,7 @@ class binary_writer
                 {
                     return 'l';
                 }
-                if (use_bjdata && ((std::numeric_limits<std::uint32_t>::min)() <= j.m_data.m_value.number_integer && j.m_data.m_value.number_integer <= (std::numeric_limits<std::uint32_t>::max)()))
+                if (use_bjdata && ((std::numeric_limits<uint32_t>::min)() <= j.m_data.m_value.number_integer && j.m_data.m_value.number_integer <= (std::numeric_limits<uint32_t>::max)()))
                 {
                     return 'm';
                 }
@@ -17298,35 +17298,35 @@ class binary_writer
 
             case value_t::number_unsigned:
             {
-                if (j.m_data.m_value.number_unsigned <= static_cast<std::uint64_t>((std::numeric_limits<std::int8_t>::max)()))
+                if (j.m_data.m_value.number_unsigned <= static_cast<uint64_t>((std::numeric_limits<std::int8_t>::max)()))
                 {
                     return 'i';
                 }
-                if (j.m_data.m_value.number_unsigned <= static_cast<std::uint64_t>((std::numeric_limits<std::uint8_t>::max)()))
+                if (j.m_data.m_value.number_unsigned <= static_cast<uint64_t>((std::numeric_limits<std::uint8_t>::max)()))
                 {
                     return 'U';
                 }
-                if (j.m_data.m_value.number_unsigned <= static_cast<std::uint64_t>((std::numeric_limits<std::int16_t>::max)()))
+                if (j.m_data.m_value.number_unsigned <= static_cast<uint64_t>((std::numeric_limits<std::int16_t>::max)()))
                 {
                     return 'I';
                 }
-                if (use_bjdata && j.m_data.m_value.number_unsigned <= static_cast<std::uint64_t>((std::numeric_limits<std::uint16_t>::max)()))
+                if (use_bjdata && j.m_data.m_value.number_unsigned <= static_cast<uint64_t>((std::numeric_limits<uint16_t>::max)()))
                 {
                     return 'u';
                 }
-                if (j.m_data.m_value.number_unsigned <= static_cast<std::uint64_t>((std::numeric_limits<std::int32_t>::max)()))
+                if (j.m_data.m_value.number_unsigned <= static_cast<uint64_t>((std::numeric_limits<std::int32_t>::max)()))
                 {
                     return 'l';
                 }
-                if (use_bjdata && j.m_data.m_value.number_unsigned <= static_cast<std::uint64_t>((std::numeric_limits<std::uint32_t>::max)()))
+                if (use_bjdata && j.m_data.m_value.number_unsigned <= static_cast<uint64_t>((std::numeric_limits<uint32_t>::max)()))
                 {
                     return 'm';
                 }
-                if (j.m_data.m_value.number_unsigned <= static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()))
+                if (j.m_data.m_value.number_unsigned <= static_cast<uint64_t>((std::numeric_limits<std::int64_t>::max)()))
                 {
                     return 'L';
                 }
-                if (use_bjdata && j.m_data.m_value.number_unsigned <= (std::numeric_limits<std::uint64_t>::max)())
+                if (use_bjdata && j.m_data.m_value.number_unsigned <= (std::numeric_limits<uint64_t>::max)())
                 {
                     return 'M';
                 }
@@ -17382,10 +17382,10 @@ class binary_writer
         CharType dtype = it->second;
 
         key = "_ArraySize_";
-        std::size_t len = (value.at(key).empty() ? 0 : 1);
+        size_t len = (value.at(key).empty() ? 0 : 1);
         for (const auto& el : value.at(key))
         {
-            len *= static_cast<std::size_t>(el.m_data.m_value.number_unsigned);
+            len *= static_cast<size_t>(el.m_data.m_value.number_unsigned);
         }
 
         key = "_ArrayData_";
@@ -17421,7 +17421,7 @@ class binary_writer
         {
             for (const auto& el : value.at(key))
             {
-                write_number(static_cast<std::uint16_t>(el.m_data.m_value.number_unsigned), true);
+                write_number(static_cast<uint16_t>(el.m_data.m_value.number_unsigned), true);
             }
         }
         else if (dtype == 'I')
@@ -17435,7 +17435,7 @@ class binary_writer
         {
             for (const auto& el : value.at(key))
             {
-                write_number(static_cast<std::uint32_t>(el.m_data.m_value.number_unsigned), true);
+                write_number(static_cast<uint32_t>(el.m_data.m_value.number_unsigned), true);
             }
         }
         else if (dtype == 'l')
@@ -17449,7 +17449,7 @@ class binary_writer
         {
             for (const auto& el : value.at(key))
             {
-                write_number(static_cast<std::uint64_t>(el.m_data.m_value.number_unsigned), true);
+                write_number(static_cast<uint64_t>(el.m_data.m_value.number_unsigned), true);
             }
         }
         else if (dtype == 'L')
@@ -17678,10 +17678,10 @@ struct diyfp // f * 2^e
 {
     static constexpr int kPrecision = 64; // = q
 
-    std::uint64_t f = 0;
+    uint64_t f = 0;
     int e = 0;
 
-    constexpr diyfp(std::uint64_t f_, int e_) noexcept : f(f_), e(e_) {}
+    constexpr diyfp(uint64_t f_, int e_) noexcept : f(f_), e(e_) {}
 
     /*!
     @brief returns x - y
@@ -17726,23 +17726,23 @@ struct diyfp // f * 2^e
         //
         //   = p_lo + 2^64 p_hi
 
-        const std::uint64_t u_lo = x.f & 0xFFFFFFFFu;
-        const std::uint64_t u_hi = x.f >> 32u;
-        const std::uint64_t v_lo = y.f & 0xFFFFFFFFu;
-        const std::uint64_t v_hi = y.f >> 32u;
+        const uint64_t u_lo = x.f & 0xFFFFFFFFu;
+        const uint64_t u_hi = x.f >> 32u;
+        const uint64_t v_lo = y.f & 0xFFFFFFFFu;
+        const uint64_t v_hi = y.f >> 32u;
 
-        const std::uint64_t p0 = u_lo * v_lo;
-        const std::uint64_t p1 = u_lo * v_hi;
-        const std::uint64_t p2 = u_hi * v_lo;
-        const std::uint64_t p3 = u_hi * v_hi;
+        const uint64_t p0 = u_lo * v_lo;
+        const uint64_t p1 = u_lo * v_hi;
+        const uint64_t p2 = u_hi * v_lo;
+        const uint64_t p3 = u_hi * v_hi;
 
-        const std::uint64_t p0_hi = p0 >> 32u;
-        const std::uint64_t p1_lo = p1 & 0xFFFFFFFFu;
-        const std::uint64_t p1_hi = p1 >> 32u;
-        const std::uint64_t p2_lo = p2 & 0xFFFFFFFFu;
-        const std::uint64_t p2_hi = p2 >> 32u;
+        const uint64_t p0_hi = p0 >> 32u;
+        const uint64_t p1_lo = p1 & 0xFFFFFFFFu;
+        const uint64_t p1_hi = p1 >> 32u;
+        const uint64_t p2_lo = p2 & 0xFFFFFFFFu;
+        const uint64_t p2_hi = p2 >> 32u;
 
-        std::uint64_t Q = p0_hi + p1_lo + p2_lo;
+        uint64_t Q = p0_hi + p1_lo + p2_lo;
 
         // The full product might now be computed as
         //
@@ -17753,9 +17753,9 @@ struct diyfp // f * 2^e
         // Effectively we only need to add the highest bit in p_lo to p_hi (and
         // Q_hi + 1 does not overflow).
 
-        Q += std::uint64_t{1} << (64u - 32u - 1u); // round, ties up
+        Q += uint64_t{1} << (64u - 32u - 1u); // round, ties up
 
-        const std::uint64_t h = p3 + p2_hi + p1_hi + (Q >> 32u);
+        const uint64_t h = p3 + p2_hi + p1_hi + (Q >> 32u);
 
         return {h, x.e + y.e + 64};
     }
@@ -17824,13 +17824,13 @@ boundaries compute_boundaries(FloatType value)
     constexpr int      kPrecision = std::numeric_limits<FloatType>::digits; // = p (includes the hidden bit)
     constexpr int      kBias      = std::numeric_limits<FloatType>::max_exponent - 1 + (kPrecision - 1);
     constexpr int      kMinExp    = 1 - kBias;
-    constexpr std::uint64_t kHiddenBit = std::uint64_t{1} << (kPrecision - 1); // = 2^(p-1)
+    constexpr uint64_t kHiddenBit = uint64_t{1} << (kPrecision - 1); // = 2^(p-1)
 
-    using bits_type = typename std::conditional<kPrecision == 24, std::uint32_t, std::uint64_t >::type;
+    using bits_type = typename std::conditional<kPrecision == 24, uint32_t, uint64_t >::type;
 
-    const auto bits = static_cast<std::uint64_t>(reinterpret_bits<bits_type>(value));
-    const std::uint64_t E = bits >> (kPrecision - 1);
-    const std::uint64_t F = bits & (kHiddenBit - 1);
+    const auto bits = static_cast<uint64_t>(reinterpret_bits<bits_type>(value));
+    const uint64_t E = bits >> (kPrecision - 1);
+    const uint64_t F = bits & (kHiddenBit - 1);
 
     const bool is_denormal = E == 0;
     const diyfp v = is_denormal
@@ -17933,7 +17933,7 @@ constexpr int kGamma = -32;
 
 struct cached_power // c = f * 2^e ~= 10^k
 {
-    std::uint64_t f;
+    uint64_t f;
     int e;
     int k;
 };
@@ -18096,9 +18096,9 @@ inline cached_power get_cached_power_for_binary_exponent(int e)
 
     const int index = (-kCachedPowersMinDecExp + k + (kCachedPowersDecStep - 1)) / kCachedPowersDecStep;
     JSON_ASSERT(index >= 0);
-    JSON_ASSERT(static_cast<std::size_t>(index) < kCachedPowers.size());
+    JSON_ASSERT(static_cast<size_t>(index) < kCachedPowers.size());
 
-    const cached_power cached = kCachedPowers[static_cast<std::size_t>(index)];
+    const cached_power cached = kCachedPowers[static_cast<size_t>(index)];
     JSON_ASSERT(kAlpha <= cached.e + e + 64);
     JSON_ASSERT(kGamma >= cached.e + e + 64);
 
@@ -18109,7 +18109,7 @@ inline cached_power get_cached_power_for_binary_exponent(int e)
 For n != 0, returns k, such that pow10 := 10^(k-1) <= n < 10^k.
 For n == 0, returns 1 and sets pow10 := 1.
 */
-inline int find_largest_pow10(const std::uint32_t n, std::uint32_t& pow10)
+inline int find_largest_pow10(const uint32_t n, uint32_t& pow10)
 {
     // LCOV_EXCL_START
     if (n >= 1000000000)
@@ -18163,8 +18163,8 @@ inline int find_largest_pow10(const std::uint32_t n, std::uint32_t& pow10)
     return 1;
 }
 
-inline void grisu2_round(char* buf, int len, std::uint64_t dist, std::uint64_t delta,
-                         std::uint64_t rest, std::uint64_t ten_k)
+inline void grisu2_round(char* buf, int len, uint64_t dist, uint64_t delta,
+                         uint64_t rest, uint64_t ten_k)
 {
     JSON_ASSERT(len >= 1);
     JSON_ASSERT(dist <= delta);
@@ -18225,8 +18225,8 @@ inline void grisu2_digit_gen(char* buffer, int& length, int& decimal_exponent,
     JSON_ASSERT(M_plus.e >= kAlpha);
     JSON_ASSERT(M_plus.e <= kGamma);
 
-    std::uint64_t delta = diyfp::sub(M_plus, M_minus).f; // (significand of (M+ - M-), implicit exponent is e)
-    std::uint64_t dist  = diyfp::sub(M_plus, w      ).f; // (significand of (M+ - w ), implicit exponent is e)
+    uint64_t delta = diyfp::sub(M_plus, M_minus).f; // (significand of (M+ - M-), implicit exponent is e)
+    uint64_t dist  = diyfp::sub(M_plus, w      ).f; // (significand of (M+ - w ), implicit exponent is e)
 
     // Split M+ = f * 2^e into two parts p1 and p2 (note: e < 0):
     //
@@ -18235,10 +18235,10 @@ inline void grisu2_digit_gen(char* buffer, int& length, int& decimal_exponent,
     //         = ((p1        ) * 2^-e + (p2        )) * 2^e
     //         = p1 + p2 * 2^e
 
-    const diyfp one(std::uint64_t{1} << -M_plus.e, M_plus.e);
+    const diyfp one(uint64_t{1} << -M_plus.e, M_plus.e);
 
-    auto p1 = static_cast<std::uint32_t>(M_plus.f >> -one.e); // p1 = f div 2^-e (Since -e >= 32, p1 fits into a 32-bit int.)
-    std::uint64_t p2 = M_plus.f & (one.f - 1);                    // p2 = f mod 2^-e
+    auto p1 = static_cast<uint32_t>(M_plus.f >> -one.e); // p1 = f div 2^-e (Since -e >= 32, p1 fits into a 32-bit int.)
+    uint64_t p2 = M_plus.f & (one.f - 1);                    // p2 = f mod 2^-e
 
     // 1)
     //
@@ -18246,7 +18246,7 @@ inline void grisu2_digit_gen(char* buffer, int& length, int& decimal_exponent,
 
     JSON_ASSERT(p1 > 0);
 
-    std::uint32_t pow10{};
+    uint32_t pow10{};
     const int k = find_largest_pow10(p1, pow10);
 
     //      10^(k-1) <= p1 < 10^k, pow10 = 10^(k-1)
@@ -18274,8 +18274,8 @@ inline void grisu2_digit_gen(char* buffer, int& length, int& decimal_exponent,
         //      M+ = buffer * 10^n + (p1 + p2 * 2^e)    (buffer = 0 for n = k)
         //      pow10 = 10^(n-1) <= p1 < 10^n
         //
-        const std::uint32_t d = p1 / pow10;  // d = p1 div 10^(n-1)
-        const std::uint32_t r = p1 % pow10;  // r = p1 mod 10^(n-1)
+        const uint32_t d = p1 / pow10;  // d = p1 div 10^(n-1)
+        const uint32_t r = p1 % pow10;  // r = p1 mod 10^(n-1)
         //
         //      M+ = buffer * 10^n + (d * 10^(n-1) + r) + p2 * 2^e
         //         = (buffer * 10 + d) * 10^(n-1) + (r + p2 * 2^e)
@@ -18300,7 +18300,7 @@ inline void grisu2_digit_gen(char* buffer, int& length, int& decimal_exponent,
         // Note:
         // Since rest and delta share the same exponent e, it suffices to
         // compare the significands.
-        const std::uint64_t rest = (std::uint64_t{p1} << -one.e) + p2;
+        const uint64_t rest = (uint64_t{p1} << -one.e) + p2;
         if (rest <= delta)
         {
             // V = buffer * 10^n, with M- <= V <= M+.
@@ -18316,7 +18316,7 @@ inline void grisu2_digit_gen(char* buffer, int& length, int& decimal_exponent,
             //
             //      10^n = (10^n * 2^-e) * 2^e = ulp * 2^e
             //
-            const std::uint64_t ten_n = std::uint64_t{pow10} << -one.e;
+            const uint64_t ten_n = uint64_t{pow10} << -one.e;
             grisu2_round(buffer, length, dist, delta, rest, ten_n);
 
             return;
@@ -18378,10 +18378,10 @@ inline void grisu2_digit_gen(char* buffer, int& length, int& decimal_exponent,
         //         = buffer * 10^-m + 10^-m * (1/10 * (10 * p2)                   ) * 2^e
         //         = buffer * 10^-m + 10^-m * (1/10 * ((10*p2 div 2^-e) * 2^-e + (10*p2 mod 2^-e)) * 2^e
         //
-        JSON_ASSERT(p2 <= (std::numeric_limits<std::uint64_t>::max)() / 10);
+        JSON_ASSERT(p2 <= (std::numeric_limits<uint64_t>::max)() / 10);
         p2 *= 10;
-        const std::uint64_t d = p2 >> -one.e;     // d = (10 * p2) div 2^-e
-        const std::uint64_t r = p2 & (one.f - 1); // r = (10 * p2) mod 2^-e
+        const uint64_t d = p2 >> -one.e;     // d = (10 * p2) div 2^-e
+        const uint64_t r = p2 & (one.f - 1); // r = (10 * p2) mod 2^-e
         //
         //      M+ = buffer * 10^-m + 10^-m * (1/10 * (d * 2^-e + r) * 2^e
         //         = buffer * 10^-m + 10^-m * (1/10 * (d + r * 2^e))
@@ -18421,7 +18421,7 @@ inline void grisu2_digit_gen(char* buffer, int& length, int& decimal_exponent,
     //
     //      10^m * 10^-m = 1 = 2^-e * 2^e = ten_m * 2^e
     //
-    const std::uint64_t ten_m = one.f;
+    const uint64_t ten_m = one.f;
     grisu2_round(buffer, length, dist, delta, p2, ten_m);
 
     // By construction this algorithm generates the shortest possible decimal
@@ -18560,7 +18560,7 @@ inline char* append_exponent(char* buf, int e)
         *buf++ = '+';
     }
 
-    auto k = static_cast<std::uint32_t>(e);
+    auto k = static_cast<uint32_t>(e);
     if (k < 10)
     {
         // Always print at least two digits in the exponent.
@@ -18854,7 +18854,7 @@ class serializer
 
                     // first n-1 elements
                     auto i = val.m_data.m_value.object->cbegin();
-                    for (std::size_t cnt = 0; cnt < val.m_data.m_value.object->size() - 1; ++cnt, ++i)
+                    for (size_t cnt = 0; cnt < val.m_data.m_value.object->size() - 1; ++cnt, ++i)
                     {
                         o->write_characters(indent_string.c_str(), new_indent);
                         o->write_character('\"');
@@ -18883,7 +18883,7 @@ class serializer
 
                     // first n-1 elements
                     auto i = val.m_data.m_value.object->cbegin();
-                    for (std::size_t cnt = 0; cnt < val.m_data.m_value.object->size() - 1; ++cnt, ++i)
+                    for (size_t cnt = 0; cnt < val.m_data.m_value.object->size() - 1; ++cnt, ++i)
                     {
                         o->write_character('\"');
                         dump_escaped(i->first, ensure_ascii);
@@ -19111,15 +19111,15 @@ class serializer
     */
     void dump_escaped(const string_t& s, const bool ensure_ascii)
     {
-        std::uint32_t codepoint{};
+        uint32_t codepoint{};
         std::uint8_t state = UTF8_ACCEPT;
-        std::size_t bytes = 0;  // number of bytes written to string_buffer
+        size_t bytes = 0;  // number of bytes written to string_buffer
 
         // number of bytes written at the point of the last valid byte
-        std::size_t bytes_after_last_accept = 0;
-        std::size_t undumped_chars = 0;
+        size_t bytes_after_last_accept = 0;
+        size_t undumped_chars = 0;
 
-        for (std::size_t i = 0; i < s.size(); ++i)
+        for (size_t i = 0; i < s.size(); ++i)
         {
             const auto byte = static_cast<std::uint8_t>(s[i]);
 
@@ -19188,15 +19188,15 @@ class serializer
                                 {
                                     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg,hicpp-vararg)
                                     static_cast<void>((std::snprintf)(string_buffer.data() + bytes, 7, "\\u%04x",
-                                                                      static_cast<std::uint16_t>(codepoint)));
+                                                                      static_cast<uint16_t>(codepoint)));
                                     bytes += 6;
                                 }
                                 else
                                 {
                                     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg,hicpp-vararg)
                                     static_cast<void>((std::snprintf)(string_buffer.data() + bytes, 13, "\\u%04x\\u%04x",
-                                                                      static_cast<std::uint16_t>(0xD7C0u + (codepoint >> 10u)),
-                                                                      static_cast<std::uint16_t>(0xDC00u + (codepoint & 0x3FFu))));
+                                                                      static_cast<uint16_t>(0xD7C0u + (codepoint >> 10u)),
+                                                                      static_cast<uint16_t>(0xDC00u + (codepoint & 0x3FFu))));
                                     bytes += 12;
                                 }
                             }
@@ -19558,7 +19558,7 @@ class serializer
         // negative value indicates an error
         JSON_ASSERT(len > 0);
         // check if buffer was large enough
-        JSON_ASSERT(static_cast<std::size_t>(len) < number_buffer.size());
+        JSON_ASSERT(static_cast<size_t>(len) < number_buffer.size());
 
         // erase thousands separator
         if (thousands_sep != '\0')
@@ -19581,7 +19581,7 @@ class serializer
             }
         }
 
-        o->write_characters(number_buffer.data(), static_cast<std::size_t>(len));
+        o->write_characters(number_buffer.data(), static_cast<size_t>(len));
 
         // determine if we need to append ".0"
         const bool value_is_int_like =
@@ -19618,7 +19618,7 @@ class serializer
     @copyright Copyright (c) 2008-2009 Bjoern Hoehrmann <bjoern@hoehrmann.de>
     @sa http://bjoern.hoehrmann.de/utf-8/decoder/dfa/
     */
-    static std::uint8_t decode(std::uint8_t& state, std::uint32_t& codep, const std::uint8_t byte) noexcept
+    static std::uint8_t decode(std::uint8_t& state, uint32_t& codep, const std::uint8_t byte) noexcept
     {
         static const std::array<std::uint8_t, 400> utf8d =
         {
@@ -19647,7 +19647,7 @@ class serializer
                 ? (byte & 0x3fu) | (codep << 6u)
                 : (0xFFu >> type) & (byte);
 
-        const std::size_t index = 256u + (static_cast<size_t>(state) * 16u) + static_cast<size_t>(type);
+        const size_t index = 256u + (static_cast<size_t>(state) * 16u) + static_cast<size_t>(type);
         JSON_ASSERT(index < utf8d.size());
         state = utf8d[index];
         return state;
@@ -20231,7 +20231,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     /// a type to represent differences between iterators
     using difference_type = std::ptrdiff_t;
     /// a type to represent container sizes
-    using size_type = std::size_t;
+    using size_type = size_t;
 
     /// the allocator type
     using allocator_type = AllocatorType<basic_json>;
@@ -20767,7 +20767,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
         return it;
     }
 
-    reference set_parent(reference j, std::size_t old_capacity = detail::unknown_size())
+    reference set_parent(reference j, size_t old_capacity = detail::unknown_size())
     {
 #if JSON_DIAGNOSTICS
         if (old_capacity != detail::unknown_size())
@@ -21856,7 +21856,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     }
 
     template <
-        typename T, std::size_t N,
+        typename T, size_t N,
         typename Array = T (&)[N], // NOLINT(cppcoreguidelines-avoid-c-arrays,hicpp-avoid-c-arrays,modernize-avoid-c-arrays)
         detail::enable_if_t <
             detail::has_from_json<basic_json_t, Array>::value, int > = 0 >
@@ -24268,16 +24268,16 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
 
 #if JSON_DIAGNOSTIC_POSITIONS
     /// the start position of the value
-    std::size_t start_position = std::string::npos;
+    size_t start_position = std::string::npos;
     /// the end position of the value
-    std::size_t end_position = std::string::npos;
+    size_t end_position = std::string::npos;
   public:
-    constexpr std::size_t start_pos() const noexcept
+    constexpr size_t start_pos() const noexcept
     {
         return start_position;
     }
 
-    constexpr std::size_t end_pos() const noexcept
+    constexpr size_t end_pos() const noexcept
     {
         return end_position;
     }
@@ -24452,7 +24452,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     template<typename T>
     JSON_HEDLEY_WARN_UNUSED_RESULT
     JSON_HEDLEY_DEPRECATED_FOR(3.8.0, from_cbor(ptr, ptr + len))
-    static basic_json from_cbor(const T* ptr, std::size_t len,
+    static basic_json from_cbor(const T* ptr, size_t len,
                                 const bool strict = true,
                                 const bool allow_exceptions = true,
                                 const cbor_tag_handler_t tag_handler = cbor_tag_handler_t::error)
@@ -24508,7 +24508,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     template<typename T>
     JSON_HEDLEY_WARN_UNUSED_RESULT
     JSON_HEDLEY_DEPRECATED_FOR(3.8.0, from_msgpack(ptr, ptr + len))
-    static basic_json from_msgpack(const T* ptr, std::size_t len,
+    static basic_json from_msgpack(const T* ptr, size_t len,
                                    const bool strict = true,
                                    const bool allow_exceptions = true)
     {
@@ -24562,7 +24562,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     template<typename T>
     JSON_HEDLEY_WARN_UNUSED_RESULT
     JSON_HEDLEY_DEPRECATED_FOR(3.8.0, from_ubjson(ptr, ptr + len))
-    static basic_json from_ubjson(const T* ptr, std::size_t len,
+    static basic_json from_ubjson(const T* ptr, size_t len,
                                   const bool strict = true,
                                   const bool allow_exceptions = true)
     {
@@ -24646,7 +24646,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     template<typename T>
     JSON_HEDLEY_WARN_UNUSED_RESULT
     JSON_HEDLEY_DEPRECATED_FOR(3.8.0, from_bson(ptr, ptr + len))
-    static basic_json from_bson(const T* ptr, std::size_t len,
+    static basic_json from_bson(const T* ptr, size_t len,
                                 const bool strict = true,
                                 const bool allow_exceptions = true)
     {
@@ -25066,7 +25066,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
             case value_t::array:
             {
                 // first pass: traverse common elements
-                std::size_t i = 0;
+                size_t i = 0;
                 while (i < source.size() && i < target.size())
                 {
                     // recursive call to compare array values at index i
@@ -25227,9 +25227,9 @@ inline namespace json_literals
 /// @sa https://json.nlohmann.me/api/basic_json/operator_literal_json/
 JSON_HEDLEY_NON_NULL(1)
 #if !defined(JSON_HEDLEY_GCC_VERSION) || JSON_HEDLEY_GCC_VERSION_CHECK(4,9,0)
-    inline nlohmann::json operator ""_json(const char* s, std::size_t n)
+    inline nlohmann::json operator ""_json(const char* s, size_t n)
 #else
-    inline nlohmann::json operator "" _json(const char* s, std::size_t n)
+    inline nlohmann::json operator "" _json(const char* s, size_t n)
 #endif
 {
     return nlohmann::json::parse(s, s + n);
@@ -25239,9 +25239,9 @@ JSON_HEDLEY_NON_NULL(1)
 /// @sa https://json.nlohmann.me/api/basic_json/operator_literal_json_pointer/
 JSON_HEDLEY_NON_NULL(1)
 #if !defined(JSON_HEDLEY_GCC_VERSION) || JSON_HEDLEY_GCC_VERSION_CHECK(4,9,0)
-    inline nlohmann::json::json_pointer operator ""_json_pointer(const char* s, std::size_t n)
+    inline nlohmann::json::json_pointer operator ""_json_pointer(const char* s, size_t n)
 #else
-    inline nlohmann::json::json_pointer operator "" _json_pointer(const char* s, std::size_t n)
+    inline nlohmann::json::json_pointer operator "" _json_pointer(const char* s, size_t n)
 #endif
 {
     return nlohmann::json::json_pointer(std::string(s, n));
@@ -25263,7 +25263,7 @@ namespace std // NOLINT(cert-dcl58-cpp)
 NLOHMANN_BASIC_JSON_TPL_DECLARATION
 struct hash<nlohmann::NLOHMANN_BASIC_JSON_TPL> // NOLINT(cert-dcl58-cpp)
 {
-    std::size_t operator()(const nlohmann::NLOHMANN_BASIC_JSON_TPL& j) const
+    size_t operator()(const nlohmann::NLOHMANN_BASIC_JSON_TPL& j) const
     {
         return nlohmann::detail::hash(j);
     }

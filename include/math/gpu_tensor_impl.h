@@ -19,43 +19,43 @@
 
 struct Matrix_Dimensions
 {
-    std::uint32_t batch_count = 1;
-    std::uint32_t rows_a = 0;
-    std::uint32_t columns_a = 0;
-    std::uint32_t columns_b = 0;
-    std::uint32_t broadcast_b = 0;
+    uint32_t batch_count = 1;
+    uint32_t rows_a = 0;
+    uint32_t columns_a = 0;
+    uint32_t columns_b = 0;
+    uint32_t broadcast_b = 0;
 };
 
 struct Elementwise_Dimensions
 {
-    std::uint32_t total_elements = 0;
-    std::uint32_t columns = 0;
-    std::uint32_t is_broadcast = 0;
+    uint32_t total_elements = 0;
+    uint32_t columns = 0;
+    uint32_t is_broadcast = 0;
 };
 
 struct Transpose_Dimensions
 {
-    std::uint32_t rows = 0;
-    std::uint32_t columns = 0;
+    uint32_t rows = 0;
+    uint32_t columns = 0;
 };
 
 struct Contiguous_Push_Constants
 {
-    std::uint32_t total_elements = 0;
-    std::uint32_t rank = 0;
-    std::uint32_t offset_elements = 0;
-    std::uint32_t shape_0 = 1;
-    std::uint32_t shape_1 = 1;
-    std::uint32_t shape_2 = 1;
-    std::uint32_t shape_3 = 1;
-    std::uint32_t shape_4 = 1;
-    std::uint32_t shape_5 = 1;
-    std::uint32_t stride_0 = 1;
-    std::uint32_t stride_1 = 1;
-    std::uint32_t stride_2 = 1;
-    std::uint32_t stride_3 = 1;
-    std::uint32_t stride_4 = 1;
-    std::uint32_t stride_5 = 1;
+    uint32_t total_elements = 0;
+    uint32_t rank = 0;
+    uint32_t offset_elements = 0;
+    uint32_t shape_0 = 1;
+    uint32_t shape_1 = 1;
+    uint32_t shape_2 = 1;
+    uint32_t shape_3 = 1;
+    uint32_t shape_4 = 1;
+    uint32_t shape_5 = 1;
+    uint32_t stride_0 = 1;
+    uint32_t stride_1 = 1;
+    uint32_t stride_2 = 1;
+    uint32_t stride_3 = 1;
+    uint32_t stride_4 = 1;
+    uint32_t stride_5 = 1;
 };
 
 class Gpu_Tensor_Impl : public Tensor_Impl
@@ -67,16 +67,16 @@ private:
     static inline bool is_graph_logging_enabled = true;
 
 public:
-    static inline std::size_t distinct_operations_count;
+    static inline size_t distinct_operations_count;
 
 private:
     template <typename Pipeline_Enum, typename Push_Constants_Type>
     void pushToGraph(Pipeline_Enum pipeline_id,
                      const std::vector<std::shared_ptr<gpu::vector>> &buffers,
                      const Push_Constants_Type &push_constants,
-                     std::uint32_t workgroup_count_x,
-                     std::uint32_t workgroup_count_y = 1,
-                     std::uint32_t workgroup_count_z = 1) const
+                     uint32_t workgroup_count_x,
+                     uint32_t workgroup_count_y = 1,
+                     uint32_t workgroup_count_z = 1) const
     {
         if (buffers.size() > 16)
         {
@@ -160,9 +160,9 @@ private:
         output_gpu.reshape(shape);
 
         Elementwise_Dimensions dims{
-            .total_elements = static_cast<std::uint32_t>(total_elements),
-            .columns = static_cast<std::uint32_t>(getColumns()),
-            .is_broadcast = static_cast<std::uint32_t>(is_broadcast ? 1 : 0)};
+            .total_elements = static_cast<uint32_t>(total_elements),
+            .columns = static_cast<uint32_t>(getColumns()),
+            .is_broadcast = static_cast<uint32_t>(is_broadcast ? 1 : 0)};
 
         Logger::logMessage(Input_Format{"Gpu_Tensor_Impl::executeElementwise: total={}, cols={}, broadcast={}",
                                         dims.total_elements, dims.columns, dims.is_broadcast},
@@ -172,7 +172,7 @@ private:
     }
 
 public:
-    Gpu_Tensor_Impl(std::size_t rows, std::size_t columns)
+    Gpu_Tensor_Impl(size_t rows, size_t columns)
     {
         updateShapeAndStrides(Shape{rows, columns});
         if (total_elements > 0)
@@ -181,7 +181,7 @@ public:
         }
     }
 
-    Gpu_Tensor_Impl(std::size_t rows, std::size_t columns, const std::vector<float> &host_data)
+    Gpu_Tensor_Impl(size_t rows, size_t columns, const std::vector<float> &host_data)
     {
         updateShapeAndStrides(Shape{rows, columns});
         if (host_data.size() != total_elements)
@@ -229,7 +229,7 @@ public:
         }
     }
 
-    Gpu_Tensor_Impl(Shape tensor_shape, Stride tensor_strides, std::shared_ptr<gpu::vector> existing_storage, std::size_t offset_bytes, Data_Type type = Data_Type::FLOAT32)
+    Gpu_Tensor_Impl(Shape tensor_shape, Stride tensor_strides, std::shared_ptr<gpu::vector> existing_storage, size_t offset_bytes, Data_Type type = Data_Type::FLOAT32)
     {
         data_type = type;
         shape = tensor_shape;
@@ -241,14 +241,14 @@ public:
 
     ~Gpu_Tensor_Impl() noexcept override = default;
 
-    void reshape(std::size_t rows, std::size_t columns) override
+    void reshape(size_t rows, size_t columns) override
     {
         reshape(Shape{rows, columns});
     }
 
     void reshape(Shape new_shape) override
     {
-        std::size_t new_total = new_shape.getTotalElements();
+        size_t new_total = new_shape.getTotalElements();
         if (!isContiguous() || byte_offset != 0)
         {
             Logger::logMessage(Input_Format{"Gpu_Tensor_Impl::reshape: Cannot reshape non-contiguous view directly"},
@@ -272,11 +272,11 @@ public:
         updateShapeAndStrides(new_shape);
     }
 
-    void permute(const std::vector<std::size_t> &axes_permutation, Tensor_Impl &output) const override
+    void permute(const std::vector<size_t> &axes_permutation, Tensor_Impl &output) const override
     {
         Shape new_shape = shape;
         Stride new_strides = strides;
-        for (std::size_t i = 0; i < shape.getRank(); ++i)
+        for (size_t i = 0; i < shape.getRank(); ++i)
         {
             new_shape[i] = shape[axes_permutation[i]];
             new_strides[i] = strides[axes_permutation[i]];
@@ -290,11 +290,11 @@ public:
         output_gpu.total_elements = total_elements;
     }
 
-    void slice(std::size_t axis, std::size_t start, std::size_t length, Tensor_Impl &output) const override
+    void slice(size_t axis, size_t start, size_t length, Tensor_Impl &output) const override
     {
         Shape new_shape = shape;
         new_shape[axis] = length;
-        std::size_t add_bytes = start * strides[axis] * getDataTypeSize(data_type);
+        size_t add_bytes = start * strides[axis] * getDataTypeSize(data_type);
 
         auto &output_gpu = static_cast<Gpu_Tensor_Impl &>(output);
         output_gpu.data_type = data_type;
@@ -323,41 +323,41 @@ public:
         }
 
         Contiguous_Push_Constants constants{
-            .total_elements = static_cast<std::uint32_t>(total_elements),
-            .rank = static_cast<std::uint32_t>(shape.getRank()),
-            .offset_elements = static_cast<std::uint32_t>(byte_offset / getDataTypeSize(data_type))};
+            .total_elements = static_cast<uint32_t>(total_elements),
+            .rank = static_cast<uint32_t>(shape.getRank()),
+            .offset_elements = static_cast<uint32_t>(byte_offset / getDataTypeSize(data_type))};
 
-        for (std::size_t i = 0; i < shape.getRank() && i < 6; ++i)
+        for (size_t i = 0; i < shape.getRank() && i < 6; ++i)
         {
             if (i == 0)
             {
-                constants.shape_0 = static_cast<std::uint32_t>(shape[0]);
-                constants.stride_0 = static_cast<std::uint32_t>(strides[0]);
+                constants.shape_0 = static_cast<uint32_t>(shape[0]);
+                constants.stride_0 = static_cast<uint32_t>(strides[0]);
             }
             if (i == 1)
             {
-                constants.shape_1 = static_cast<std::uint32_t>(shape[1]);
-                constants.stride_1 = static_cast<std::uint32_t>(strides[1]);
+                constants.shape_1 = static_cast<uint32_t>(shape[1]);
+                constants.stride_1 = static_cast<uint32_t>(strides[1]);
             }
             if (i == 2)
             {
-                constants.shape_2 = static_cast<std::uint32_t>(shape[2]);
-                constants.stride_2 = static_cast<std::uint32_t>(strides[2]);
+                constants.shape_2 = static_cast<uint32_t>(shape[2]);
+                constants.stride_2 = static_cast<uint32_t>(strides[2]);
             }
             if (i == 3)
             {
-                constants.shape_3 = static_cast<std::uint32_t>(shape[3]);
-                constants.stride_3 = static_cast<std::uint32_t>(strides[3]);
+                constants.shape_3 = static_cast<uint32_t>(shape[3]);
+                constants.stride_3 = static_cast<uint32_t>(strides[3]);
             }
             if (i == 4)
             {
-                constants.shape_4 = static_cast<std::uint32_t>(shape[4]);
-                constants.stride_4 = static_cast<std::uint32_t>(strides[4]);
+                constants.shape_4 = static_cast<uint32_t>(shape[4]);
+                constants.stride_4 = static_cast<uint32_t>(strides[4]);
             }
             if (i == 5)
             {
-                constants.shape_5 = static_cast<std::uint32_t>(shape[5]);
-                constants.stride_5 = static_cast<std::uint32_t>(strides[5]);
+                constants.shape_5 = static_cast<uint32_t>(shape[5]);
+                constants.stride_5 = static_cast<uint32_t>(strides[5]);
             }
         }
 
@@ -384,8 +384,8 @@ public:
 
         struct Cast_Push_Constants
         {
-            std::uint32_t total_elements = 0;
-        } pc{static_cast<std::uint32_t>(total_elements)};
+            uint32_t total_elements = 0;
+        } pc{static_cast<uint32_t>(total_elements)};
 
         if (data_type == Data_Type::FLOAT32 && target_type == Data_Type::FLOAT16)
         {
@@ -412,15 +412,15 @@ public:
         auto contig_other = other_gpu.ensureContiguousSelf();
         const auto *effective_other = contig_other ? contig_other.get() : &other_gpu;
 
-        std::size_t rank_a = shape.getRank();
-        std::size_t m_dim = (rank_a >= 2) ? shape[rank_a - 2] : getRows();
-        std::size_t k_dim = (rank_a >= 2) ? shape[rank_a - 1] : getColumns();
-        std::size_t b_dim = (rank_a >= 3) ? (total_elements / (m_dim * k_dim)) : 1;
+        size_t rank_a = shape.getRank();
+        size_t m_dim = (rank_a >= 2) ? shape[rank_a - 2] : getRows();
+        size_t k_dim = (rank_a >= 2) ? shape[rank_a - 1] : getColumns();
+        size_t b_dim = (rank_a >= 3) ? (total_elements / (m_dim * k_dim)) : 1;
 
-        std::size_t rank_b = other.getShape().getRank();
-        std::size_t k_other = (rank_b >= 2) ? other.getShape()[rank_b - 2] : other.getRows();
-        std::size_t n_dim = (rank_b >= 2) ? other.getShape()[rank_b - 1] : other.getColumns();
-        std::size_t b_other = (rank_b >= 3) ? (other.getTotalElements() / (k_other * n_dim)) : 1;
+        size_t rank_b = other.getShape().getRank();
+        size_t k_other = (rank_b >= 2) ? other.getShape()[rank_b - 2] : other.getRows();
+        size_t n_dim = (rank_b >= 2) ? other.getShape()[rank_b - 1] : other.getColumns();
+        size_t b_other = (rank_b >= 3) ? (other.getTotalElements() / (k_other * n_dim)) : 1;
 
         if (k_dim != k_other)
         {
@@ -444,7 +444,7 @@ public:
         }
         else if (rank_a >= 4)
         {
-            std::vector<std::size_t> dims(shape.getDimensions().begin(), shape.getDimensions().end());
+            std::vector<size_t> dims(shape.getDimensions().begin(), shape.getDimensions().end());
             dims[rank_a - 2] = m_dim;
             dims[rank_a - 1] = n_dim;
             out_shape = Shape(dims);
@@ -462,10 +462,10 @@ public:
         output_gpu.reshape(out_shape);
 
         Matrix_Dimensions dims{
-            .batch_count = static_cast<std::uint32_t>(b_dim),
-            .rows_a = static_cast<std::uint32_t>(m_dim),
-            .columns_a = static_cast<std::uint32_t>(k_dim),
-            .columns_b = static_cast<std::uint32_t>(n_dim),
+            .batch_count = static_cast<uint32_t>(b_dim),
+            .rows_a = static_cast<uint32_t>(m_dim),
+            .columns_a = static_cast<uint32_t>(k_dim),
+            .columns_b = static_cast<uint32_t>(n_dim),
             .broadcast_b = broadcast_b ? 1u : 0u};
 
         Logger::logMessage(Input_Format{"Gpu_Tensor_Impl::matmul: batch={}, rows_a={}, cols_a={}, cols_b={}",
@@ -512,9 +512,9 @@ public:
 
         struct Scalar_Constants
         {
-            std::uint32_t total_elements;
+            uint32_t total_elements;
             float scalar;
-        } constants{static_cast<std::uint32_t>(total_elements), scalar};
+        } constants{static_cast<uint32_t>(total_elements), scalar};
 
         pushToGraph(Compute_Pipeline::MUL_SCALAR, {effective_self->storage, output_gpu.storage}, constants, (total_elements + 255) / 256);
     }
@@ -549,8 +549,8 @@ public:
         output_gpu.reshape(getColumns(), getRows());
 
         Transpose_Dimensions dims{
-            .rows = static_cast<std::uint32_t>(getRows()),
-            .columns = static_cast<std::uint32_t>(getColumns())};
+            .rows = static_cast<uint32_t>(getRows()),
+            .columns = static_cast<uint32_t>(getColumns())};
 
         pushToGraph(Compute_Pipeline::TRANSPOSE, {effective_self->storage, output_gpu.storage}, dims,
                     (dims.columns + 15) / 16, (dims.rows + 15) / 16);
@@ -562,13 +562,13 @@ public:
         auto contig_self = ensureContiguousSelf();
         const auto *effective_self = contig_self ? contig_self.get() : this;
 
-        std::uint32_t dim_size = static_cast<std::uint32_t>(getRows());
+        uint32_t dim_size = static_cast<uint32_t>(getRows());
         auto &output_gpu = castToGpu(output);
         output_gpu.reshape(dim_size, dim_size);
 
         struct Inverse_Constants
         {
-            std::uint32_t dimension_size;
+            uint32_t dimension_size;
         } constants{dim_size};
 
         pushToGraph(Compute_Pipeline::MATRIX_INVERSE, {effective_self->storage, output_gpu.storage}, constants, 1, 1, 1);
@@ -584,8 +584,8 @@ public:
 
         struct Norm_Constants
         {
-            std::uint32_t total_elements;
-        } constants{static_cast<std::uint32_t>(total_elements)};
+            uint32_t total_elements;
+        } constants{static_cast<uint32_t>(total_elements)};
 
         pushToGraph(Compute_Pipeline::NORMALIZE, {effective_self->storage, output_gpu.storage}, constants, 1, 1, 1);
     }
@@ -603,7 +603,7 @@ public:
         output_gpu.reshape(shape);
         pushToGraph(data_type == Data_Type::FLOAT16 ? Compute_Pipeline::RELU_FP16 : Compute_Pipeline::RELU,
                     {effective_self->storage, output_gpu.storage},
-                    static_cast<std::uint32_t>(total_elements), (static_cast<std::uint32_t>(total_elements) + 255) / 256);
+                    static_cast<uint32_t>(total_elements), (static_cast<uint32_t>(total_elements) + 255) / 256);
     }
 
     void reluBackward(const Tensor_Impl &output_gradient, Tensor_Impl &input_gradient) const override
@@ -625,7 +625,7 @@ public:
 
         pushToGraph(data_type == Data_Type::FLOAT16 ? Compute_Pipeline::RELU_BACKWARD_FP16 : Compute_Pipeline::RELU_BACKWARD,
                     {effective_self->storage, effective_grad->storage, in_grad_gpu.storage},
-                    static_cast<std::uint32_t>(total_elements), (static_cast<std::uint32_t>(total_elements) + 255) / 256);
+                    static_cast<uint32_t>(total_elements), (static_cast<uint32_t>(total_elements) + 255) / 256);
     }
 
     void gelu(Tensor_Impl &output) const override
@@ -641,7 +641,7 @@ public:
         output_gpu.reshape(shape);
         pushToGraph(data_type == Data_Type::FLOAT16 ? Compute_Pipeline::GELU_FP16 : Compute_Pipeline::GELU,
                     {effective_self->storage, output_gpu.storage},
-                    static_cast<std::uint32_t>(total_elements), (static_cast<std::uint32_t>(total_elements) + 255) / 256);
+                    static_cast<uint32_t>(total_elements), (static_cast<uint32_t>(total_elements) + 255) / 256);
     }
 
     void geluBackward(const Tensor_Impl &output_gradient, Tensor_Impl &input_gradient) const override
@@ -663,7 +663,7 @@ public:
 
         pushToGraph(data_type == Data_Type::FLOAT16 ? Compute_Pipeline::GELU_BACKWARD_FP16 : Compute_Pipeline::GELU_BACKWARD,
                     {effective_self->storage, effective_grad->storage, in_grad_gpu.storage},
-                    static_cast<std::uint32_t>(total_elements), (static_cast<std::uint32_t>(total_elements) + 255) / 256);
+                    static_cast<uint32_t>(total_elements), (static_cast<uint32_t>(total_elements) + 255) / 256);
     }
 
     void softmax(Tensor_Impl &output) const override
@@ -676,9 +676,9 @@ public:
 
         struct Softmax_Constants
         {
-            std::uint32_t rows;
-            std::uint32_t columns;
-        } constants{static_cast<std::uint32_t>(getRows()), static_cast<std::uint32_t>(getColumns())};
+            uint32_t rows;
+            uint32_t columns;
+        } constants{static_cast<uint32_t>(getRows()), static_cast<uint32_t>(getColumns())};
 
         pushToGraph(Compute_Pipeline::SOFTMAX, {effective_self->storage, output_gpu.storage}, constants, constants.rows, 1, 1);
     }
@@ -698,9 +698,9 @@ public:
 
         struct Softmax_Constants
         {
-            std::uint32_t rows;
-            std::uint32_t columns;
-        } constants{static_cast<std::uint32_t>(getRows()), static_cast<std::uint32_t>(getColumns())};
+            uint32_t rows;
+            uint32_t columns;
+        } constants{static_cast<uint32_t>(getRows()), static_cast<uint32_t>(getColumns())};
 
         pushToGraph(Compute_Pipeline::SOFTMAX_BACKWARD, {effective_self->storage, effective_grad->storage, in_grad_gpu.storage}, constants, constants.rows, 1, 1);
     }
@@ -714,11 +714,11 @@ public:
 
         struct Sgd_Constants
         {
-            std::uint32_t total_elements;
+            uint32_t total_elements;
             float learning_rate;
             float max_gradient;
             float inv_scale;
-        } constants{static_cast<std::uint32_t>(total_elements), learning_rate, max_gradient, inv_scale};
+        } constants{static_cast<uint32_t>(total_elements), learning_rate, max_gradient, inv_scale};
 
         pushToGraph(Compute_Pipeline::SGD_UPDATE, {storage, effective_grad->storage}, constants, (total_elements + 255) / 256);
     }
@@ -730,7 +730,7 @@ public:
                     float beta1,
                     float beta2,
                     float epsilon,
-                    std::size_t timestep,
+                    size_t timestep,
                     float max_gradient = 1.0F,
                     float inv_scale = 1.0F) override
     {
@@ -745,13 +745,13 @@ public:
         const auto &m_gpu = castToGpu(first_moment);
         const auto &v_gpu = castToGpu(second_moment);
 
-        std::size_t effective_t = std::max<std::size_t>(timestep, 1);
+        size_t effective_t = std::max<size_t>(timestep, 1);
         float bc1 = std::max(1.0F - std::pow(beta1, static_cast<float>(effective_t)), 1e-8F);
         float bc2 = std::max(1.0F - std::pow(beta2, static_cast<float>(effective_t)), 1e-8F);
 
         struct Adam_Constants
         {
-            std::uint32_t total_elements;
+            uint32_t total_elements;
             float learning_rate;
             float beta1;
             float beta2;
@@ -760,7 +760,7 @@ public:
             float inv_bc1;
             float inv_sqrt_bc2;
             float inv_scale;
-        } constants{static_cast<std::uint32_t>(total_elements), learning_rate, beta1, beta2, epsilon, max_gradient,
+        } constants{static_cast<uint32_t>(total_elements), learning_rate, beta1, beta2, epsilon, max_gradient,
                     1.0F / bc1, 1.0F / std::sqrt(bc2), inv_scale};
 
         pushToGraph(Compute_Pipeline::ADAM_UPDATE, {storage, effective_grad->storage, m_gpu.storage, v_gpu.storage}, constants, (total_elements + 255) / 256);
@@ -779,15 +779,15 @@ public:
         auto contig_b = b_gpu.ensureContiguousSelf();
         const auto *effective_b = contig_b ? contig_b.get() : &b_gpu;
 
-        std::size_t rank_a = shape.getRank();
-        std::size_t m_dim = (rank_a >= 2) ? shape[rank_a - 2] : getRows();
-        std::size_t k_dim = (rank_a >= 2) ? shape[rank_a - 1] : getColumns();
-        std::size_t b_dim = (rank_a >= 3) ? (total_elements / (m_dim * k_dim)) : 1;
+        size_t rank_a = shape.getRank();
+        size_t m_dim = (rank_a >= 2) ? shape[rank_a - 2] : getRows();
+        size_t k_dim = (rank_a >= 2) ? shape[rank_a - 1] : getColumns();
+        size_t b_dim = (rank_a >= 3) ? (total_elements / (m_dim * k_dim)) : 1;
 
-        std::size_t rank_w = weights.getShape().getRank();
-        std::size_t k_w = (rank_w >= 2) ? weights.getShape()[rank_w - 2] : weights.getRows();
-        std::size_t n_dim = (rank_w >= 2) ? weights.getShape()[rank_w - 1] : weights.getColumns();
-        std::size_t b_w = (rank_w >= 3) ? (weights.getTotalElements() / (k_w * n_dim)) : 1;
+        size_t rank_w = weights.getShape().getRank();
+        size_t k_w = (rank_w >= 2) ? weights.getShape()[rank_w - 2] : weights.getRows();
+        size_t n_dim = (rank_w >= 2) ? weights.getShape()[rank_w - 1] : weights.getColumns();
+        size_t b_w = (rank_w >= 3) ? (weights.getTotalElements() / (k_w * n_dim)) : 1;
 
         if (k_dim != k_w)
         {
@@ -811,7 +811,7 @@ public:
         }
         else if (rank_a >= 4)
         {
-            std::vector<std::size_t> dims(shape.getDimensions().begin(), shape.getDimensions().end());
+            std::vector<size_t> dims(shape.getDimensions().begin(), shape.getDimensions().end());
             dims[rank_a - 2] = m_dim;
             dims[rank_a - 1] = n_dim;
             out_shape = Shape(dims);
@@ -828,8 +828,8 @@ public:
         }
         output_gpu.reshape(out_shape);
 
-        std::size_t b_total_elems = biases.getTotalElements();
-        std::uint32_t broadcast_b_flag = 0;
+        size_t b_total_elems = biases.getTotalElements();
+        uint32_t broadcast_b_flag = 0;
         if (b_total_elems == n_dim || biases.getRows() == 1)
         {
             broadcast_b_flag = 1;
@@ -845,17 +845,17 @@ public:
 
         struct Matmul_Add_Constants
         {
-            std::uint32_t batch_count;
-            std::uint32_t rows_x;
-            std::uint32_t columns_x;
-            std::uint32_t columns_weights;
-            std::uint32_t broadcast_w;
-            std::uint32_t broadcast_b;
+            uint32_t batch_count;
+            uint32_t rows_x;
+            uint32_t columns_x;
+            uint32_t columns_weights;
+            uint32_t broadcast_w;
+            uint32_t broadcast_b;
         } constants{
-            .batch_count = static_cast<std::uint32_t>(b_dim),
-            .rows_x = static_cast<std::uint32_t>(m_dim),
-            .columns_x = static_cast<std::uint32_t>(k_dim),
-            .columns_weights = static_cast<std::uint32_t>(n_dim),
+            .batch_count = static_cast<uint32_t>(b_dim),
+            .rows_x = static_cast<uint32_t>(m_dim),
+            .columns_x = static_cast<uint32_t>(k_dim),
+            .columns_weights = static_cast<uint32_t>(n_dim),
             .broadcast_w = broadcast_w ? 1u : 0u,
             .broadcast_b = broadcast_b_flag};
 
@@ -906,9 +906,9 @@ public:
     }
 
     void conv2d(const Tensor_Impl &weights, const Tensor_Impl &biases, Tensor_Impl &output,
-                std::uint32_t input_height, std::uint32_t input_width, std::uint32_t input_channels,
-                std::uint32_t output_channels, std::uint32_t kernel_size,
-                std::uint32_t stride, std::uint32_t padding) const override
+                uint32_t input_height, uint32_t input_width, uint32_t input_channels,
+                uint32_t output_channels, uint32_t kernel_size,
+                uint32_t stride, uint32_t padding) const override
     {
         auto contig_self = ensureContiguousSelf();
         const auto *effective_self = contig_self ? contig_self.get() : this;
@@ -923,9 +923,9 @@ public:
 
         auto &output_gpu = castToGpu(output);
 
-        std::uint32_t batch_size = static_cast<std::uint32_t>(getRows());
-        std::uint32_t out_h = (input_height + 2 * padding - kernel_size) / stride + 1;
-        std::uint32_t out_w = (input_width + 2 * padding - kernel_size) / stride + 1;
+        uint32_t batch_size = static_cast<uint32_t>(getRows());
+        uint32_t out_h = (input_height + 2 * padding - kernel_size) / stride + 1;
+        uint32_t out_w = (input_width + 2 * padding - kernel_size) / stride + 1;
 
         bool is_fp16 = (effective_self->getDataType() == Data_Type::FLOAT16 && effective_w->getDataType() == Data_Type::FLOAT16);
         if (is_fp16)
@@ -936,16 +936,16 @@ public:
 
         struct Conv2d_Constants
         {
-            std::uint32_t batch_size;
-            std::uint32_t input_height;
-            std::uint32_t input_width;
-            std::uint32_t input_channels;
-            std::uint32_t output_height;
-            std::uint32_t output_width;
-            std::uint32_t output_channels;
-            std::uint32_t kernel_size;
-            std::uint32_t stride;
-            std::uint32_t padding;
+            uint32_t batch_size;
+            uint32_t input_height;
+            uint32_t input_width;
+            uint32_t input_channels;
+            uint32_t output_height;
+            uint32_t output_width;
+            uint32_t output_channels;
+            uint32_t kernel_size;
+            uint32_t stride;
+            uint32_t padding;
         } constants{batch_size, input_height, input_width, input_channels, out_h, out_w, output_channels, kernel_size, stride, padding};
 
         Compute_Pipeline pipeline = is_fp16 ? Compute_Pipeline::CONV2D_FORWARD_PASS_FP16 : Compute_Pipeline::CONV2D_FORWARD_PASS;
@@ -954,9 +954,9 @@ public:
     }
 
     void conv2dBackwardInput(const Tensor_Impl &weights, Tensor_Impl &input_gradient,
-                             std::uint32_t input_height, std::uint32_t input_width, std::uint32_t input_channels,
-                             std::uint32_t output_height, std::uint32_t output_width, std::uint32_t output_channels,
-                             std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const override
+                             uint32_t input_height, uint32_t input_width, uint32_t input_channels,
+                             uint32_t output_height, uint32_t output_width, uint32_t output_channels,
+                             uint32_t kernel_size, uint32_t stride, uint32_t padding) const override
     {
         auto contig_self = ensureContiguousSelf();
         const auto *effective_self = contig_self ? contig_self.get() : this;
@@ -966,7 +966,7 @@ public:
         const auto *effective_w = contig_w ? contig_w.get() : &w_gpu;
 
         auto &in_grad_gpu = castToGpu(input_gradient);
-        std::uint32_t batch_size = static_cast<std::uint32_t>(getRows());
+        uint32_t batch_size = static_cast<uint32_t>(getRows());
 
         bool is_fp16 = (effective_self->getDataType() == Data_Type::FLOAT16 && effective_w->getDataType() == Data_Type::FLOAT16);
         if (is_fp16)
@@ -977,16 +977,16 @@ public:
 
         struct Conv2d_Constants
         {
-            std::uint32_t batch_size;
-            std::uint32_t input_height;
-            std::uint32_t input_width;
-            std::uint32_t input_channels;
-            std::uint32_t output_height;
-            std::uint32_t output_width;
-            std::uint32_t output_channels;
-            std::uint32_t kernel_size;
-            std::uint32_t stride;
-            std::uint32_t padding;
+            uint32_t batch_size;
+            uint32_t input_height;
+            uint32_t input_width;
+            uint32_t input_channels;
+            uint32_t output_height;
+            uint32_t output_width;
+            uint32_t output_channels;
+            uint32_t kernel_size;
+            uint32_t stride;
+            uint32_t padding;
         } constants{batch_size, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding};
 
         Compute_Pipeline pipeline = is_fp16 ? Compute_Pipeline::CONV2D_BACKWARD_PASS_INPUT_GRADIENT_FP16 : Compute_Pipeline::CONV2D_BACKWARD_PASS_INPUT_GRADIENT;
@@ -995,9 +995,9 @@ public:
     }
 
     void conv2dBackwardWeight(const Tensor_Impl &output_gradient, Tensor_Impl &weight_gradient, Tensor_Impl &bias_gradient,
-                              std::uint32_t input_height, std::uint32_t input_width, std::uint32_t input_channels,
-                              std::uint32_t output_height, std::uint32_t output_width, std::uint32_t output_channels,
-                              std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding,
+                              uint32_t input_height, uint32_t input_width, uint32_t input_channels,
+                              uint32_t output_height, uint32_t output_width, uint32_t output_channels,
+                              uint32_t kernel_size, uint32_t stride, uint32_t padding,
                               Tensor_Impl *im2col_scratch = nullptr) const override
     {
         auto contig_self = ensureContiguousSelf();
@@ -1010,25 +1010,25 @@ public:
         auto &w_grad_gpu = castToGpu(weight_gradient);
         auto &b_grad_gpu = castToGpu(bias_gradient);
 
-        std::uint32_t batch_size = static_cast<std::uint32_t>(getRows());
-        std::uint32_t K = kernel_size * kernel_size * input_channels;
-        std::uint32_t M = batch_size * output_height * output_width;
+        uint32_t batch_size = static_cast<uint32_t>(getRows());
+        uint32_t K = kernel_size * kernel_size * input_channels;
+        uint32_t M = batch_size * output_height * output_width;
 
         w_grad_gpu.reshape(1, K * output_channels);
         b_grad_gpu.reshape(1, output_channels);
 
         struct Conv2d_Constants
         {
-            std::uint32_t batch_size;
-            std::uint32_t input_height;
-            std::uint32_t input_width;
-            std::uint32_t input_channels;
-            std::uint32_t output_height;
-            std::uint32_t output_width;
-            std::uint32_t output_channels;
-            std::uint32_t kernel_size;
-            std::uint32_t stride;
-            std::uint32_t padding;
+            uint32_t batch_size;
+            uint32_t input_height;
+            uint32_t input_width;
+            uint32_t input_channels;
+            uint32_t output_height;
+            uint32_t output_width;
+            uint32_t output_channels;
+            uint32_t kernel_size;
+            uint32_t stride;
+            uint32_t padding;
         } constants{batch_size, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding};
 
         bool is_fp16 = (effective_self->getDataType() == Data_Type::FLOAT16 && effective_grad->getDataType() == Data_Type::FLOAT16);
@@ -1090,8 +1090,8 @@ public:
     }
 
     void maxpool2d(Tensor_Impl &output, Tensor_Impl &output_mask,
-                   std::uint32_t input_height, std::uint32_t input_width, std::uint32_t channels,
-                   std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const override
+                   uint32_t input_height, uint32_t input_width, uint32_t channels,
+                   uint32_t kernel_size, uint32_t stride, uint32_t padding) const override
     {
         auto contig_self = ensureContiguousSelf();
         const auto *effective_self = contig_self ? contig_self.get() : this;
@@ -1099,9 +1099,9 @@ public:
         auto &res_gpu = castToGpu(output);
         auto &mask_gpu = castToGpu(output_mask);
 
-        std::uint32_t batch_size = static_cast<std::uint32_t>(getRows());
-        std::uint32_t out_h = (input_height + 2 * padding - kernel_size) / stride + 1;
-        std::uint32_t out_w = (input_width + 2 * padding - kernel_size) / stride + 1;
+        uint32_t batch_size = static_cast<uint32_t>(getRows());
+        uint32_t out_h = (input_height + 2 * padding - kernel_size) / stride + 1;
+        uint32_t out_w = (input_width + 2 * padding - kernel_size) / stride + 1;
 
         if (data_type == Data_Type::FLOAT16)
         {
@@ -1113,15 +1113,15 @@ public:
 
         struct Pool_Constants
         {
-            std::uint32_t batch_size;
-            std::uint32_t input_height;
-            std::uint32_t input_width;
-            std::uint32_t channels;
-            std::uint32_t output_height;
-            std::uint32_t output_width;
-            std::uint32_t kernel_size;
-            std::uint32_t stride;
-            std::uint32_t padding;
+            uint32_t batch_size;
+            uint32_t input_height;
+            uint32_t input_width;
+            uint32_t channels;
+            uint32_t output_height;
+            uint32_t output_width;
+            uint32_t kernel_size;
+            uint32_t stride;
+            uint32_t padding;
         } constants{batch_size, input_height, input_width, channels, out_h, out_w, kernel_size, stride, padding};
 
         pushToGraph(data_type == Data_Type::FLOAT16 ? Compute_Pipeline::MAXPOOL2D_FORWARD_FP16 : Compute_Pipeline::MAXPOOL2D_FORWARD,
@@ -1130,9 +1130,9 @@ public:
     }
 
     void maxpool2dBackward(const Tensor_Impl &mask, Tensor_Impl &input_gradient,
-                           std::uint32_t input_height, std::uint32_t input_width, std::uint32_t channels,
-                           std::uint32_t output_height, std::uint32_t output_width,
-                           std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const override
+                           uint32_t input_height, uint32_t input_width, uint32_t channels,
+                           uint32_t output_height, uint32_t output_width,
+                           uint32_t kernel_size, uint32_t stride, uint32_t padding) const override
     {
         auto contig_self = ensureContiguousSelf();
         const auto *effective_self = contig_self ? contig_self.get() : this;
@@ -1142,7 +1142,7 @@ public:
         const auto *effective_mask = contig_mask ? contig_mask.get() : &mask_gpu;
 
         auto &in_grad_gpu = castToGpu(input_gradient);
-        std::uint32_t batch_size = static_cast<std::uint32_t>(getRows());
+        uint32_t batch_size = static_cast<uint32_t>(getRows());
         if (data_type == Data_Type::FLOAT16)
         {
             in_grad_gpu.setDataType(Data_Type::FLOAT16);
@@ -1151,15 +1151,15 @@ public:
 
         struct Pool_Constants
         {
-            std::uint32_t batch_size;
-            std::uint32_t input_height;
-            std::uint32_t input_width;
-            std::uint32_t channels;
-            std::uint32_t output_height;
-            std::uint32_t output_width;
-            std::uint32_t kernel_size;
-            std::uint32_t stride;
-            std::uint32_t padding;
+            uint32_t batch_size;
+            uint32_t input_height;
+            uint32_t input_width;
+            uint32_t channels;
+            uint32_t output_height;
+            uint32_t output_width;
+            uint32_t kernel_size;
+            uint32_t stride;
+            uint32_t padding;
         } constants{batch_size, input_height, input_width, channels, output_height, output_width, kernel_size, stride, padding};
 
         pushToGraph(data_type == Data_Type::FLOAT16 ? Compute_Pipeline::MAXPOOL2D_BACKWARD_FP16 : Compute_Pipeline::MAXPOOL2D_BACKWARD,
@@ -1167,42 +1167,42 @@ public:
                     (channels + 15) / 16, (input_width + 15) / 16, batch_size * input_height);
     }
 
-    void globalAvgPool2d(Tensor_Impl &output, std::uint32_t input_height, std::uint32_t input_width, std::uint32_t channels) const override
+    void globalAvgPool2d(Tensor_Impl &output, uint32_t input_height, uint32_t input_width, uint32_t channels) const override
     {
         auto contig_self = ensureContiguousSelf();
         const auto *effective_self = contig_self ? contig_self.get() : this;
 
-        std::uint32_t batch_size = static_cast<std::uint32_t>(getRows());
+        uint32_t batch_size = static_cast<uint32_t>(getRows());
         auto &output_gpu = castToGpu(output);
         output_gpu.reshape(batch_size, channels);
 
         struct Avg_Constants
         {
-            std::uint32_t batch_size;
-            std::uint32_t input_height;
-            std::uint32_t input_width;
-            std::uint32_t channels;
+            uint32_t batch_size;
+            uint32_t input_height;
+            uint32_t input_width;
+            uint32_t channels;
         } constants{batch_size, input_height, input_width, channels};
 
         pushToGraph(Compute_Pipeline::GLOBAL_AVGPOOL_FORWARD, {effective_self->storage, output_gpu.storage}, constants,
                     (channels + 255) / 256, batch_size, 1);
     }
 
-    void globalAvgPool2dBackward(Tensor_Impl &input_gradient, std::uint32_t input_height, std::uint32_t input_width, std::uint32_t channels) const override
+    void globalAvgPool2dBackward(Tensor_Impl &input_gradient, uint32_t input_height, uint32_t input_width, uint32_t channels) const override
     {
         auto contig_self = ensureContiguousSelf();
         const auto *effective_self = contig_self ? contig_self.get() : this;
 
-        std::uint32_t batch_size = static_cast<std::uint32_t>(getRows());
+        uint32_t batch_size = static_cast<uint32_t>(getRows());
         auto &in_grad_gpu = castToGpu(input_gradient);
         in_grad_gpu.reshape(batch_size, input_height * input_width * channels);
 
         struct Avg_Constants
         {
-            std::uint32_t batch_size;
-            std::uint32_t input_height;
-            std::uint32_t input_width;
-            std::uint32_t channels;
+            uint32_t batch_size;
+            uint32_t input_height;
+            uint32_t input_width;
+            uint32_t channels;
         } constants{batch_size, input_height, input_width, channels};
 
         pushToGraph(Compute_Pipeline::GLOBAL_AVGPOOL_BACKWARD, {effective_self->storage, in_grad_gpu.storage}, constants,
@@ -1225,8 +1225,8 @@ public:
         auto &norm_in_gpu = castToGpu(normalized_input);
         auto &out_gpu = castToGpu(output);
 
-        std::uint32_t b_count = static_cast<std::uint32_t>(getRows());
-        std::uint32_t f_dim = static_cast<std::uint32_t>(getColumns());
+        uint32_t b_count = static_cast<uint32_t>(getRows());
+        uint32_t f_dim = static_cast<uint32_t>(getColumns());
         if (data_type == Data_Type::FLOAT16)
         {
             out_gpu.setDataType(Data_Type::FLOAT16);
@@ -1244,8 +1244,8 @@ public:
 
             struct Stats_Constants
             {
-                std::uint32_t batch_size;
-                std::uint32_t feature_dimension;
+                uint32_t batch_size;
+                uint32_t feature_dimension;
                 float momentum;
             } stats{b_count, f_dim, momentum};
 
@@ -1255,8 +1255,8 @@ public:
 
             struct Transform_Constants
             {
-                std::uint32_t total_elements;
-                std::uint32_t feature_dimension;
+                uint32_t total_elements;
+                uint32_t feature_dimension;
                 float epsilon;
             } tf{b_count * f_dim, f_dim, epsilon};
 
@@ -1268,8 +1268,8 @@ public:
         {
             struct Transform_Constants
             {
-                std::uint32_t total_elements;
-                std::uint32_t feature_dimension;
+                uint32_t total_elements;
+                uint32_t feature_dimension;
                 float epsilon;
             } tf{b_count * f_dim, f_dim, epsilon};
 
@@ -1293,8 +1293,8 @@ public:
         auto &b_grad_gpu = castToGpu(beta_gradient);
         auto &in_grad_gpu = castToGpu(input_gradient);
 
-        std::uint32_t b_count = static_cast<std::uint32_t>(getRows());
-        std::uint32_t f_dim = static_cast<std::uint32_t>(getColumns());
+        uint32_t b_count = static_cast<uint32_t>(getRows());
+        uint32_t f_dim = static_cast<uint32_t>(getColumns());
         bool is_fp16 = (effective_grad->getDataType() == Data_Type::FLOAT16 || data_type == Data_Type::FLOAT16);
         if (is_fp16)
         {
@@ -1308,8 +1308,8 @@ public:
 
         struct Stats_Constants
         {
-            std::uint32_t batch_size;
-            std::uint32_t feature_dimension;
+            uint32_t batch_size;
+            uint32_t feature_dimension;
         } stats{b_count, f_dim};
 
         pushToGraph(is_fp16 ? Compute_Pipeline::BATCH_NORM_STATS_BACKWARD_FP16 : Compute_Pipeline::BATCH_NORM_STATS_BACKWARD,
@@ -1318,9 +1318,9 @@ public:
 
         struct Transform_Constants
         {
-            std::uint32_t total_elements;
-            std::uint32_t batch_size;
-            std::uint32_t feature_dimension;
+            uint32_t total_elements;
+            uint32_t batch_size;
+            uint32_t feature_dimension;
             float epsilon;
         } tf{b_count * f_dim, b_count, f_dim, epsilon};
 
@@ -1353,11 +1353,11 @@ public:
 
         struct Constants
         {
-            std::uint32_t m_dim;
-            std::uint32_t k_dim;
-            std::uint32_t n_dim;
-        } c{static_cast<std::uint32_t>(getRows()), static_cast<std::uint32_t>(getColumns()),
-            static_cast<std::uint32_t>(effective_w->getColumns())};
+            uint32_t m_dim;
+            uint32_t k_dim;
+            uint32_t n_dim;
+        } c{static_cast<uint32_t>(getRows()), static_cast<uint32_t>(getColumns()),
+            static_cast<uint32_t>(effective_w->getColumns())};
 
         pushToGraph(Compute_Pipeline::LINEAR_FORWARD,
                     {effective_self->storage, effective_w->storage, effective_b->storage, output_gpu.storage},
@@ -1382,10 +1382,10 @@ public:
 
         struct Constants
         {
-            std::uint32_t batch_size;
-            std::uint32_t input_dimension;
-            std::uint32_t output_dimension;
-        } c{static_cast<std::uint32_t>(getRows()), static_cast<std::uint32_t>(effective_w->getRows()), static_cast<std::uint32_t>(getColumns())};
+            uint32_t batch_size;
+            uint32_t input_dimension;
+            uint32_t output_dimension;
+        } c{static_cast<uint32_t>(getRows()), static_cast<uint32_t>(effective_w->getRows()), static_cast<uint32_t>(getColumns())};
 
         pushToGraph(data_type == Data_Type::FLOAT16 ? Compute_Pipeline::LINEAR_BACKWARD_INPUT_FP16 : Compute_Pipeline::LINEAR_BACKWARD_INPUT,
                     {effective_self->storage, effective_w->storage, in_grad_gpu.storage}, c,
@@ -1413,10 +1413,10 @@ public:
 
         struct Constants
         {
-            std::uint32_t batch_size;
-            std::uint32_t input_dimension;
-            std::uint32_t output_dimension;
-        } c{static_cast<std::uint32_t>(getRows()), static_cast<std::uint32_t>(getColumns()), static_cast<std::uint32_t>(effective_grad->getColumns())};
+            uint32_t batch_size;
+            uint32_t input_dimension;
+            uint32_t output_dimension;
+        } c{static_cast<uint32_t>(getRows()), static_cast<uint32_t>(getColumns()), static_cast<uint32_t>(effective_grad->getColumns())};
 
         pushToGraph(data_type == Data_Type::FLOAT16 ? Compute_Pipeline::LINEAR_BACKWARD_WEIGHT_BIAS_FP16 : Compute_Pipeline::LINEAR_BACKWARD_WEIGHT_BIAS,
                     {effective_self->storage, effective_grad->storage, w_grad_gpu.storage, b_grad_gpu.storage}, c,
@@ -1427,7 +1427,7 @@ public:
                             Tensor_Impl &running_mean, Tensor_Impl &running_variance,
                             Tensor_Impl &batch_mean, Tensor_Impl &batch_variance,
                             Tensor_Impl &normalized_input, Tensor_Impl &output,
-                            std::uint32_t input_height, std::uint32_t input_width, std::uint32_t input_channels,
+                            uint32_t input_height, uint32_t input_width, uint32_t input_channels,
                             float epsilon, float momentum, bool is_training) const override
     {
         auto contig_self = ensureContiguousSelf();
@@ -1440,9 +1440,9 @@ public:
         auto &norm_in_gpu = castToGpu(normalized_input);
         auto &out_gpu = castToGpu(output);
 
-        std::uint32_t b_size = static_cast<std::uint32_t>(getRows());
-        std::uint32_t tot_feat = input_height * input_width * input_channels;
-        std::uint32_t sp_count = b_size * input_height * input_width;
+        uint32_t b_size = static_cast<uint32_t>(getRows());
+        uint32_t tot_feat = input_height * input_width * input_channels;
+        uint32_t sp_count = b_size * input_height * input_width;
         if (data_type == Data_Type::FLOAT16)
         {
             out_gpu.setDataType(Data_Type::FLOAT16);
@@ -1460,9 +1460,9 @@ public:
 
             struct Stats_Constants
             {
-                std::uint32_t total_elements;
-                std::uint32_t channels;
-                std::uint32_t spatial_count;
+                uint32_t total_elements;
+                uint32_t channels;
+                uint32_t spatial_count;
                 float momentum;
             } stats{b_size * tot_feat, input_channels, sp_count, momentum};
 
@@ -1472,8 +1472,8 @@ public:
 
             struct Transform_Constants
             {
-                std::uint32_t total_elements;
-                std::uint32_t channels;
+                uint32_t total_elements;
+                uint32_t channels;
                 float epsilon;
             } tf{b_size * tot_feat, input_channels, epsilon};
 
@@ -1485,8 +1485,8 @@ public:
         {
             struct Transform_Constants
             {
-                std::uint32_t total_elements;
-                std::uint32_t channels;
+                uint32_t total_elements;
+                uint32_t channels;
                 float epsilon;
             } tf{b_size * tot_feat, input_channels, epsilon};
 
@@ -1498,7 +1498,7 @@ public:
 
     void batchNorm2dBackward(const Tensor_Impl &gamma, const Tensor_Impl &batch_variance, const Tensor_Impl &normalized_input,
                              Tensor_Impl &gamma_gradient, Tensor_Impl &beta_gradient, Tensor_Impl &input_gradient,
-                             std::uint32_t input_height, std::uint32_t input_width, std::uint32_t input_channels, float epsilon) const override
+                             uint32_t input_height, uint32_t input_width, uint32_t input_channels, float epsilon) const override
     {
         auto contig_self = ensureContiguousSelf();
         const auto *effective_self = contig_self ? contig_self.get() : this;
@@ -1510,9 +1510,9 @@ public:
         auto &b_grad_gpu = castToGpu(beta_gradient);
         auto &in_grad_gpu = castToGpu(input_gradient);
 
-        std::uint32_t b_size = static_cast<std::uint32_t>(getRows());
-        std::uint32_t tot_feat = input_height * input_width * input_channels;
-        std::uint32_t sp_count = b_size * input_height * input_width;
+        uint32_t b_size = static_cast<uint32_t>(getRows());
+        uint32_t tot_feat = input_height * input_width * input_channels;
+        uint32_t sp_count = b_size * input_height * input_width;
         if (data_type == Data_Type::FLOAT16)
         {
             in_grad_gpu.setDataType(Data_Type::FLOAT16);
@@ -1525,9 +1525,9 @@ public:
 
         struct Stats_Constants
         {
-            std::uint32_t total_elements;
-            std::uint32_t channels;
-            std::uint32_t spatial_count;
+            uint32_t total_elements;
+            uint32_t channels;
+            uint32_t spatial_count;
         } stats{b_size * tot_feat, input_channels, sp_count};
 
         pushToGraph(data_type == Data_Type::FLOAT16 ? Compute_Pipeline::BATCH_NORM2D_STATS_BACKWARD_FP16 : Compute_Pipeline::BATCH_NORM2D_STATS_BACKWARD,
@@ -1536,9 +1536,9 @@ public:
 
         struct Transform_Constants
         {
-            std::uint32_t total_elements;
-            std::uint32_t channels;
-            std::uint32_t spatial_count;
+            uint32_t total_elements;
+            uint32_t channels;
+            uint32_t spatial_count;
             float epsilon;
         } tf{b_size * tot_feat, input_channels, sp_count, epsilon};
 
@@ -1559,13 +1559,13 @@ public:
 
         auto &output_gpu = castToGpu(output);
 
-        std::uint32_t total = static_cast<std::uint32_t>(total_elements);
-        std::uint32_t wg_x = (total + 255) / 256;
+        uint32_t total = static_cast<uint32_t>(total_elements);
+        uint32_t wg_x = (total + 255) / 256;
         output_gpu.reshape(1, wg_x);
 
         struct Constants
         {
-            std::uint32_t total_elements;
+            uint32_t total_elements;
             float epsilon;
         } c{total, epsilon};
 
@@ -1584,13 +1584,13 @@ public:
 
         auto &output_gpu = castToGpu(output);
 
-        std::uint32_t total = static_cast<std::uint32_t>(total_elements);
-        std::uint32_t wg_x = (total + 255) / 256;
+        uint32_t total = static_cast<uint32_t>(total_elements);
+        uint32_t wg_x = (total + 255) / 256;
         output_gpu.reshape(1, wg_x);
 
         struct Constants
         {
-            std::uint32_t total_elements;
+            uint32_t total_elements;
         } c{total};
 
         pushToGraph(Compute_Pipeline::MSE_LOSS, {effective_self->storage, effective_target->storage, output_gpu.storage}, c, wg_x, 1, 1);
@@ -1608,13 +1608,13 @@ public:
 
         auto &output_gpu = castToGpu(output);
 
-        std::uint32_t total = static_cast<std::uint32_t>(total_elements);
-        std::uint32_t wg_x = (total + 255) / 256;
+        uint32_t total = static_cast<uint32_t>(total_elements);
+        uint32_t wg_x = (total + 255) / 256;
         output_gpu.reshape(1, wg_x);
 
         struct Constants
         {
-            std::uint32_t total_elements;
+            uint32_t total_elements;
         } c{total};
 
         pushToGraph(Compute_Pipeline::MAE_LOSS, {effective_self->storage, effective_target->storage, output_gpu.storage}, c, wg_x, 1, 1);
@@ -1632,13 +1632,13 @@ public:
 
         auto &output_gpu = castToGpu(output);
 
-        std::uint32_t total = static_cast<std::uint32_t>(total_elements);
-        std::uint32_t wg_x = (total + 255) / 256;
+        uint32_t total = static_cast<uint32_t>(total_elements);
+        uint32_t wg_x = (total + 255) / 256;
         output_gpu.reshape(1, wg_x);
 
         struct Constants
         {
-            std::uint32_t total_elements;
+            uint32_t total_elements;
             float epsilon;
         } c{total, epsilon};
 
@@ -1657,13 +1657,13 @@ public:
 
         auto &output_gpu = castToGpu(output);
 
-        std::uint32_t total = static_cast<std::uint32_t>(total_elements);
-        std::uint32_t wg_x = (total + 255) / 256;
+        uint32_t total = static_cast<uint32_t>(total_elements);
+        uint32_t wg_x = (total + 255) / 256;
         output_gpu.reshape(1, wg_x);
 
         struct Constants
         {
-            std::uint32_t total_elements;
+            uint32_t total_elements;
             float delta;
         } c{total, delta};
 
@@ -1681,17 +1681,17 @@ public:
 
         auto &output_gpu = castToGpu(output);
 
-        std::uint32_t cols_a = static_cast<std::uint32_t>(getColumns());
-        std::uint32_t cols_b = static_cast<std::uint32_t>(effective_other->getColumns());
-        std::uint32_t tot_cols = cols_a + cols_b;
+        uint32_t cols_a = static_cast<uint32_t>(getColumns());
+        uint32_t cols_b = static_cast<uint32_t>(effective_other->getColumns());
+        uint32_t tot_cols = cols_a + cols_b;
         output_gpu.reshape(getRows(), tot_cols);
 
         struct Constants
         {
-            std::uint32_t rows;
-            std::uint32_t columns_a;
-            std::uint32_t columns_b;
-        } c{static_cast<std::uint32_t>(getRows()), cols_a, cols_b};
+            uint32_t rows;
+            uint32_t columns_a;
+            uint32_t columns_b;
+        } c{static_cast<uint32_t>(getRows()), cols_a, cols_b};
 
         pushToGraph(Compute_Pipeline::CONCATENATE_COLUMNS, {effective_self->storage, effective_other->storage, output_gpu.storage}, c,
                     (tot_cols + 15) / 16, (c.rows + 15) / 16);
@@ -1708,68 +1708,68 @@ public:
 
         auto &output_gpu = castToGpu(output);
 
-        std::uint32_t rows_a = static_cast<std::uint32_t>(getRows());
-        std::uint32_t rows_b = static_cast<std::uint32_t>(effective_other->getRows());
-        std::uint32_t tot_rows = rows_a + rows_b;
+        uint32_t rows_a = static_cast<uint32_t>(getRows());
+        uint32_t rows_b = static_cast<uint32_t>(effective_other->getRows());
+        uint32_t tot_rows = rows_a + rows_b;
         output_gpu.reshape(tot_rows, getColumns());
 
         struct Constants
         {
-            std::uint32_t rows_a;
-            std::uint32_t rows_b;
-            std::uint32_t columns;
-        } c{rows_a, rows_b, static_cast<std::uint32_t>(getColumns())};
+            uint32_t rows_a;
+            uint32_t rows_b;
+            uint32_t columns;
+        } c{rows_a, rows_b, static_cast<uint32_t>(getColumns())};
 
         pushToGraph(Compute_Pipeline::CONCATENATE_ROWS, {effective_self->storage, effective_other->storage, output_gpu.storage}, c,
                     (c.columns + 15) / 16, (tot_rows + 15) / 16);
     }
 
-    void splitCollumns(std::size_t split_index, Tensor_Impl &result_left, Tensor_Impl &result_right) const override
+    void splitCollumns(size_t split_index, Tensor_Impl &result_left, Tensor_Impl &result_right) const override
     {
         auto contig_self = ensureContiguousSelf();
         const auto *effective_self = contig_self ? contig_self.get() : this;
 
         auto &left_gpu = castToGpu(result_left);
         auto &right_gpu = castToGpu(result_right);
-        std::uint32_t cols_left = static_cast<std::uint32_t>(split_index);
-        std::uint32_t cols_right = static_cast<std::uint32_t>(getColumns() - split_index);
+        uint32_t cols_left = static_cast<uint32_t>(split_index);
+        uint32_t cols_right = static_cast<uint32_t>(getColumns() - split_index);
 
         left_gpu.reshape(getRows(), cols_left);
         right_gpu.reshape(getRows(), cols_right);
 
         struct Constants
         {
-            std::uint32_t rows;
-            std::uint32_t columns_left;
-            std::uint32_t columns_right;
-        } c{static_cast<std::uint32_t>(getRows()), cols_left, cols_right};
+            uint32_t rows;
+            uint32_t columns_left;
+            uint32_t columns_right;
+        } c{static_cast<uint32_t>(getRows()), cols_left, cols_right};
 
         pushToGraph(Compute_Pipeline::SPLIT_COLUMNS, {effective_self->storage, left_gpu.storage, right_gpu.storage}, c,
-                    (static_cast<std::uint32_t>(getColumns()) + 15) / 16, (c.rows + 15) / 16);
+                    (static_cast<uint32_t>(getColumns()) + 15) / 16, (c.rows + 15) / 16);
     }
 
-    void splitRows(std::size_t split_index, Tensor_Impl &result_up, Tensor_Impl &result_down) const override
+    void splitRows(size_t split_index, Tensor_Impl &result_up, Tensor_Impl &result_down) const override
     {
         auto contig_self = ensureContiguousSelf();
         const auto *effective_self = contig_self ? contig_self.get() : this;
 
         auto &up_gpu = castToGpu(result_up);
         auto &down_gpu = castToGpu(result_down);
-        std::uint32_t rows_up = static_cast<std::uint32_t>(split_index);
-        std::uint32_t rows_down = static_cast<std::uint32_t>(getRows() - split_index);
+        uint32_t rows_up = static_cast<uint32_t>(split_index);
+        uint32_t rows_down = static_cast<uint32_t>(getRows() - split_index);
 
         up_gpu.reshape(rows_up, getColumns());
         down_gpu.reshape(rows_down, getColumns());
 
         struct Constants
         {
-            std::uint32_t rows_up;
-            std::uint32_t rows_down;
-            std::uint32_t columns;
-        } c{rows_up, rows_down, static_cast<std::uint32_t>(getColumns())};
+            uint32_t rows_up;
+            uint32_t rows_down;
+            uint32_t columns;
+        } c{rows_up, rows_down, static_cast<uint32_t>(getColumns())};
 
         pushToGraph(Compute_Pipeline::SPLIT_ROWS, {effective_self->storage, up_gpu.storage, down_gpu.storage}, c,
-                    (c.columns + 15) / 16, (static_cast<std::uint32_t>(getRows()) + 15) / 16);
+                    (c.columns + 15) / 16, (static_cast<uint32_t>(getRows()) + 15) / 16);
     }
 
     const std::vector<float> &getData() const noexcept override

@@ -16,9 +16,9 @@
 class Global_Avg_Pool_2d_Layer : public ILayer
 {
 private:
-    std::uint32_t input_height = 0;
-    std::uint32_t input_width = 0;
-    std::uint32_t channels = 0;
+    uint32_t input_height = 0;
+    uint32_t input_width = 0;
+    uint32_t channels = 0;
 
     Tensor input_tensor;
     Tensor output_tensor;
@@ -29,9 +29,9 @@ private:
 
 public:
     using ILayer::forward;
-    Global_Avg_Pool_2d_Layer(std::uint32_t _height,
-                             std::uint32_t _width,
-                             std::uint32_t _channels,
+    Global_Avg_Pool_2d_Layer(uint32_t _height,
+                             uint32_t _width,
+                             uint32_t _channels,
                              Execution_Target _execution_target = Execution_Target::CPU)
         : input_height(_height),
           input_width(_width),
@@ -134,22 +134,22 @@ public:
     void saveCheckpoint(std::ofstream &_output_file_stream) const override {}
     void loadCheckpoint(std::ifstream &_input_file_stream) override {}
 
-    std::function<float(std::mt19937&)> getPopulationParameterInitializer(std::size_t param_index) const override { return [](std::mt19937&) { return 0.0f; }; }
+    std::function<float(std::mt19937&)> getPopulationParameterInitializer(size_t param_index) const override { return [](std::mt19937&) { return 0.0f; }; }
     std::vector<Shape> getPopulationParameterDims() const override { return {}; }
     std::vector<bool> getPopulationParameterIsEvolvable() const override { return {}; }
     const Tensor &getInputGradient() const noexcept { return input_gradient_tensor; }
     const Tensor &getInput() const override { return input_tensor; }
     const Tensor &getOutput() const override { return output_tensor; }
     Execution_Target getExecutionTarget() const override { return execution_target; }
-    std::uint32_t getInputHeight() const noexcept { return input_height; }
-    std::uint32_t getInputWidth() const noexcept { return input_width; }
+    uint32_t getInputHeight() const noexcept { return input_height; }
+    uint32_t getInputWidth() const noexcept { return input_width; }
     Layer_Type getLayerType() const noexcept override { return Layer_Type::GLOBAL_AVG_POOL_2D; }
-    std::uint32_t getChannels() const noexcept { return channels; }
+    uint32_t getChannels() const noexcept { return channels; }
     bool supportsPopulationBatch() const override { return true; }
     bool isForwardCompleted() const noexcept { return is_forward_completed; }
     bool hasParameters() const noexcept override { return false; }
 
-    void setPopulationParameter(std::size_t param_index, std::vector<float> flat_data) override
+    void setPopulationParameter(size_t param_index, std::vector<float> flat_data) override
     {
         throw std::out_of_range("Global_Avg_Pool_2d_Layer::setPopulationParameter: Layer has no parameters");
     }
@@ -170,9 +170,9 @@ public:
         output_tensor.setExecutionTarget(_new_execution_target);
         input_gradient_tensor.setExecutionTarget(_new_execution_target);
     }
-    void setInputHeight(std::uint32_t _height) noexcept { input_height = _height; }
-    void setInputWidth(std::uint32_t _width) noexcept { input_width = _width; }
-    void setChannels(std::uint32_t _channels) noexcept { channels = _channels; }
+    void setInputHeight(uint32_t _height) noexcept { input_height = _height; }
+    void setInputWidth(uint32_t _width) noexcept { input_width = _width; }
+    void setChannels(uint32_t _channels) noexcept { channels = _channels; }
     void setIsForwardCompleted(bool _is_completed) noexcept { is_forward_completed = _is_completed; }
 };
 

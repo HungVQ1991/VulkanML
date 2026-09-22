@@ -27,32 +27,32 @@ extern bool is_coop;
 
 struct Buffer_Binding_Mapping
 {
-    std::uint32_t raw_node_index = 0;
-    std::uint32_t raw_buffer_index = 0;
-    std::uint32_t fused_buffer_index = 0;
+    uint32_t raw_node_index = 0;
+    uint32_t raw_buffer_index = 0;
+    uint32_t fused_buffer_index = 0;
 
-    std::uint32_t getFusedBufferIndex() const noexcept { return fused_buffer_index; }
-    std::uint32_t getRawBufferIndex() const noexcept { return raw_buffer_index; }
-    std::uint32_t getRawNodeIndex() const noexcept { return raw_node_index; }
+    uint32_t getFusedBufferIndex() const noexcept { return fused_buffer_index; }
+    uint32_t getRawBufferIndex() const noexcept { return raw_buffer_index; }
+    uint32_t getRawNodeIndex() const noexcept { return raw_node_index; }
 
-    void setFusedBufferIndex(std::uint32_t _index) noexcept { fused_buffer_index = _index; }
-    void setRawBufferIndex(std::uint32_t _index) noexcept { raw_buffer_index = _index; }
-    void setRawNodeIndex(std::uint32_t _index) noexcept { raw_node_index = _index; }
+    void setFusedBufferIndex(uint32_t _index) noexcept { fused_buffer_index = _index; }
+    void setRawBufferIndex(uint32_t _index) noexcept { raw_buffer_index = _index; }
+    void setRawNodeIndex(uint32_t _index) noexcept { raw_node_index = _index; }
 };
 
 struct Push_Constant_Mapping
 {
-    std::uint32_t raw_node_index = 0;
-    std::uint32_t fused_push_constants_offset = 0;
-    std::uint32_t push_constants_size = 0;
+    uint32_t raw_node_index = 0;
+    uint32_t fused_push_constants_offset = 0;
+    uint32_t push_constants_size = 0;
 
-    std::uint32_t getFusedPushConstantsOffset() const noexcept { return fused_push_constants_offset; }
-    std::uint32_t getPushConstantsSize() const noexcept { return push_constants_size; }
-    std::uint32_t getRawNodeIndex() const noexcept { return raw_node_index; }
+    uint32_t getFusedPushConstantsOffset() const noexcept { return fused_push_constants_offset; }
+    uint32_t getPushConstantsSize() const noexcept { return push_constants_size; }
+    uint32_t getRawNodeIndex() const noexcept { return raw_node_index; }
 
-    void setFusedPushConstantsOffset(std::uint32_t _offset) noexcept { fused_push_constants_offset = _offset; }
-    void setPushConstantsSize(std::uint32_t _size) noexcept { push_constants_size = _size; }
-    void setRawNodeIndex(std::uint32_t _index) noexcept { raw_node_index = _index; }
+    void setFusedPushConstantsOffset(uint32_t _offset) noexcept { fused_push_constants_offset = _offset; }
+    void setPushConstantsSize(uint32_t _size) noexcept { push_constants_size = _size; }
+    void setRawNodeIndex(uint32_t _index) noexcept { raw_node_index = _index; }
 };
 
 struct Cached_Graph_Template
@@ -60,9 +60,9 @@ struct Cached_Graph_Template
     std::vector<Compute_Node> fused_nodes;
     std::vector<std::vector<Buffer_Binding_Mapping>> buffer_mappings;
     std::vector<std::vector<Push_Constant_Mapping>> push_constants_mappings;
-    std::vector<std::vector<std::uint32_t>> raw_node_indices;
+    std::vector<std::vector<uint32_t>> raw_node_indices;
     mutable std::array<Compute_Graph, MAX_FRAMES_IN_FLIGHT> instantiated_graphs;
-    std::size_t total_buffer_mappings = 0;
+    size_t total_buffer_mappings = 0;
     mutable bool is_mapping_log_enabled = true;
     bool is_valid = false;
 
@@ -85,18 +85,18 @@ struct Cached_Graph_Template
     const std::vector<std::vector<Buffer_Binding_Mapping>> &getBufferMappings() const noexcept { return buffer_mappings; }
     const std::array<Compute_Graph, MAX_FRAMES_IN_FLIGHT> &getInstantiatedGraphs() const noexcept { return instantiated_graphs; }
     std::array<Compute_Graph, MAX_FRAMES_IN_FLIGHT> &getInstantiatedGraphs() noexcept { return instantiated_graphs; }
-    const std::vector<std::vector<std::uint32_t>> &getRawNodeIndices() const noexcept { return raw_node_indices; }
+    const std::vector<std::vector<uint32_t>> &getRawNodeIndices() const noexcept { return raw_node_indices; }
     const std::vector<Compute_Node> &getFusedNodes() const noexcept { return fused_nodes; }
-    std::size_t getTotalBufferMappings() const noexcept { return total_buffer_mappings; }
+    size_t getTotalBufferMappings() const noexcept { return total_buffer_mappings; }
     bool isMappingLogEnabled() const noexcept { return is_mapping_log_enabled; }
     bool isValid() const noexcept { return is_valid; }
 
     void setInstantiatedGraphs(const std::array<Compute_Graph, MAX_FRAMES_IN_FLIGHT> &_graphs) { instantiated_graphs = _graphs; }
     void setPushConstantsMappings(const std::vector<std::vector<Push_Constant_Mapping>> &_mappings) { push_constants_mappings = _mappings; }
     void setBufferMappings(const std::vector<std::vector<Buffer_Binding_Mapping>> &_mappings) { buffer_mappings = _mappings; }
-    void setRawNodeIndices(const std::vector<std::vector<std::uint32_t>> &_indices) { raw_node_indices = _indices; }
+    void setRawNodeIndices(const std::vector<std::vector<uint32_t>> &_indices) { raw_node_indices = _indices; }
     void setFusedNodes(const std::vector<Compute_Node> &_nodes) { fused_nodes = _nodes; }
-    void setTotalBufferMappings(std::size_t _total) noexcept { total_buffer_mappings = _total; }
+    void setTotalBufferMappings(size_t _total) noexcept { total_buffer_mappings = _total; }
     void setMappingLogEnabled(bool _enabled) noexcept { is_mapping_log_enabled = _enabled; }
     void setValid(bool _valid) noexcept { is_valid = _valid; }
 };
@@ -104,13 +104,13 @@ struct Cached_Graph_Template
 class Graph_Optimizer
 {
 private:
-    static constexpr std::size_t MAX_PUSH_CONSTANTS_BYTES = 128;
-    static constexpr std::size_t MAX_STORAGE_BUFFER_BINDINGS = 32;
-    static constexpr std::size_t MAX_FUSED_OPERATIONS = 8;
+    static constexpr size_t MAX_PUSH_CONSTANTS_BYTES = 128;
+    static constexpr size_t MAX_STORAGE_BUFFER_BINDINGS = 32;
+    static constexpr size_t MAX_FUSED_OPERATIONS = 8;
 
-    static constexpr std::size_t alignTo4Bytes(std::size_t _offset) noexcept
+    static constexpr size_t alignTo4Bytes(size_t _offset) noexcept
     {
-        return (_offset + 3) & ~std::size_t(3);
+        return (_offset + 3) & ~size_t(3);
     }
 
     static void getNodeBufferAccess(
@@ -126,7 +126,7 @@ private:
         {
             for (const auto &op : _node.fused_operations)
             {
-                for (std::uint32_t in_idx : op.input_buffer_indices)
+                for (uint32_t in_idx : op.input_buffer_indices)
                 {
                     if (in_idx < _node.buffers.size() && _node.buffers[in_idx])
                     {
@@ -137,7 +137,7 @@ private:
                         }
                     }
                 }
-                for (std::uint32_t out_idx : op.output_buffer_indices)
+                for (uint32_t out_idx : op.output_buffer_indices)
                 {
                     if (out_idx < _node.buffers.size() && _node.buffers[out_idx])
                     {
@@ -154,7 +154,7 @@ private:
 
         const auto &metadata = _shader_dictionary.getMetadata(_node.pipeline_id);
 
-        for (std::uint32_t i = 0; i < metadata.input_count && i < _node.buffers.size(); ++i)
+        for (uint32_t i = 0; i < metadata.input_count && i < _node.buffers.size(); ++i)
         {
             if (_node.buffers[i] && _node.buffers[i]->getBuffer() != VK_NULL_HANDLE)
             {
@@ -162,7 +162,7 @@ private:
             }
         }
 
-        for (std::uint32_t i = metadata.input_count;
+        for (uint32_t i = metadata.input_count;
              i < metadata.input_count + metadata.output_count && i < _node.buffers.size();
              ++i)
         {
@@ -215,7 +215,7 @@ private:
         std::vector<VkBuffer> current_reads;
         std::vector<VkBuffer> current_writes;
 
-        for (std::size_t i = 0; i < _nodes.size(); ++i)
+        for (size_t i = 0; i < _nodes.size(); ++i)
         {
             getNodeBufferAccess(_nodes[i], shader_dictionary, current_reads, current_writes);
 
@@ -282,7 +282,7 @@ private:
             return false;
         }
 
-        std::uint32_t consumer_shared_memory = is_coop ? consumer_metadata.cooperative_shared_memory_size : consumer_metadata.shared_memory_size;
+        uint32_t consumer_shared_memory = is_coop ? consumer_metadata.cooperative_shared_memory_size : consumer_metadata.shared_memory_size;
         if (consumer_metadata.is_writing_multiple_elements || consumer_shared_memory > 0)
         {
             return false;
@@ -324,17 +324,17 @@ private:
         {
             if (_producer_class == Operation_Class::MATRIX_2D)
             {
-                std::uint64_t total_threads_producer = static_cast<std::uint64_t>(_producer_node.workgroup_count_x) * (is_coop ? 32 : 16) *
-                                                       static_cast<std::uint64_t>(_producer_node.workgroup_count_y) * (is_coop ? 1 : 16);
-                std::uint64_t total_threads_consumer = static_cast<std::uint64_t>(_consumer_node.workgroup_count_x) * 256;
+                uint64_t total_threads_producer = static_cast<uint64_t>(_producer_node.workgroup_count_x) * (is_coop ? 32 : 16) *
+                                                       static_cast<uint64_t>(_producer_node.workgroup_count_y) * (is_coop ? 1 : 16);
+                uint64_t total_threads_consumer = static_cast<uint64_t>(_consumer_node.workgroup_count_x) * 256;
                 return (total_threads_producer >= total_threads_consumer);
             }
             if (_producer_class == Operation_Class::TENSOR_3D)
             {
-                std::uint64_t total_threads_producer = static_cast<std::uint64_t>(_producer_node.workgroup_count_x) * 16 *
-                                                       static_cast<std::uint64_t>(_producer_node.workgroup_count_y) * 16 *
-                                                       static_cast<std::uint64_t>(_producer_node.workgroup_count_z);
-                std::uint64_t total_threads_consumer = static_cast<std::uint64_t>(_consumer_node.workgroup_count_x) * 256;
+                uint64_t total_threads_producer = static_cast<uint64_t>(_producer_node.workgroup_count_x) * 16 *
+                                                       static_cast<uint64_t>(_producer_node.workgroup_count_y) * 16 *
+                                                       static_cast<uint64_t>(_producer_node.workgroup_count_z);
+                uint64_t total_threads_consumer = static_cast<uint64_t>(_consumer_node.workgroup_count_x) * 256;
                 return (total_threads_producer >= total_threads_consumer);
             }
         }
@@ -342,9 +342,9 @@ private:
         return false;
     }
 
-    static std::uint32_t findOrAddBuffer(Compute_Node &_node, const std::shared_ptr<gpu::vector> &_target_buffer)
+    static uint32_t findOrAddBuffer(Compute_Node &_node, const std::shared_ptr<gpu::vector> &_target_buffer)
     {
-        for (std::uint32_t index = 0; index < _node.buffers.size(); ++index)
+        for (uint32_t index = 0; index < _node.buffers.size(); ++index)
         {
             const auto &existing_buffer = _node.buffers[index];
             if (_target_buffer && existing_buffer &&
@@ -356,7 +356,7 @@ private:
             }
         }
         _node.buffers.push_back(_target_buffer);
-        return static_cast<std::uint32_t>(_node.buffers.size() - 1);
+        return static_cast<uint32_t>(_node.buffers.size() - 1);
     }
 
     static void updateDispatchGrid(
@@ -367,7 +367,7 @@ private:
     {
         const auto &shader_dictionary = Shader_Dictionary::getInstance();
         const auto &next_metadata = shader_dictionary.getMetadata(_next_node.pipeline_id);
-        std::uint32_t next_shared_memory = is_coop ? next_metadata.cooperative_shared_memory_size : next_metadata.shared_memory_size;
+        uint32_t next_shared_memory = is_coop ? next_metadata.cooperative_shared_memory_size : next_metadata.shared_memory_size;
 
         if (next_shared_memory > 0 || _consumer_class == Operation_Class::STANDALONE || (is_coop && next_metadata.is_cooperative_matrix_support))
         {
@@ -392,24 +392,24 @@ private:
     static Fused_Operation buildFusedOperation(
         Compute_Node &_fused_node,
         const Compute_Node &_source_node,
-        std::uint32_t _push_constants_offset,
+        uint32_t _push_constants_offset,
         const Snippet_Metadata &_metadata,
-        std::uint32_t _raw_node_index = 0,
+        uint32_t _raw_node_index = 0,
         std::vector<Buffer_Binding_Mapping> *_output_buffer_mappings = nullptr)
     {
         Fused_Operation operation{
             .pipeline_id = _source_node.pipeline_id,
             .push_constants_offset = _push_constants_offset,
-            .push_constants_size = static_cast<std::uint32_t>(_source_node.push_constants_data.size()),
+            .push_constants_size = static_cast<uint32_t>(_source_node.push_constants_data.size()),
             .input_buffer_indices = {},
             .output_buffer_indices = {},
             .workgroup_count_x = _source_node.workgroup_count_x,
             .workgroup_count_y = _source_node.workgroup_count_y,
             .workgroup_count_z = _source_node.workgroup_count_z};
 
-        for (std::uint32_t buffer_index = 0; buffer_index < _metadata.input_count && buffer_index < _source_node.buffers.size(); ++buffer_index)
+        for (uint32_t buffer_index = 0; buffer_index < _metadata.input_count && buffer_index < _source_node.buffers.size(); ++buffer_index)
         {
-            std::uint32_t fused_buffer_index = findOrAddBuffer(_fused_node, _source_node.buffers[buffer_index]);
+            uint32_t fused_buffer_index = findOrAddBuffer(_fused_node, _source_node.buffers[buffer_index]);
             operation.input_buffer_indices.push_back(fused_buffer_index);
             if (_output_buffer_mappings)
             {
@@ -420,11 +420,11 @@ private:
             }
         }
 
-        for (std::uint32_t buffer_index = _metadata.input_count;
+        for (uint32_t buffer_index = _metadata.input_count;
              buffer_index < _metadata.input_count + _metadata.output_count && buffer_index < _source_node.buffers.size();
              ++buffer_index)
         {
-            std::uint32_t fused_buffer_index = findOrAddBuffer(_fused_node, _source_node.buffers[buffer_index]);
+            uint32_t fused_buffer_index = findOrAddBuffer(_fused_node, _source_node.buffers[buffer_index]);
             operation.output_buffer_indices.push_back(fused_buffer_index);
             if (_output_buffer_mappings)
             {
@@ -451,7 +451,7 @@ private:
         const Snippet_Metadata &next_metadata = _shader_dictionary.getMetadata(_next_node.pipeline_id);
 
         std::vector<std::shared_ptr<gpu::vector>> next_output_buffers;
-        for (std::uint32_t i = next_metadata.input_count;
+        for (uint32_t i = next_metadata.input_count;
              i < next_metadata.input_count + next_metadata.output_count && i < _next_node.buffers.size();
              ++i)
         {
@@ -465,7 +465,7 @@ private:
         {
             for (const auto &fused_operation : _fused_node.fused_operations)
             {
-                for (std::uint32_t input_index : fused_operation.input_buffer_indices)
+                for (uint32_t input_index : fused_operation.input_buffer_indices)
                 {
                     if (input_index < _fused_node.buffers.size())
                     {
@@ -484,10 +484,10 @@ private:
 
         for (const auto &output_buffer : next_output_buffers)
         {
-            for (std::size_t operation_index = 0; operation_index < _fused_node.fused_operations.size() - 1; ++operation_index)
+            for (size_t operation_index = 0; operation_index < _fused_node.fused_operations.size() - 1; ++operation_index)
             {
                 const auto &fused_operation = _fused_node.fused_operations[operation_index];
-                for (std::uint32_t output_index : fused_operation.output_buffer_indices)
+                for (uint32_t output_index : fused_operation.output_buffer_indices)
                 {
                     if (output_index < _fused_node.buffers.size())
                     {
@@ -510,12 +510,12 @@ private:
     static void markExternalOutputs(
         Compute_Node &_fused_node,
         const std::vector<Compute_Node> &_nodes,
-        std::size_t _next_raw_node_index)
+        size_t _next_raw_node_index)
     {
-        std::unordered_set<std::uint32_t> all_output_indices;
+        std::unordered_set<uint32_t> all_output_indices;
         for (const auto &operation : _fused_node.fused_operations)
         {
-            for (std::uint32_t output_index : operation.output_buffer_indices)
+            for (uint32_t output_index : operation.output_buffer_indices)
             {
                 all_output_indices.insert(output_index);
             }
@@ -523,7 +523,7 @@ private:
 
         if (!_fused_node.fused_operations.empty())
         {
-            for (std::uint32_t output_index : _fused_node.fused_operations.back().output_buffer_indices)
+            for (uint32_t output_index : _fused_node.fused_operations.back().output_buffer_indices)
             {
                 _fused_node.external_output_indices.insert(output_index);
             }
@@ -531,14 +531,14 @@ private:
 
         if (_next_raw_node_index >= _nodes.size())
         {
-            for (std::uint32_t output_buffer_index : all_output_indices)
+            for (uint32_t output_buffer_index : all_output_indices)
             {
                 _fused_node.external_output_indices.insert(output_buffer_index);
             }
             return;
         }
 
-        for (std::uint32_t output_buffer_index : all_output_indices)
+        for (uint32_t output_buffer_index : all_output_indices)
         {
             if (output_buffer_index >= _fused_node.buffers.size())
             {
@@ -551,7 +551,7 @@ private:
                 continue;
             }
 
-            for (std::size_t j = _next_raw_node_index; j < _nodes.size(); ++j)
+            for (size_t j = _next_raw_node_index; j < _nodes.size(); ++j)
             {
                 for (const auto &future_buffer : _nodes[j].buffers)
                 {
@@ -587,7 +587,7 @@ private:
 
         std::vector<Buffer_Binding_Mapping> current_buffer_mappings;
         std::vector<Push_Constant_Mapping> current_push_constants_mappings;
-        std::vector<std::uint32_t> current_raw_node_indices;
+        std::vector<uint32_t> current_raw_node_indices;
 
         const Snippet_Metadata &first_metadata = shader_dictionary.getMetadata(_original_nodes[0].pipeline_id);
         current_fused_node.fused_operations.push_back(
@@ -598,11 +598,11 @@ private:
             current_push_constants_mappings.push_back(Push_Constant_Mapping{
                 .raw_node_index = 0,
                 .fused_push_constants_offset = 0,
-                .push_constants_size = static_cast<std::uint32_t>(_original_nodes[0].push_constants_data.size())});
+                .push_constants_size = static_cast<uint32_t>(_original_nodes[0].push_constants_data.size())});
             current_raw_node_indices.push_back(0);
         }
 
-        for (std::size_t i = 1; i < _original_nodes.size(); ++i)
+        for (size_t i = 1; i < _original_nodes.size(); ++i)
         {
             const Compute_Node &next_node = _original_nodes[i];
 
@@ -654,12 +654,12 @@ private:
                 }
             }
 
-            std::size_t current_push_constants_bytes = current_fused_node.push_constants_data.size();
-            std::size_t aligned_push_constants_offset = alignTo4Bytes(current_push_constants_bytes);
-            std::size_t total_push_constants_size = aligned_push_constants_offset + next_node.push_constants_data.size();
+            size_t current_push_constants_bytes = current_fused_node.push_constants_data.size();
+            size_t aligned_push_constants_offset = alignTo4Bytes(current_push_constants_bytes);
+            size_t total_push_constants_size = aligned_push_constants_offset + next_node.push_constants_data.size();
 
             bool does_push_constants_fit = (total_push_constants_size <= MAX_PUSH_CONSTANTS_BYTES);
-            std::size_t total_bindings = current_fused_node.buffers.size() + unique_buffers.size();
+            size_t total_bindings = current_fused_node.buffers.size() + unique_buffers.size();
             bool do_bindings_fit = (total_bindings <= MAX_STORAGE_BUFFER_BINDINGS);
             bool does_chain_fit = (current_fused_node.fused_operations.size() < MAX_FUSED_OPERATIONS);
 
@@ -677,7 +677,7 @@ private:
             if (is_sharing_buffer && does_push_constants_fit && do_bindings_fit && does_chain_fit &&
                 is_fusible_operation && are_dimensions_matching && !has_aliasing_hazard)
             {
-                std::size_t padding_bytes = aligned_push_constants_offset - current_push_constants_bytes;
+                size_t padding_bytes = aligned_push_constants_offset - current_push_constants_bytes;
                 if (padding_bytes > 0)
                 {
                     current_fused_node.push_constants_data.insert(
@@ -686,19 +686,19 @@ private:
                         0);
                 }
 
-                std::uint32_t current_push_constants_offset_val = static_cast<std::uint32_t>(aligned_push_constants_offset);
+                uint32_t current_push_constants_offset_val = static_cast<uint32_t>(aligned_push_constants_offset);
                 const Snippet_Metadata &next_metadata = shader_dictionary.getMetadata(next_node.pipeline_id);
 
                 current_fused_node.fused_operations.push_back(
-                    buildFusedOperation(current_fused_node, next_node, current_push_constants_offset_val, next_metadata, static_cast<std::uint32_t>(i), _is_tracking_mappings ? &current_buffer_mappings : nullptr));
+                    buildFusedOperation(current_fused_node, next_node, current_push_constants_offset_val, next_metadata, static_cast<uint32_t>(i), _is_tracking_mappings ? &current_buffer_mappings : nullptr));
 
                 if (_is_tracking_mappings)
                 {
                     current_push_constants_mappings.push_back(Push_Constant_Mapping{
-                        .raw_node_index = static_cast<std::uint32_t>(i),
+                        .raw_node_index = static_cast<uint32_t>(i),
                         .fused_push_constants_offset = current_push_constants_offset_val,
-                        .push_constants_size = static_cast<std::uint32_t>(next_node.push_constants_data.size())});
-                    current_raw_node_indices.push_back(static_cast<std::uint32_t>(i));
+                        .push_constants_size = static_cast<uint32_t>(next_node.push_constants_data.size())});
+                    current_raw_node_indices.push_back(static_cast<uint32_t>(i));
                 }
 
                 current_fused_node.push_constants_data.insert(
@@ -734,15 +734,15 @@ private:
 
                 const Snippet_Metadata &metadata = shader_dictionary.getMetadata(next_node.pipeline_id);
                 current_fused_node.fused_operations.push_back(
-                    buildFusedOperation(current_fused_node, next_node, 0, metadata, static_cast<std::uint32_t>(i), _is_tracking_mappings ? &current_buffer_mappings : nullptr));
+                    buildFusedOperation(current_fused_node, next_node, 0, metadata, static_cast<uint32_t>(i), _is_tracking_mappings ? &current_buffer_mappings : nullptr));
 
                 if (_is_tracking_mappings)
                 {
                     current_push_constants_mappings.push_back(Push_Constant_Mapping{
-                        .raw_node_index = static_cast<std::uint32_t>(i),
+                        .raw_node_index = static_cast<uint32_t>(i),
                         .fused_push_constants_offset = 0,
-                        .push_constants_size = static_cast<std::uint32_t>(next_node.push_constants_data.size())});
-                    current_raw_node_indices.push_back(static_cast<std::uint32_t>(i));
+                        .push_constants_size = static_cast<uint32_t>(next_node.push_constants_data.size())});
+                    current_raw_node_indices.push_back(static_cast<uint32_t>(i));
                 }
             }
         }
@@ -834,7 +834,7 @@ public:
         bool needs_init = (_cached_graph.getNodeCount() != _graph_template.fused_nodes.size());
         if (!needs_init)
         {
-            for (std::size_t i = 0; i < _graph_template.fused_nodes.size(); ++i)
+            for (size_t i = 0; i < _graph_template.fused_nodes.size(); ++i)
             {
                 if (_cached_graph.getNodes()[i].pipeline_id != _graph_template.fused_nodes[i].pipeline_id ||
                     _cached_graph.getNodes()[i].is_fused != _graph_template.fused_nodes[i].is_fused ||
@@ -855,7 +855,7 @@ public:
         const Shader_Dictionary &shader_dictionary = Shader_Dictionary::getInstance();
         auto &cached_nodes = _cached_graph.getNodes();
 
-        for (std::size_t node_index = 0; node_index < _graph_template.fused_nodes.size(); ++node_index)
+        for (size_t node_index = 0; node_index < _graph_template.fused_nodes.size(); ++node_index)
         {
             Compute_Node &node = cached_nodes[node_index];
 
@@ -893,7 +893,7 @@ public:
                 if (push_constant_mapping.raw_node_index < raw_nodes.size())
                 {
                     const auto &source_push_constants = raw_nodes[push_constant_mapping.raw_node_index].push_constants_data;
-                    std::size_t copy_bytes = std::min<std::size_t>(source_push_constants.size(), push_constant_mapping.push_constants_size);
+                    size_t copy_bytes = std::min<size_t>(source_push_constants.size(), push_constant_mapping.push_constants_size);
                     if (push_constant_mapping.fused_push_constants_offset + copy_bytes <= node.push_constants_data.size())
                     {
                         std::copy_n(source_push_constants.begin(), copy_bytes, node.push_constants_data.begin() + push_constant_mapping.fused_push_constants_offset);
@@ -906,7 +906,7 @@ public:
                 const auto &mapped_raw_indices = _graph_template.raw_node_indices[node_index];
                 if (!mapped_raw_indices.empty())
                 {
-                    std::uint32_t first_raw_index = mapped_raw_indices[0];
+                    uint32_t first_raw_index = mapped_raw_indices[0];
                     node.workgroup_count_x = raw_nodes[first_raw_index].workgroup_count_x;
                     node.workgroup_count_y = raw_nodes[first_raw_index].workgroup_count_y;
                     node.workgroup_count_z = raw_nodes[first_raw_index].workgroup_count_z;
@@ -920,9 +920,9 @@ public:
 
                     Operation_Class producer_class = shader_dictionary.getMetadata(node.fused_operations[0].pipeline_id).operation_class;
 
-                    for (std::size_t k = 1; k < mapped_raw_indices.size(); ++k)
+                    for (size_t k = 1; k < mapped_raw_indices.size(); ++k)
                     {
-                        std::uint32_t next_raw_index = mapped_raw_indices[k];
+                        uint32_t next_raw_index = mapped_raw_indices[k];
                         Operation_Class consumer_class = shader_dictionary.getMetadata(raw_nodes[next_raw_index].pipeline_id).operation_class;
 
                         if (k < node.fused_operations.size())
@@ -948,7 +948,7 @@ public:
         applyCachedTemplateInPlace(_raw_graph, _graph_template, _output_graph);
     }
 
-    static constexpr std::size_t getMaxPushConstantsBytes() noexcept { return MAX_PUSH_CONSTANTS_BYTES; }
-    static constexpr std::size_t getMaxStorageBufferBindings() noexcept { return MAX_STORAGE_BUFFER_BINDINGS; }
-    static constexpr std::size_t getMaxFusedOperations() noexcept { return MAX_FUSED_OPERATIONS; }
+    static constexpr size_t getMaxPushConstantsBytes() noexcept { return MAX_PUSH_CONSTANTS_BYTES; }
+    static constexpr size_t getMaxStorageBufferBindings() noexcept { return MAX_STORAGE_BUFFER_BINDINGS; }
+    static constexpr size_t getMaxFusedOperations() noexcept { return MAX_FUSED_OPERATIONS; }
 };

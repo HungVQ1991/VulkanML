@@ -19,7 +19,7 @@
 
 extern bool is_coop;
 
-constexpr std::uint32_t DESCRIPTOR_BINDINGS_COUNT = 32;
+constexpr uint32_t DESCRIPTOR_BINDINGS_COUNT = 32;
 
 enum Compute_Pipeline
 {
@@ -134,7 +134,7 @@ private:
             throw std::runtime_error("Failed to open SPIR-V file: " + _file_path);
         }
 
-        std::size_t file_size = static_cast<std::size_t>(file_stream.tellg());
+        size_t file_size = static_cast<size_t>(file_stream.tellg());
         std::vector<char> buffer_data(file_size);
         file_stream.seekg(0);
         file_stream.read(buffer_data.data(), static_cast<std::streamsize>(file_size));
@@ -156,7 +156,7 @@ private:
             .pNext = nullptr,
             .flags = 0,
             .codeSize = _code_buffer.size(),
-            .pCode = reinterpret_cast<const std::uint32_t *>(_code_buffer.data())};
+            .pCode = reinterpret_cast<const uint32_t *>(_code_buffer.data())};
 
         VkShaderModule shader_module = VK_NULL_HANDLE;
         if (vkCreateShaderModule(device, &create_information, nullptr, &shader_module) != VK_SUCCESS)
@@ -239,7 +239,7 @@ private:
                            0,
                            Log_Feature::SHADER_GENERATION);
 
-        for (std::size_t i = 0; i < pipelines.size(); ++i)
+        for (size_t i = 0; i < pipelines.size(); ++i)
         {
             auto pipeline_enum_value = magic_enum::enum_cast<Compute_Pipeline>(i);
             if (!pipeline_enum_value.has_value())
@@ -357,7 +357,7 @@ public:
         } guard{this};
 
         VkDescriptorSetLayoutBinding layout_bindings[DESCRIPTOR_BINDINGS_COUNT]{};
-        for (std::uint32_t i = 0; i < DESCRIPTOR_BINDINGS_COUNT; ++i)
+        for (uint32_t i = 0; i < DESCRIPTOR_BINDINGS_COUNT; ++i)
         {
             layout_bindings[i] = VkDescriptorSetLayoutBinding{
                 .binding = i,
@@ -422,7 +422,7 @@ public:
     const std::string &getPipelineFolder() const noexcept { return pipeline_folder; }
     VkPipeline getPipeline(Compute_Pipeline _pipeline) const
     {
-        std::size_t pipeline_index = static_cast<std::size_t>(_pipeline);
+        size_t pipeline_index = static_cast<size_t>(_pipeline);
         if (pipeline_index >= pipelines.size())
         {
             Logger::logMessage(Input_Format{"Vulkan_Network::getPipeline: Pipeline index out of bounds ({})", pipeline_index},
@@ -439,7 +439,7 @@ public:
     VkDevice getDevice() const noexcept { return device; }
     bool hasPipeline(Compute_Pipeline _pipeline) const noexcept
     {
-        std::size_t pipeline_index = static_cast<std::size_t>(_pipeline);
+        size_t pipeline_index = static_cast<size_t>(_pipeline);
         return pipeline_index < pipelines.size() && pipelines[pipeline_index] != VK_NULL_HANDLE;
     }
 

@@ -48,7 +48,7 @@ bool verifyMatrix(const Matrix& mat, const std::vector<float>& expected_data, fl
     {
         return false;
     }
-    for (std::size_t i = 0; i < actual_data.size(); ++i)
+    for (size_t i = 0; i < actual_data.size(); ++i)
     {
         if (!nearlyEqual(actual_data[i], expected_data[i], eps))
         {
@@ -430,7 +430,7 @@ bool testNativeFp16ZeroCastPipeline(Execution_Target exec_target)
     nn.enableMixedPrecision(true);
 
     std::vector<float> in_data(16, 1.0f);
-    for (std::size_t i = 0; i < 16; ++i) in_data[i] = static_cast<float>(i + 1) * 0.1f;
+    for (size_t i = 0; i < 16; ++i) in_data[i] = static_cast<float>(i + 1) * 0.1f;
     Tensor input(1, 16, in_data, exec_target);
     Tensor target(1, 2, std::vector<float>{1.0f, 0.0f}, exec_target);
 
@@ -467,10 +467,10 @@ bool testPopulationFp16(Execution_Target exec_target)
         return true;
     }
 
-    std::size_t state_dim = 16;
-    std::size_t hidden_dim = 32;
-    std::size_t action_dim = 4;
-    std::size_t pop_size = 8;
+    size_t state_dim = 16;
+    size_t hidden_dim = 32;
+    size_t action_dim = 4;
+    size_t pop_size = 8;
 
     Neural_Network template_net(exec_target);
     template_net.addLayer<Linear_Layer>(state_dim, hidden_dim, exec_target);
@@ -481,11 +481,11 @@ bool testPopulationFp16(Execution_Target exec_target)
     pop.enableMixedPrecision(true);
 
     std::vector<float> states(pop_size * state_dim, 0.5f);
-    std::vector<std::size_t> actions(pop_size, 0);
+    std::vector<size_t> actions(pop_size, 0);
 
     pop.selectBatchActions(states.data(), nullptr, pop_size, actions.data());
 
-    for (std::size_t a : actions)
+    for (size_t a : actions)
     {
         if (a >= action_dim) return false;
     }
@@ -560,7 +560,7 @@ bool testBatchNorm2dLayer(Execution_Target exec_target)
 
 bool testResNetBlock2dLayer(Execution_Target exec_target)
 {
-    auto validateTensor = [](const Matrix& tensor, std::size_t expected_rows, std::size_t expected_columns, bool require_nonzero = false) -> bool
+    auto validateTensor = [](const Matrix& tensor, size_t expected_rows, size_t expected_columns, bool require_nonzero = false) -> bool
         {
             if (tensor.getTarget() == Execution_Target::VULKAN_GPU)
             {
@@ -593,7 +593,7 @@ bool testResNetBlock2dLayer(Execution_Target exec_target)
             return require_nonzero ? has_nonzero_value : true;
         };
 
-    auto validateParameters = [&validateTensor](const std::vector<std::pair<Matrix*, Matrix*>>& parameters, std::size_t expected_count) -> bool
+    auto validateParameters = [&validateTensor](const std::vector<std::pair<Matrix*, Matrix*>>& parameters, size_t expected_count) -> bool
         {
             if (parameters.size() != expected_count)
             {
@@ -618,20 +618,20 @@ bool testResNetBlock2dLayer(Execution_Target exec_target)
             return true;
         };
 
-    constexpr std::size_t batch_size = 1;
-    constexpr std::size_t input_height = 4;
-    constexpr std::size_t input_width = 4;
-    constexpr std::size_t input_channels = 16;
-    constexpr std::size_t input_features = input_height * input_width * input_channels;
+    constexpr size_t batch_size = 1;
+    constexpr size_t input_height = 4;
+    constexpr size_t input_width = 4;
+    constexpr size_t input_channels = 16;
+    constexpr size_t input_features = input_height * input_width * input_channels;
 
     std::vector<float> input_data(input_features);
-    for (std::size_t i = 0; i < input_features; ++i)
+    for (size_t i = 0; i < input_features; ++i)
     {
         input_data[i] = 0.01f * static_cast<float>((i % 17) + 1);
     }
 
     std::vector<float> grad_identity_data(input_features);
-    for (std::size_t i = 0; i < input_features; ++i)
+    for (size_t i = 0; i < input_features; ++i)
     {
         grad_identity_data[i] = 0.02f * static_cast<float>((i % 13) + 1);
     }
@@ -647,14 +647,14 @@ bool testResNetBlock2dLayer(Execution_Target exec_target)
     bool identity_params_ok = validateParameters(block_identity.getParametersAndGradients(), 8);
     block_identity.resetGradient();
 
-    constexpr std::size_t proj_out_channels = 32;
-    constexpr std::size_t proj_stride = 2;
-    constexpr std::size_t proj_out_height = (input_height + proj_stride - 1) / proj_stride;
-    constexpr std::size_t proj_out_width = (input_width + proj_stride - 1) / proj_stride;
-    constexpr std::size_t proj_out_features = proj_out_height * proj_out_width * proj_out_channels;
+    constexpr size_t proj_out_channels = 32;
+    constexpr size_t proj_stride = 2;
+    constexpr size_t proj_out_height = (input_height + proj_stride - 1) / proj_stride;
+    constexpr size_t proj_out_width = (input_width + proj_stride - 1) / proj_stride;
+    constexpr size_t proj_out_features = proj_out_height * proj_out_width * proj_out_channels;
 
     std::vector<float> grad_proj_data(proj_out_features);
-    for (std::size_t i = 0; i < proj_out_features; ++i)
+    for (size_t i = 0; i < proj_out_features; ++i)
     {
         grad_proj_data[i] = 0.02f * static_cast<float>((i % 11) + 1);
     }
@@ -789,7 +789,7 @@ bool testGpuVectorLifecycle()
     Execution_Engine& engine = Execution_Engine::getInstance();
     const Vulkan_Context& context = engine.getContext();
 
-    std::size_t initial_count = 1024;
+    size_t initial_count = 1024;
     auto vec = std::make_unique<gpu::vector>(context, initial_count);
     if (vec->getElementCount() != initial_count || vec->getBuffer() == VK_NULL_HANDLE)
     {
@@ -806,7 +806,7 @@ bool testGpuVectorLifecycle()
         return false;
     }
 
-    std::size_t expanded_count = 2048;
+    size_t expanded_count = 2048;
     vec->allocateMemory(expanded_count);
     if (vec->getElementCount() != expanded_count)
     {
@@ -850,7 +850,7 @@ bool testVulkanSubAllocatorAndGarbageCollection()
     allocator.free(alloc_b);
     allocator.free(alloc_c);
 
-    std::uint32_t current_frame = context.getCurrentFrame();
+    uint32_t current_frame = context.getCurrentFrame();
     Memory_Allocation garbage_alloc = allocator.allocate(mem_req, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     context.deferDestruction(current_frame, VK_NULL_HANDLE, garbage_alloc);
 
@@ -870,7 +870,7 @@ bool testOperatorFusionAndGraphExecution()
     Matrix mat_add = mat_a + mat_b;
     Matrix mat_relu = mat_add.relu();
 
-    std::size_t raw_node_count = engine.getCurrentGraph().getNodeCount();
+    size_t raw_node_count = engine.getCurrentGraph().getNodeCount();
     if (raw_node_count < 2)
     {
         return false;
@@ -932,7 +932,7 @@ bool testBatchedTensorMatmulFusion()
 class Dummy_Data_Pipeline : public Async_Data_Pipeline
 {
 protected:
-    void prepareBatchHost(std::size_t batch_step, std::vector<float>& output_inputs, std::vector<float>& output_targets) override
+    void prepareBatchHost(size_t batch_step, std::vector<float>& output_inputs, std::vector<float>& output_targets) override
     {
         std::fill(output_inputs.begin(), output_inputs.end(), 1.0f);
         std::fill(output_targets.begin(), output_targets.end(), 2.0f);
@@ -940,7 +940,7 @@ protected:
 
 public:
     Dummy_Data_Pipeline() : Async_Data_Pipeline() {}
-    std::size_t getBatchSize() const override { return 2; }
+    size_t getBatchSize() const override { return 2; }
 };
 
 bool testAsyncDataPipeline()
@@ -961,7 +961,7 @@ bool testAsyncDataPipeline()
 
 bool testReplayBuffer()
 {
-    constexpr std::size_t capacity = 4;
+    constexpr size_t capacity = 4;
     Replay_Buffer buffer(capacity, 1337);
 
     if (buffer.getSize() != 0 || buffer.getCapacity() != capacity || buffer.isReady(1))
@@ -969,7 +969,7 @@ bool testReplayBuffer()
         return false;
     }
 
-    for (std::size_t i = 0; i < 5; ++i)
+    for (size_t i = 0; i < 5; ++i)
     {
         buffer.push(Transition{
             .state = { static_cast<float>(i), static_cast<float>(i + 1) },
@@ -998,8 +998,8 @@ bool testReplayBuffer()
 
 bool testDqnAgent(Execution_Target exec_target)
 {
-    constexpr std::size_t state_dim = 2;
-    constexpr std::size_t action_dim = 2;
+    constexpr size_t state_dim = 2;
+    constexpr size_t action_dim = 2;
 
     Neural_Network q_net(exec_target);
     q_net.addLayer<Linear_Layer>(state_dim, action_dim, exec_target);
@@ -1015,10 +1015,10 @@ bool testDqnAgent(Execution_Target exec_target)
     agent.initializeTargetNetworkFromPrototype(std::move(target_net));
     agent.setTargetUpdateParameters(2, false);
 
-    std::size_t deterministic_action = agent.selectAction({ 1.0f, 0.5f }, false);
+    size_t deterministic_action = agent.selectAction({ 1.0f, 0.5f }, false);
     bool action_ok = (deterministic_action < action_dim);
 
-    for (std::size_t i = 0; i < 6; ++i)
+    for (size_t i = 0; i < 6; ++i)
     {
         agent.storeTransition(Transition{
             .state = { static_cast<float>(i), 1.0f },
@@ -1043,10 +1043,10 @@ bool testDqnAgent(Execution_Target exec_target)
 
 bool testPopulation(Execution_Target exec_target)
 {
-    constexpr std::size_t pop_size = 8;
-    constexpr std::size_t state_dim = 16;
-    constexpr std::size_t action_dim = 4;
-    constexpr std::size_t hidden_dim = 32;
+    constexpr size_t pop_size = 8;
+    constexpr size_t state_dim = 16;
+    constexpr size_t action_dim = 4;
+    constexpr size_t hidden_dim = 32;
 
     Neural_Network template_net(exec_target);
     template_net.addLayer<Linear_Layer>(state_dim, hidden_dim, exec_target);
@@ -1066,15 +1066,15 @@ bool testPopulation(Execution_Target exec_target)
     }
 
     std::vector<float> test_state(state_dim);
-    for (std::size_t i = 0; i < state_dim; ++i)
+    for (size_t i = 0; i < state_dim; ++i)
     {
         test_state[i] = std::sin(static_cast<float>(i) * 0.5f);
     }
 
-    for (std::size_t i = 0; i < pop_size; ++i)
+    for (size_t i = 0; i < pop_size; ++i)
     {
-        std::size_t act1 = pop.selectAction(i, test_state);
-        std::size_t act2 = pop.selectAction(i, test_state);
+        size_t act1 = pop.selectAction(i, test_state);
+        size_t act2 = pop.selectAction(i, test_state);
         if (act1 != act2 || act1 >= action_dim)
         {
             return false;
@@ -1089,9 +1089,9 @@ bool testPopulation(Execution_Target exec_target)
         Execution_Engine::getInstance().executeGraph();
     }
     std::vector<float> q_vals = ind0_output.getData();
-    std::size_t expected_act0 = 0;
+    size_t expected_act0 = 0;
     float max_q = q_vals[0];
-    for (std::size_t a = 1; a < q_vals.size(); ++a)
+    for (size_t a = 1; a < q_vals.size(); ++a)
     {
         if (q_vals[a] > max_q)
         {
@@ -1105,19 +1105,19 @@ bool testPopulation(Execution_Target exec_target)
     }
 
     std::vector<float> flat_states(pop_size * state_dim);
-    std::vector<std::size_t> expected_batch(pop_size);
-    for (std::size_t i = 0; i < pop_size; ++i)
+    std::vector<size_t> expected_batch(pop_size);
+    for (size_t i = 0; i < pop_size; ++i)
     {
-        for (std::size_t d = 0; d < state_dim; ++d)
+        for (size_t d = 0; d < state_dim; ++d)
         {
             flat_states[i * state_dim + d] = std::cos(static_cast<float>(i * state_dim + d) * 0.2f);
         }
         expected_batch[i] = pop.selectAction(i, flat_states.data() + (i * state_dim));
     }
 
-    std::vector<std::size_t> batch_results(pop_size);
+    std::vector<size_t> batch_results(pop_size);
     pop.selectBatchActions(flat_states.data(), nullptr, pop_size, batch_results.data());
-    for (std::size_t i = 0; i < pop_size; ++i)
+    for (size_t i = 0; i < pop_size; ++i)
     {
         if (batch_results[i] != expected_batch[i])
         {
@@ -1125,18 +1125,18 @@ bool testPopulation(Execution_Target exec_target)
         }
     }
 
-    std::vector<std::size_t> active_indices = { 1, 3, 6 };
+    std::vector<size_t> active_indices = { 1, 3, 6 };
     std::vector<float> subset_states(active_indices.size() * state_dim);
-    for (std::size_t k = 0; k < active_indices.size(); ++k)
+    for (size_t k = 0; k < active_indices.size(); ++k)
     {
-        std::size_t idx = active_indices[k];
+        size_t idx = active_indices[k];
         std::copy(flat_states.begin() + idx * state_dim,
             flat_states.begin() + (idx + 1) * state_dim,
             subset_states.begin() + k * state_dim);
     }
-    std::vector<std::size_t> subset_results(active_indices.size());
+    std::vector<size_t> subset_results(active_indices.size());
     pop.selectBatchActions(subset_states.data(), active_indices.data(), active_indices.size(), subset_results.data());
-    for (std::size_t k = 0; k < active_indices.size(); ++k)
+    for (size_t k = 0; k < active_indices.size(); ++k)
     {
         if (subset_results[k] != expected_batch[active_indices[k]])
         {
@@ -1158,7 +1158,7 @@ bool testPopulation(Execution_Target exec_target)
     }
     std::remove(temp_file.c_str());
 
-    for (std::size_t i = 0; i < pop_size; ++i)
+    for (size_t i = 0; i < pop_size; ++i)
     {
         const float* st = flat_states.data() + i * state_dim;
         if (pop_loader.selectAction(5, st) != pop.selectAction(2, st))
@@ -1167,9 +1167,9 @@ bool testPopulation(Execution_Target exec_target)
         }
     }
 
-    constexpr std::size_t elite_candidate = 4;
-    std::vector<std::size_t> ind4_actions(pop_size);
-    for (std::size_t i = 0; i < pop_size; ++i)
+    constexpr size_t elite_candidate = 4;
+    std::vector<size_t> ind4_actions(pop_size);
+    for (size_t i = 0; i < pop_size; ++i)
     {
         ind4_actions[i] = pop.selectAction(elite_candidate, flat_states.data() + i * state_dim);
     }
@@ -1185,7 +1185,7 @@ bool testPopulation(Execution_Target exec_target)
         Execution_Engine::getInstance().executeGraph();
     }
     const auto& best_raw_data = out_matrix_best.getData();
-    std::size_t best_initial_act = static_cast<std::size_t>(std::distance(best_raw_data.begin(), std::max_element(best_raw_data.begin(), best_raw_data.end())));
+    size_t best_initial_act = static_cast<size_t>(std::distance(best_raw_data.begin(), std::max_element(best_raw_data.begin(), best_raw_data.end())));
     if (best_initial_act != ind4_actions[0])
     {
         return false;
@@ -1203,7 +1203,7 @@ bool testPopulation(Execution_Target exec_target)
     }
     std::remove(best_temp.c_str());
 
-    for (std::size_t i = 0; i < pop_size; ++i)
+    for (size_t i = 0; i < pop_size; ++i)
     {
         const float* st = flat_states.data() + i * state_dim;
         if (pop_loader.selectAction(0, st) != ind4_actions[i])
@@ -1213,13 +1213,13 @@ bool testPopulation(Execution_Target exec_target)
     }
 
     std::string checkpoint_temp = "temp_population_checkpoint.bin";
-    std::uint64_t saved_gen = 105;
+    uint64_t saved_gen = 105;
     if (!pop.saveCheckpoint(checkpoint_temp, saved_gen, fitness.data()))
     {
         return false;
     }
 
-    std::uint64_t loaded_gen = 0;
+    uint64_t loaded_gen = 0;
     std::vector<float> loaded_fitness(pop_size, 0.0f);
     if (!pop_loader.loadCheckpoint(checkpoint_temp, loaded_gen, loaded_fitness.data()))
     {
@@ -1231,7 +1231,7 @@ bool testPopulation(Execution_Target exec_target)
         std::remove(checkpoint_temp.c_str());
         return false;
     }
-    for (std::size_t i = 0; i < pop_size; ++i)
+    for (size_t i = 0; i < pop_size; ++i)
     {
         if (!nearlyEqual(loaded_fitness[i], fitness[i]))
         {
@@ -1240,7 +1240,7 @@ bool testPopulation(Execution_Target exec_target)
         }
     }
 
-    std::uint64_t loaded_gen_null = 0;
+    uint64_t loaded_gen_null = 0;
     if (!pop_loader.loadCheckpoint(checkpoint_temp, loaded_gen_null, nullptr))
     {
         std::remove(checkpoint_temp.c_str());
@@ -1253,7 +1253,7 @@ bool testPopulation(Execution_Target exec_target)
     }
 
     pop.evolve(fitness.data(), 0.15f, 0.0f, 0.0f, 0.0f, 3, 1);
-    for (std::size_t i = 0; i < pop_size; ++i)
+    for (size_t i = 0; i < pop_size; ++i)
     {
         const float* st = flat_states.data() + i * state_dim;
         if (pop.selectAction(0, st) != ind4_actions[i])
@@ -1417,9 +1417,9 @@ bool testLayerInterfaceContracts(Execution_Target exec_target)
 
 bool testPopulationDeepNetwork(Execution_Target exec_target)
 {
-    constexpr std::size_t pop_size = 6;
-    constexpr std::size_t state_dim = 8;
-    constexpr std::size_t action_dim = 3;
+    constexpr size_t pop_size = 6;
+    constexpr size_t state_dim = 8;
+    constexpr size_t action_dim = 3;
 
     Neural_Network template_net(exec_target);
     template_net.addLayer<Linear_Layer>(state_dim, 16, exec_target);
@@ -1436,14 +1436,14 @@ bool testPopulationDeepNetwork(Execution_Target exec_target)
     }
 
     std::vector<float> input_sample(state_dim);
-    for (std::size_t i = 0; i < state_dim; ++i)
+    for (size_t i = 0; i < state_dim; ++i)
     {
         input_sample[i] = 0.1f * static_cast<float>(i + 1);
     }
 
-    for (std::size_t i = 0; i < pop_size; ++i)
+    for (size_t i = 0; i < pop_size; ++i)
     {
-        std::size_t act = pop.selectAction(i, input_sample);
+        size_t act = pop.selectAction(i, input_sample);
         if (act >= action_dim)
         {
             return false;
@@ -1457,7 +1457,7 @@ bool testPopulationDeepNetwork(Execution_Target exec_target)
             Execution_Engine::getInstance().executeGraph();
         }
         const auto& out_data = out_mat.getData();
-        std::size_t expected_act = static_cast<std::size_t>(std::distance(out_data.begin(), std::max_element(out_data.begin(), out_data.end())));
+        size_t expected_act = static_cast<size_t>(std::distance(out_data.begin(), std::max_element(out_data.begin(), out_data.end())));
         if (act != expected_act)
         {
             return false;
@@ -1465,17 +1465,17 @@ bool testPopulationDeepNetwork(Execution_Target exec_target)
     }
 
     std::vector<float> batch_input(pop_size * state_dim);
-    for (std::size_t i = 0; i < pop_size * state_dim; ++i)
+    for (size_t i = 0; i < pop_size * state_dim; ++i)
     {
         batch_input[i] = std::sin(static_cast<float>(i) * 0.3f);
     }
 
-    std::vector<std::size_t> batch_actions(pop_size);
+    std::vector<size_t> batch_actions(pop_size);
     pop.selectBatchActions(batch_input.data(), nullptr, pop_size, batch_actions.data());
 
-    for (std::size_t i = 0; i < pop_size; ++i)
+    for (size_t i = 0; i < pop_size; ++i)
     {
-        std::size_t single_act = pop.selectAction(i, batch_input.data() + i * state_dim);
+        size_t single_act = pop.selectAction(i, batch_input.data() + i * state_dim);
         if (batch_actions[i] != single_act)
         {
             return false;
@@ -1483,7 +1483,7 @@ bool testPopulationDeepNetwork(Execution_Target exec_target)
     }
 
     std::vector<float> fitness(pop_size);
-    for (std::size_t i = 0; i < pop_size; ++i)
+    for (size_t i = 0; i < pop_size; ++i)
     {
         fitness[i] = static_cast<float>(i * 10);
     }
@@ -1496,21 +1496,21 @@ bool testPopulationDeepNetwork(Execution_Target exec_target)
         Execution_Engine::getInstance().executeGraph();
     }
     const auto& best_data = best_out.getData();
-    std::size_t best_expected = static_cast<std::size_t>(std::distance(best_data.begin(), std::max_element(best_data.begin(), best_data.end())));
+    size_t best_expected = static_cast<size_t>(std::distance(best_data.begin(), std::max_element(best_data.begin(), best_data.end())));
     if (pop.selectAction(pop_size - 1, input_sample) != best_expected)
     {
         return false;
     }
 
     std::string ckpt_path = "temp_deep_pop.bin";
-    std::uint64_t gen_in = 50;
+    uint64_t gen_in = 50;
     if (!pop.saveCheckpoint(ckpt_path, gen_in, fitness.data()))
     {
         return false;
     }
 
     Population pop_loader(pop_size, template_net, state_dim, action_dim, exec_target, 111);
-    std::uint64_t gen_out = 0;
+    uint64_t gen_out = 0;
     std::vector<float> fit_out(pop_size);
     if (!pop_loader.loadCheckpoint(ckpt_path, gen_out, fit_out.data()))
     {
@@ -1523,7 +1523,7 @@ bool testPopulationDeepNetwork(Execution_Target exec_target)
     {
         return false;
     }
-    for (std::size_t i = 0; i < pop_size; ++i)
+    for (size_t i = 0; i < pop_size; ++i)
     {
         if (!nearlyEqual(fit_out[i], fitness[i]))
         {
@@ -1565,7 +1565,7 @@ bool testMatrixConcatAndSplit(Execution_Target exec_target)
 
 bool testPpoActorCriticForward(Execution_Target exec_target)
 {
-    constexpr std::uint64_t action_dim = 2;
+    constexpr uint64_t action_dim = 2;
     PPO_Actor_Critic_Layer ppo_layer(action_dim, exec_target);
 
     auto& actor_linear = ppo_layer.addActorLayer<Linear_Layer>(2, 2, exec_target);
@@ -1588,7 +1588,7 @@ bool testPpoActorCriticForward(Execution_Target exec_target)
 
 bool testPpoActorCriticBackward(Execution_Target exec_target)
 {
-    constexpr std::uint64_t action_dim = 2;
+    constexpr uint64_t action_dim = 2;
     PPO_Actor_Critic_Layer ppo_layer(action_dim, exec_target);
 
     auto& actor_linear = ppo_layer.addActorLayer<Linear_Layer>(2, 2, exec_target);
@@ -1622,7 +1622,7 @@ bool testPpoActorCriticBackward(Execution_Target exec_target)
 bool testPpoActorCriticSerialization(Execution_Target exec_target)
 {
     std::string temp_file = "temp_ppo_layer_serialization.bin";
-    constexpr std::uint64_t action_dim = 2;
+    constexpr uint64_t action_dim = 2;
 
     PPO_Actor_Critic_Layer ppo_source(action_dim, exec_target);
     auto& actor_linear = ppo_source.addActorLayer<Linear_Layer>(2, 2, exec_target);
@@ -1668,10 +1668,10 @@ bool testLinearLayerInitializer(Execution_Target exec_target)
     auto init_fn = layer.getPopulationParameterInitializer(0);
     std::mt19937 rng(42);
 
-    constexpr std::size_t sample_count = 1000;
+    constexpr size_t sample_count = 1000;
     float sum = 0.0f;
     float sum_sq = 0.0f;
-    for (std::size_t i = 0; i < sample_count; ++i)
+    for (size_t i = 0; i < sample_count; ++i)
     {
         float val = init_fn(rng);
         sum += val;
@@ -1708,7 +1708,7 @@ bool testReluBatchedForward(Execution_Target exec_target)
     {
         return false;
     }
-    for (std::size_t i = 0; i < expected.size(); ++i)
+    for (size_t i = 0; i < expected.size(); ++i)
     {
         if (!nearlyEqual(actual[i], expected[i], 1e-4f))
         {
@@ -1789,7 +1789,7 @@ bool testGradientAccumulation(Execution_Target exec_target)
     }
 
     auto accum_params_grads = net.getParametersAndGradients();
-    for (std::size_t i = 0; i < accum_params_grads.size(); ++i)
+    for (size_t i = 0; i < accum_params_grads.size(); ++i)
     {
         std::vector<float> accum_grad = accum_params_grads[i].second->getData();
         const auto& expected_grad = full_grads_data[i];
@@ -1797,7 +1797,7 @@ bool testGradientAccumulation(Execution_Target exec_target)
         {
             return false;
         }
-        for (std::size_t j = 0; j < accum_grad.size(); ++j)
+        for (size_t j = 0; j < accum_grad.size(); ++j)
         {
             if (!nearlyEqual(accum_grad[j], expected_grad[j], 1e-3f))
             {
@@ -1875,9 +1875,9 @@ bool testCompositeLayerSerialization(Execution_Target exec_target)
 
 bool testCrossCompatibilityPopulationToNetwork(Execution_Target exec_target)
 {
-    constexpr std::size_t pop_size = 4;
-    constexpr std::size_t state_dim = 4;
-    constexpr std::size_t action_dim = 2;
+    constexpr size_t pop_size = 4;
+    constexpr size_t state_dim = 4;
+    constexpr size_t action_dim = 2;
 
     Neural_Network template_net(exec_target);
     template_net.addLayer<Linear_Layer>(state_dim, 8, exec_target);
@@ -1912,9 +1912,9 @@ bool testCrossCompatibilityPopulationToNetwork(Execution_Target exec_target)
         Execution_Engine::getInstance().executeGraph();
     }
 
-    std::size_t pop_action = pop.selectAction(0, sample_input);
+    size_t pop_action = pop.selectAction(0, sample_input);
     const auto& net_data = net_out.getData();
-    std::size_t net_action = static_cast<std::size_t>(std::distance(
+    size_t net_action = static_cast<size_t>(std::distance(
         net_data.begin(), std::max_element(net_data.begin(), net_data.end())));
 
     if (pop_action != net_action)
@@ -1923,7 +1923,7 @@ bool testCrossCompatibilityPopulationToNetwork(Execution_Target exec_target)
     }
 
     pop.setIndividual(1, standalone_net);
-    std::size_t pop_action_ind1 = pop.selectAction(1, sample_input);
+    size_t pop_action_ind1 = pop.selectAction(1, sample_input);
     return (pop_action_ind1 == net_action);
 }
 
@@ -1998,7 +1998,7 @@ bool testFp16SupportAndCastingCpu()
     }
 
     const auto &rec_data = recovered_fp32.getData();
-    for (std::size_t i = 0; i < input_data.size(); ++i)
+    for (size_t i = 0; i < input_data.size(); ++i)
     {
         if (std::abs(rec_data[i] - input_data[i]) > 1e-2f * (std::abs(input_data[i]) + 1.0f))
         {
@@ -2032,7 +2032,7 @@ bool testFp16SupportAndCastingGpu()
     engine.waitIdle();
 
     const auto &rec_data = gpu_recovered_fp32.getData();
-    for (std::size_t i = 0; i < input_data.size(); ++i)
+    for (size_t i = 0; i < input_data.size(); ++i)
     {
         if (std::abs(rec_data[i] - input_data[i]) > 1e-2f * (std::abs(input_data[i]) + 1.0f))
         {
@@ -2138,7 +2138,7 @@ bool testStaticCommandBuffer()
     }
 
     // Step 1: Batch 1 -> should bake first frame
-    std::uint32_t f0 = engine.getContext().getCurrentFrame();
+    uint32_t f0 = engine.getContext().getCurrentFrame();
     Tensor in1(2, 4, std::vector<float>{1.0f, 0.5f, -0.5f, 2.0f, -1.0f, 0.0f, 1.5f, -2.0f}, Execution_Target::VULKAN_GPU);
     Tensor tgt1(2, 2, std::vector<float>{0.5f, -0.5f, 1.0f, 0.0f}, Execution_Target::VULKAN_GPU);
     nn.trainStep(in1, tgt1);
@@ -2150,7 +2150,7 @@ bool testStaticCommandBuffer()
     }
 
     // Step 2: Batch 2 -> should bake second frame
-    std::uint32_t f1 = engine.getContext().getCurrentFrame();
+    uint32_t f1 = engine.getContext().getCurrentFrame();
     Tensor in2(2, 4, std::vector<float>{0.2f, -0.3f, 0.8f, 1.1f, -0.5f, 0.4f, -1.2f, 0.7f}, Execution_Target::VULKAN_GPU);
     Tensor tgt2(2, 2, std::vector<float>{0.1f, 0.9f, -0.3f, 0.4f}, Execution_Target::VULKAN_GPU);
     nn.trainStep(in2, tgt2);
@@ -2184,7 +2184,7 @@ bool testStaticCommandBuffer()
     }
 
     // Inference forward:
-    std::uint32_t f_inf = engine.getContext().getCurrentFrame();
+    uint32_t f_inf = engine.getContext().getCurrentFrame();
     Matrix test_in(2, 4, std::vector<float>{1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f}, Execution_Target::VULKAN_GPU);
     Matrix pred = nn.forward(test_in);
     engine.executeGraph();

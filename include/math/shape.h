@@ -12,18 +12,18 @@
 #include <stdexcept>
 #include <string>
 
-constexpr std::size_t MAX_TENSOR_RANK = 6;
+constexpr size_t MAX_TENSOR_RANK = 6;
 
 class Shape
 {
 private:
-    std::array<std::size_t, MAX_TENSOR_RANK> dimensions{};
+    std::array<size_t, MAX_TENSOR_RANK> dimensions{};
     std::uint8_t rank_size = 0;
 
 public:
     Shape() = default;
 
-    Shape(std::initializer_list<std::size_t> dimension_list)
+    Shape(std::initializer_list<size_t> dimension_list)
     {
         if (dimension_list.size() > MAX_TENSOR_RANK)
         {
@@ -33,7 +33,7 @@ public:
         std::copy(dimension_list.begin(), dimension_list.end(), dimensions.begin());
     }
 
-    Shape(std::span<const std::size_t> dimension_span)
+    Shape(std::span<const size_t> dimension_span)
     {
         if (dimension_span.size() > MAX_TENSOR_RANK)
         {
@@ -43,20 +43,20 @@ public:
         std::copy(dimension_span.begin(), dimension_span.end(), dimensions.begin());
     }
 
-    Shape(std::size_t dim_0, std::size_t dim_1)
+    Shape(size_t dim_0, size_t dim_1)
     {
         rank_size = 2;
         dimensions[0] = dim_0;
         dimensions[1] = dim_1;
     }
 
-    std::size_t operator[](std::size_t index) const
+    size_t operator[](size_t index) const
     {
         assert(index < MAX_TENSOR_RANK);
         return dimensions[index];
     }
 
-    std::size_t &operator[](std::size_t index)
+    size_t &operator[](size_t index)
     {
         assert(index < MAX_TENSOR_RANK);
         return dimensions[index];
@@ -71,8 +71,8 @@ public:
             return strides_result;
         }
 
-        std::size_t current_stride = 1;
-        for (std::size_t i = rank_size; i > 0; --i)
+        size_t current_stride = 1;
+        for (size_t i = rank_size; i > 0; --i)
         {
             strides_result.dimensions[i - 1] = current_stride;
             current_stride *= dimensions[i - 1];
@@ -87,7 +87,7 @@ public:
             return "()";
         }
         std::string result = "(";
-        for (std::size_t i = 0; i < rank_size; ++i)
+        for (size_t i = 0; i < rank_size; ++i)
         {
             result += std::format("{}{}", dimensions[i], (i + 1 < rank_size) ? ", " : "");
         }
@@ -101,7 +101,7 @@ public:
         {
             return false;
         }
-        for (std::size_t i = 0; i < rank_size; ++i)
+        for (size_t i = 0; i < rank_size; ++i)
         {
             if (dimensions[i] != other.dimensions[i])
             {
@@ -111,25 +111,25 @@ public:
         return true;
     }
 
-    std::span<const std::size_t> getDimensions() const noexcept { return {dimensions.data(), rank_size}; }
+    std::span<const size_t> getDimensions() const noexcept { return {dimensions.data(), rank_size}; }
 
-    std::size_t getTotalElements() const noexcept
+    size_t getTotalElements() const noexcept
     {
         if (rank_size == 0)
         {
             return 0;
         }
-        std::size_t total = 1;
-        for (std::size_t i = 0; i < rank_size; ++i)
+        size_t total = 1;
+        for (size_t i = 0; i < rank_size; ++i)
         {
             total *= dimensions[i];
         }
         return total;
     }
 
-    std::size_t getRank() const noexcept { return rank_size; }
+    size_t getRank() const noexcept { return rank_size; }
 
-    void setDimensions(std::span<const std::size_t> _dimension_span)
+    void setDimensions(std::span<const size_t> _dimension_span)
     {
         if (_dimension_span.size() > MAX_TENSOR_RANK)
         {
@@ -139,7 +139,7 @@ public:
         std::copy(_dimension_span.begin(), _dimension_span.end(), dimensions.begin());
     }
 
-    void setRank(std::size_t _rank)
+    void setRank(size_t _rank)
     {
         if (_rank > MAX_TENSOR_RANK)
         {

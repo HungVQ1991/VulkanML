@@ -20,16 +20,16 @@ namespace gpu
     class vector
     {
     private:
-        static inline std::atomic<std::uint64_t> global_vector_counter{0};
+        static inline std::atomic<uint64_t> global_vector_counter{0};
 
         const Vulkan_Context &context;
         VkBuffer buffer = VK_NULL_HANDLE;
         Memory_Allocation allocation{};
-        std::size_t buffer_size_in_bytes = 0;
-        std::size_t element_count = 0;
+        size_t buffer_size_in_bytes = 0;
+        size_t element_count = 0;
         Data_Type data_type = Data_Type::FLOAT32;
-        std::uint32_t used_frame_index = 0;
-        std::uint64_t vector_id = 0;
+        uint32_t used_frame_index = 0;
+        uint64_t vector_id = 0;
 
         void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage_flags, VkMemoryPropertyFlags memory_properties)
         {
@@ -192,7 +192,7 @@ namespace gpu
         {
         }
 
-        vector(const Vulkan_Context &_context, std::size_t _element_count, Data_Type _type = Data_Type::FLOAT32)
+        vector(const Vulkan_Context &_context, size_t _element_count, Data_Type _type = Data_Type::FLOAT32)
             : context(_context), buffer_size_in_bytes(0), element_count(0), data_type(_type),
               used_frame_index(_context.getCurrentFrame()), vector_id(++global_vector_counter)
         {
@@ -280,7 +280,7 @@ namespace gpu
             return *this;
         }
 
-        void allocateMemory(std::size_t _element_count, Data_Type _type = Data_Type::FLOAT32)
+        void allocateMemory(size_t _element_count, Data_Type _type = Data_Type::FLOAT32)
         {
             data_type = _type;
             element_count = _element_count;
@@ -346,7 +346,7 @@ namespace gpu
             }
         }
 
-        void uploadRawData(const void *source_pointer, std::size_t size_in_bytes)
+        void uploadRawData(const void *source_pointer, size_t size_in_bytes)
         {
             if (!source_pointer || size_in_bytes == 0 || buffer_size_in_bytes == 0)
             {
@@ -368,7 +368,7 @@ namespace gpu
                 throw std::runtime_error("size mismatch");
             }
 
-            std::uint32_t frame_index = context.getCurrentFrame();
+            uint32_t frame_index = context.getCurrentFrame();
 
             VkBuffer staging_buffer = VK_NULL_HANDLE;
             VkDeviceSize staging_offset = 0;
@@ -416,7 +416,7 @@ namespace gpu
             }
         }
 
-        void downloadRawData(void *destination_pointer, std::size_t size_in_bytes) const
+        void downloadRawData(void *destination_pointer, size_t size_in_bytes) const
         {
             if (buffer_size_in_bytes == 0 || buffer == VK_NULL_HANDLE || !destination_pointer || size_in_bytes == 0)
             {
@@ -489,7 +489,7 @@ namespace gpu
                 throw std::runtime_error("gpu::vector::downloadRawData: Failed to map memory");
             }
 
-            std::size_t copy_bytes = std::min(size_in_bytes, buffer_size_in_bytes);
+            size_t copy_bytes = std::min(size_in_bytes, buffer_size_in_bytes);
             std::memcpy(destination_pointer, mapped_pointer, copy_bytes);
 
             vkUnmapMemory(device, staging_allocation.memory);
@@ -498,7 +498,7 @@ namespace gpu
 
         void downloadData(std::vector<float> &host_data) const
         {
-            std::size_t count = getElementCount();
+            size_t count = getElementCount();
             if (host_data.size() != count)
             {
                 host_data.resize(count);
@@ -518,7 +518,7 @@ namespace gpu
 
         void downloadData(std::vector<float16_t> &host_data) const
         {
-            std::size_t count = getElementCount();
+            size_t count = getElementCount();
             if (host_data.size() != count)
             {
                 host_data.resize(count);
@@ -539,26 +539,26 @@ namespace gpu
     public:
         const Vulkan_Context &getContext() const noexcept { return context; }
         const Memory_Allocation &getAllocation() const noexcept { return allocation; }
-        std::size_t getElementCount() const noexcept { return element_count > 0 ? element_count : (buffer_size_in_bytes / getDataTypeSize(data_type)); }
-        std::size_t getBufferSizeInBytes() const noexcept { return buffer_size_in_bytes; }
-        std::size_t getSize() const noexcept { return getElementCount(); }
-        std::size_t getSizeBytes() const noexcept { return buffer_size_in_bytes; }
-        std::size_t getByteSize() const noexcept { return buffer_size_in_bytes; }
+        size_t getElementCount() const noexcept { return element_count > 0 ? element_count : (buffer_size_in_bytes / getDataTypeSize(data_type)); }
+        size_t getBufferSizeInBytes() const noexcept { return buffer_size_in_bytes; }
+        size_t getSize() const noexcept { return getElementCount(); }
+        size_t getSizeBytes() const noexcept { return buffer_size_in_bytes; }
+        size_t getByteSize() const noexcept { return buffer_size_in_bytes; }
         VkDevice getDevice() const noexcept { return context.getDevice(); }
-        std::uint64_t getVectorId() const noexcept { return vector_id; }
-        std::uint64_t getId() const noexcept { return vector_id; }
+        uint64_t getVectorId() const noexcept { return vector_id; }
+        uint64_t getId() const noexcept { return vector_id; }
         VkBuffer getBuffer() const noexcept { return buffer; }
         Data_Type getDataType() const noexcept { return data_type; }
-        std::uint32_t getUsedFrameIndex() const noexcept { return used_frame_index; }
+        uint32_t getUsedFrameIndex() const noexcept { return used_frame_index; }
         bool isEmpty() const noexcept { return buffer_size_in_bytes == 0 || buffer == VK_NULL_HANDLE; }
 
         void setAllocation(const Memory_Allocation &_allocation) noexcept { allocation = _allocation; }
-        void setBufferSizeInBytes(std::size_t _bytes) noexcept { buffer_size_in_bytes = _bytes; }
-        void setElementCount(std::size_t _count) noexcept { element_count = _count; }
-        void setVectorId(std::uint64_t _vector_id) noexcept { vector_id = _vector_id; }
+        void setBufferSizeInBytes(size_t _bytes) noexcept { buffer_size_in_bytes = _bytes; }
+        void setElementCount(size_t _count) noexcept { element_count = _count; }
+        void setVectorId(uint64_t _vector_id) noexcept { vector_id = _vector_id; }
         void setBuffer(VkBuffer _buffer) noexcept { buffer = _buffer; }
         void setDataType(Data_Type _type) noexcept { data_type = _type; }
-        void markAsUsedInFrame(std::uint32_t frame_index) noexcept { used_frame_index = frame_index; }
-        void setUsedFrameIndex(std::uint32_t _frame_index) noexcept { used_frame_index = _frame_index; }
+        void markAsUsedInFrame(uint32_t frame_index) noexcept { used_frame_index = frame_index; }
+        void setUsedFrameIndex(uint32_t _frame_index) noexcept { used_frame_index = _frame_index; }
     };
 }

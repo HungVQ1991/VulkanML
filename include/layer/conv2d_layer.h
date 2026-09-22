@@ -19,15 +19,15 @@
 class Conv2d_Layer : public ILayer
 {
 private:
-    std::uint32_t input_height = 0;
-    std::uint32_t input_width = 0;
-    std::uint32_t input_channels = 0;
-    std::uint32_t output_channels = 0;
-    std::uint32_t kernel_size = 0;
-    std::uint32_t stride = 1;
-    std::uint32_t padding = 0;
-    std::uint32_t output_height = 0;
-    std::uint32_t output_width = 0;
+    uint32_t input_height = 0;
+    uint32_t input_width = 0;
+    uint32_t input_channels = 0;
+    uint32_t output_channels = 0;
+    uint32_t kernel_size = 0;
+    uint32_t stride = 1;
+    uint32_t padding = 0;
+    uint32_t output_height = 0;
+    uint32_t output_width = 0;
 
     Execution_Target execution_target = Execution_Target::CPU;
     bool is_forward_completed = false;
@@ -51,7 +51,7 @@ private:
 
     void initializeWeights()
     {
-        std::size_t weight_count = kernel_size * kernel_size * input_channels * output_channels;
+        size_t weight_count = kernel_size * kernel_size * input_channels * output_channels;
         std::vector<float> host_weights(weight_count);
         std::vector<float> host_biases(output_channels, 0.0f);
 
@@ -61,7 +61,7 @@ private:
         std::mt19937 generator(std::random_device{}());
         std::normal_distribution<float> normal_distribution(0.0f, standard_deviation);
 
-        for (std::size_t i = 0; i < weight_count; ++i)
+        for (size_t i = 0; i < weight_count; ++i)
         {
             host_weights[i] = normal_distribution(generator);
         }
@@ -74,13 +74,13 @@ private:
 
 public:
     using ILayer::forward;
-    Conv2d_Layer(std::uint32_t _height,
-                 std::uint32_t _width,
-                 std::uint32_t _input_channels,
-                 std::uint32_t _output_channels,
-                 std::uint32_t _kernel_size,
-                 std::uint32_t _stride,
-                 std::uint32_t _padding,
+    Conv2d_Layer(uint32_t _height,
+                 uint32_t _width,
+                 uint32_t _input_channels,
+                 uint32_t _output_channels,
+                 uint32_t _kernel_size,
+                 uint32_t _stride,
+                 uint32_t _padding,
                  Execution_Target _execution_target = Execution_Target::CPU)
         : input_height(_height),
           input_width(_width),
@@ -312,7 +312,7 @@ public:
         biases_gradient_tensor = Tensor::loadTensor(_input_file_stream, execution_target);
     }
 
-    std::function<float(std::mt19937&)> getPopulationParameterInitializer(std::size_t param_index) const override
+    std::function<float(std::mt19937&)> getPopulationParameterInitializer(size_t param_index) const override
     {
         if (param_index == 0)
         {
@@ -337,7 +337,7 @@ public:
                 return 0.0f;
             };
     }
-    std::vector<float> getPopulationParameter(std::size_t param_index) const override
+    std::vector<float> getPopulationParameter(size_t param_index) const override
     {
         if (param_index == 0)
         {
@@ -359,24 +359,24 @@ public:
     const Tensor &getBiases() const override { return biases; }
     const Tensor &getInput() const override { return input_tensor; }
     const Tensor &getOutput() const override { return output_tensor; }
-    std::uint32_t getOutputChannels() const noexcept { return output_channels; }
-    std::uint32_t getInputChannels() const noexcept { return input_channels; }
-    std::uint32_t getOutputHeight() const noexcept { return output_height; }
-    std::uint32_t getOutputWidth() const noexcept { return output_width; }
-    std::uint32_t getInputHeight() const noexcept { return input_height; }
-    std::uint32_t getInputWidth() const noexcept { return input_width; }
-    std::uint32_t getKernelSize() const noexcept { return kernel_size; }
+    uint32_t getOutputChannels() const noexcept { return output_channels; }
+    uint32_t getInputChannels() const noexcept { return input_channels; }
+    uint32_t getOutputHeight() const noexcept { return output_height; }
+    uint32_t getOutputWidth() const noexcept { return output_width; }
+    uint32_t getInputHeight() const noexcept { return input_height; }
+    uint32_t getInputWidth() const noexcept { return input_width; }
+    uint32_t getKernelSize() const noexcept { return kernel_size; }
     Execution_Target getExecutionTarget() const override { return execution_target; }
-    std::uint32_t getPadding() const noexcept { return padding; }
+    uint32_t getPadding() const noexcept { return padding; }
     Layer_Type getLayerType() const noexcept override { return Layer_Type::CONV2D; }
-    std::uint32_t getStride() const noexcept { return stride; }
+    uint32_t getStride() const noexcept { return stride; }
     bool supportsPopulationBatch() const noexcept override { return true; }
     bool isForwardCompleted() const noexcept { return is_forward_completed; }
     bool hasParameters() const noexcept override { return true; }
 
-    void setPopulationParameter(std::size_t param_index, std::vector<float> flat_data) override
+    void setPopulationParameter(size_t param_index, std::vector<float> flat_data) override
     {
-        std::size_t weight_count = kernel_size * kernel_size * input_channels * output_channels;
+        size_t weight_count = kernel_size * kernel_size * input_channels * output_channels;
         if (param_index == 0)
         {
             if (flat_data.size() != weight_count)
@@ -431,14 +431,14 @@ public:
         im2col_scratch.setExecutionTarget(_new_execution_target);
         im2col_scratch_fp16.setExecutionTarget(_new_execution_target);
     }
-    void setOutputChannels(std::uint32_t _channels) noexcept { output_channels = _channels; }
-    void setInputChannels(std::uint32_t _channels) noexcept { input_channels = _channels; }
-    void setOutputHeight(std::uint32_t _height) noexcept { output_height = _height; }
-    void setOutputWidth(std::uint32_t _width) noexcept { output_width = _width; }
-    void setInputHeight(std::uint32_t _height) noexcept { input_height = _height; }
-    void setKernelSize(std::uint32_t _size) noexcept { kernel_size = _size; }
-    void setInputWidth(std::uint32_t _width) noexcept { input_width = _width; }
-    void setPadding(std::uint32_t _padding) noexcept { padding = _padding; }
-    void setStride(std::uint32_t _stride) noexcept { stride = _stride; }
+    void setOutputChannels(uint32_t _channels) noexcept { output_channels = _channels; }
+    void setInputChannels(uint32_t _channels) noexcept { input_channels = _channels; }
+    void setOutputHeight(uint32_t _height) noexcept { output_height = _height; }
+    void setOutputWidth(uint32_t _width) noexcept { output_width = _width; }
+    void setInputHeight(uint32_t _height) noexcept { input_height = _height; }
+    void setKernelSize(uint32_t _size) noexcept { kernel_size = _size; }
+    void setInputWidth(uint32_t _width) noexcept { input_width = _width; }
+    void setPadding(uint32_t _padding) noexcept { padding = _padding; }
+    void setStride(uint32_t _stride) noexcept { stride = _stride; }
     void setIsForwardCompleted(bool _is_completed) noexcept { is_forward_completed = _is_completed; }
 };

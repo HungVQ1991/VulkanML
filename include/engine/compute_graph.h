@@ -36,11 +36,11 @@ public:
         nodes.clear();
     }
 
-    const Compute_Node &getNode(std::size_t _index) const { return nodes.at(_index); }
-    Compute_Node &getNode(std::size_t _index) { return nodes.at(_index); }
+    const Compute_Node &getNode(size_t _index) const { return nodes.at(_index); }
+    Compute_Node &getNode(size_t _index) { return nodes.at(_index); }
     const std::vector<Compute_Node> &getNodes() const noexcept { return nodes; }
     std::vector<Compute_Node> &getNodes() noexcept { return nodes; }
-    std::size_t getNodeCount() const noexcept { return nodes.size(); }
+    size_t getNodeCount() const noexcept { return nodes.size(); }
     bool isEmpty() const noexcept { return nodes.empty(); }
 
     void setNodes(const std::vector<Compute_Node> &_nodes) { nodes = _nodes; }

@@ -30,7 +30,7 @@ private:
     std::shared_ptr<Tensor_Impl> implementation;
     Execution_Target execution_target;
 
-    static constexpr std::uint32_t TENSOR_MAGIC_HEADER = 0x7FFFFFFF;
+    static constexpr uint32_t TENSOR_MAGIC_HEADER = 0x7FFFFFFF;
 
 public:
     explicit Tensor(Execution_Target target = Execution_Target::CPU)
@@ -46,7 +46,7 @@ public:
         }
     }
 
-    Tensor(std::size_t rows, std::size_t columns, Execution_Target target = Execution_Target::CPU)
+    Tensor(size_t rows, size_t columns, Execution_Target target = Execution_Target::CPU)
         : execution_target(target)
     {
         if (execution_target == Execution_Target::CPU)
@@ -59,7 +59,7 @@ public:
         }
     }
 
-    Tensor(std::size_t rows, std::size_t columns, const std::vector<float> &host_data, Execution_Target target = Execution_Target::CPU)
+    Tensor(size_t rows, size_t columns, const std::vector<float> &host_data, Execution_Target target = Execution_Target::CPU)
         : execution_target(target)
     {
         if (execution_target == Execution_Target::CPU)
@@ -72,7 +72,7 @@ public:
         }
     }
 
-    Tensor(std::size_t rows, std::size_t columns, std::vector<float> &&host_data, Execution_Target target = Execution_Target::CPU)
+    Tensor(size_t rows, size_t columns, std::vector<float> &&host_data, Execution_Target target = Execution_Target::CPU)
         : execution_target(target)
     {
         if (execution_target == Execution_Target::CPU)
@@ -169,7 +169,7 @@ public:
         return to(Data_Type::FLOAT32);
     }
 
-    Tensor(std::initializer_list<std::size_t> shape_list, Execution_Target target = Execution_Target::CPU)
+    Tensor(std::initializer_list<size_t> shape_list, Execution_Target target = Execution_Target::CPU)
         : Tensor(Shape(shape_list), target)
     {
     }
@@ -185,7 +185,7 @@ public:
     Tensor(Tensor &&) noexcept = default;
     Tensor &operator=(Tensor &&) noexcept = default;
 
-    void initializeShape(std::size_t rows, std::size_t columns)
+    void initializeShape(size_t rows, size_t columns)
     {
         if (implementation->getRows() == rows && implementation->getColumns() == columns)
         {
@@ -194,7 +194,7 @@ public:
         implementation->reshape(rows, columns);
     }
 
-    void initShape(std::size_t rows, std::size_t columns)
+    void initShape(size_t rows, size_t columns)
     {
         initializeShape(rows, columns);
     }
@@ -204,14 +204,14 @@ public:
         implementation->reshape(new_shape);
     }
 
-    Tensor permute(const std::vector<std::size_t> &axes_permutation) const
+    Tensor permute(const std::vector<size_t> &axes_permutation) const
     {
         Tensor result(execution_target);
         implementation->permute(axes_permutation, *result.implementation);
         return result;
     }
 
-    Tensor slice(std::size_t axis, std::size_t start, std::size_t length) const
+    Tensor slice(size_t axis, size_t start, size_t length) const
     {
         Tensor result(execution_target);
         implementation->slice(axis, start, length, *result.implementation);
@@ -260,7 +260,7 @@ public:
                     float beta1,
                     float beta2,
                     float epsilon,
-                    std::size_t timestep,
+                    size_t timestep,
                     float max_gradient = 1.0F,
                     float inv_scale = 1.0F)
     {
@@ -277,27 +277,27 @@ public:
     }
 
     void conv2d(const Tensor &weights, const Tensor &biases, Tensor &output,
-                std::uint32_t input_height, std::uint32_t input_width, std::uint32_t input_channels,
-                std::uint32_t output_channels, std::uint32_t kernel_size,
-                std::uint32_t stride, std::uint32_t padding) const
+                uint32_t input_height, uint32_t input_width, uint32_t input_channels,
+                uint32_t output_channels, uint32_t kernel_size,
+                uint32_t stride, uint32_t padding) const
     {
         implementation->conv2d(*weights.implementation, *biases.implementation, *output.implementation,
                                input_height, input_width, input_channels, output_channels, kernel_size, stride, padding);
     }
 
     void conv2dBackwardInput(const Tensor &weights, Tensor &input_gradient,
-                             std::uint32_t input_height, std::uint32_t input_width, std::uint32_t input_channels,
-                             std::uint32_t output_height, std::uint32_t output_width, std::uint32_t output_channels,
-                             std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const
+                             uint32_t input_height, uint32_t input_width, uint32_t input_channels,
+                             uint32_t output_height, uint32_t output_width, uint32_t output_channels,
+                             uint32_t kernel_size, uint32_t stride, uint32_t padding) const
     {
         implementation->conv2dBackwardInput(*weights.implementation, *input_gradient.implementation,
                                             input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding);
     }
 
     void conv2dBackwardWeight(const Tensor &output_gradient, Tensor &weight_gradient, Tensor &bias_gradient,
-                              std::uint32_t input_height, std::uint32_t input_width, std::uint32_t input_channels,
-                              std::uint32_t output_height, std::uint32_t output_width, std::uint32_t output_channels,
-                              std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding,
+                              uint32_t input_height, uint32_t input_width, uint32_t input_channels,
+                              uint32_t output_height, uint32_t output_width, uint32_t output_channels,
+                              uint32_t kernel_size, uint32_t stride, uint32_t padding,
                               Tensor *im2col_scratch = nullptr) const
     {
         implementation->conv2dBackwardWeight(*output_gradient.implementation, *weight_gradient.implementation, *bias_gradient.implementation,
@@ -307,28 +307,28 @@ public:
     }
 
     void maxpool2d(Tensor &output, Tensor &output_mask,
-                   std::uint32_t input_height, std::uint32_t input_width, std::uint32_t channels,
-                   std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const
+                   uint32_t input_height, uint32_t input_width, uint32_t channels,
+                   uint32_t kernel_size, uint32_t stride, uint32_t padding) const
     {
         implementation->maxpool2d(*output.implementation, *output_mask.implementation,
                                   input_height, input_width, channels, kernel_size, stride, padding);
     }
 
     void maxpool2dBackward(const Tensor &mask, Tensor &input_gradient,
-                           std::uint32_t input_height, std::uint32_t input_width, std::uint32_t channels,
-                           std::uint32_t output_height, std::uint32_t output_width,
-                           std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const
+                           uint32_t input_height, uint32_t input_width, uint32_t channels,
+                           uint32_t output_height, uint32_t output_width,
+                           uint32_t kernel_size, uint32_t stride, uint32_t padding) const
     {
         implementation->maxpool2dBackward(*mask.implementation, *input_gradient.implementation,
                                           input_height, input_width, channels, output_height, output_width, kernel_size, stride, padding);
     }
 
-    void globalAvgPool2d(Tensor &output, std::uint32_t input_height, std::uint32_t input_width, std::uint32_t channels) const
+    void globalAvgPool2d(Tensor &output, uint32_t input_height, uint32_t input_width, uint32_t channels) const
     {
         implementation->globalAvgPool2d(*output.implementation, input_height, input_width, channels);
     }
 
-    void globalAvgPool2dBackward(Tensor &input_gradient, std::uint32_t input_height, std::uint32_t input_width, std::uint32_t channels) const
+    void globalAvgPool2dBackward(Tensor &input_gradient, uint32_t input_height, uint32_t input_width, uint32_t channels) const
     {
         implementation->globalAvgPool2dBackward(*input_gradient.implementation, input_height, input_width, channels);
     }
@@ -374,7 +374,7 @@ public:
                             Tensor &running_mean, Tensor &running_variance,
                             Tensor &batch_mean, Tensor &batch_variance,
                             Tensor &normalized_input, Tensor &output,
-                            std::uint32_t input_height, std::uint32_t input_width, std::uint32_t input_channels,
+                            uint32_t input_height, uint32_t input_width, uint32_t input_channels,
                             float epsilon, float momentum, bool is_training) const
     {
         implementation->batchNorm2dForward(*gamma.implementation, *beta.implementation,
@@ -386,7 +386,7 @@ public:
 
     void batchNorm2dBackward(const Tensor &gamma, const Tensor &batch_variance, const Tensor &normalized_input,
                              Tensor &gamma_gradient, Tensor &beta_gradient, Tensor &input_gradient,
-                             std::uint32_t input_height, std::uint32_t input_width, std::uint32_t input_channels, float epsilon) const
+                             uint32_t input_height, uint32_t input_width, uint32_t input_channels, float epsilon) const
     {
         implementation->batchNorm2dBackward(*gamma.implementation, *batch_variance.implementation,
                                             *normalized_input.implementation, *gamma_gradient.implementation,
@@ -569,12 +569,12 @@ public:
         return result;
     }
 
-    void splitCollumns(std::size_t split_index, Tensor &result_left, Tensor &result_right) const
+    void splitCollumns(size_t split_index, Tensor &result_left, Tensor &result_right) const
     {
         implementation->splitCollumns(split_index, *result_left.implementation, *result_right.implementation);
     }
 
-    std::pair<Tensor, Tensor> splitCollumns(std::size_t split_index) const
+    std::pair<Tensor, Tensor> splitCollumns(size_t split_index) const
     {
         Tensor result_left(execution_target);
         Tensor result_right(execution_target);
@@ -582,12 +582,12 @@ public:
         return {std::move(result_left), std::move(result_right)};
     }
 
-    void splitRows(std::size_t split_index, Tensor &result_up, Tensor &result_down) const
+    void splitRows(size_t split_index, Tensor &result_up, Tensor &result_down) const
     {
         implementation->splitRows(split_index, *result_up.implementation, *result_down.implementation);
     }
 
-    std::pair<Tensor, Tensor> splitRows(std::size_t split_index) const
+    std::pair<Tensor, Tensor> splitRows(size_t split_index) const
     {
         Tensor result_up(execution_target);
         Tensor result_down(execution_target);
@@ -606,16 +606,16 @@ public:
         return sum;
     }
 
-    void print(std::size_t max_display_rows = 10, std::size_t max_display_columns = 10) const
+    void print(size_t max_display_rows = 10, size_t max_display_columns = 10) const
     {
         const auto data_vector = getData();
-        std::size_t print_rows = std::min(getRows(), max_display_rows);
-        std::size_t print_cols = std::min(getColumns(), max_display_columns);
+        size_t print_rows = std::min(getRows(), max_display_rows);
+        size_t print_cols = std::min(getColumns(), max_display_columns);
         std::cout << "Tensor " << getShape().toString() << ":\n";
-        for (std::size_t r = 0; r < print_rows; ++r)
+        for (size_t r = 0; r < print_rows; ++r)
         {
             std::cout << "  [ ";
-            for (std::size_t c = 0; c < print_cols; ++c)
+            for (size_t c = 0; c < print_cols; ++c)
             {
                 std::cout << std::format("{:8.4f} ", data_vector[r * getColumns() + c]);
             }
@@ -640,13 +640,13 @@ public:
 
         output_file_stream.write(reinterpret_cast<const char *>(&TENSOR_MAGIC_HEADER), sizeof(TENSOR_MAGIC_HEADER));
 
-        std::uint32_t rank = static_cast<std::uint32_t>(getRank());
+        uint32_t rank = static_cast<uint32_t>(getRank());
         output_file_stream.write(reinterpret_cast<const char *>(&rank), sizeof(rank));
 
         const auto &dims = getShape();
-        for (std::size_t i = 0; i < rank; ++i)
+        for (size_t i = 0; i < rank; ++i)
         {
-            std::uint32_t dim_val = static_cast<std::uint32_t>(dims[i]);
+            uint32_t dim_val = static_cast<uint32_t>(dims[i]);
             output_file_stream.write(reinterpret_cast<const char *>(&dim_val), sizeof(dim_val));
         }
 
@@ -661,21 +661,21 @@ public:
             throw std::runtime_error("Tensor::loadTensor: Input stream is not open");
         }
 
-        std::uint32_t first_header_field = 0;
+        uint32_t first_header_field = 0;
         input_file_stream.read(reinterpret_cast<char *>(&first_header_field), sizeof(first_header_field));
 
         if (first_header_field == TENSOR_MAGIC_HEADER || first_header_field == 0xFFFFFFFF)
         {
-            std::uint32_t rank = 0;
+            uint32_t rank = 0;
             input_file_stream.read(reinterpret_cast<char *>(&rank), sizeof(rank));
 
-            std::vector<std::size_t> dims(rank);
-            std::size_t total = 1;
-            for (std::size_t i = 0; i < rank; ++i)
+            std::vector<size_t> dims(rank);
+            size_t total = 1;
+            for (size_t i = 0; i < rank; ++i)
             {
-                std::uint32_t dim_val = 0;
+                uint32_t dim_val = 0;
                 input_file_stream.read(reinterpret_cast<char *>(&dim_val), sizeof(dim_val));
-                dims[i] = static_cast<std::size_t>(dim_val);
+                dims[i] = static_cast<size_t>(dim_val);
                 total *= dims[i];
             }
 
@@ -684,8 +684,8 @@ public:
             return Tensor(Shape(dims), std::move(host_data), target);
         }
 
-        std::uint32_t rows_count = first_header_field;
-        std::uint32_t columns_count = 0;
+        uint32_t rows_count = first_header_field;
+        uint32_t columns_count = 0;
         input_file_stream.read(reinterpret_cast<char *>(&columns_count), sizeof(columns_count));
         std::vector<float> host_data(rows_count * columns_count);
         input_file_stream.read(reinterpret_cast<char *>(host_data.data()), static_cast<std::streamsize>(host_data.size() * sizeof(float)));
@@ -724,11 +724,11 @@ public:
     Mutable_Storage_Handle getStorage() { return implementation->getStorage(); }
     std::vector<float> getData() const { return implementation->getData(); }
     std::shared_ptr<Tensor_Impl> getImplementation() const noexcept { return implementation; }
-    std::size_t getTotalElements() const noexcept { return implementation->getTotalElements(); }
-    std::size_t getColumns() const noexcept { return implementation->getColumns(); }
-    std::size_t getRank() const noexcept { return implementation->getRank(); }
-    std::size_t getRows() const noexcept { return implementation->getRows(); }
-    std::size_t getCols() const noexcept { return implementation->getColumns(); }
+    size_t getTotalElements() const noexcept { return implementation->getTotalElements(); }
+    size_t getColumns() const noexcept { return implementation->getColumns(); }
+    size_t getRank() const noexcept { return implementation->getRank(); }
+    size_t getRows() const noexcept { return implementation->getRows(); }
+    size_t getCols() const noexcept { return implementation->getColumns(); }
     Execution_Target getExecutionTarget() const noexcept { return execution_target; }
     Execution_Target getTarget() const noexcept { return execution_target; }
     Data_Type getDataType() const noexcept { return implementation->getDataType(); }

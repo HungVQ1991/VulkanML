@@ -29,7 +29,7 @@ private:
 
     Shader_Compiler shader_compiler;
 
-    std::unordered_map<std::size_t, VkPipeline> cached_pipelines;
+    std::unordered_map<size_t, VkPipeline> cached_pipelines;
     mutable std::mutex cache_mutex;
     std::atomic<bool> is_frozen{false};
     VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
@@ -88,7 +88,7 @@ public:
         {
             std::streamsize file_size = cache_file_stream.tellg();
             cache_file_stream.seekg(0, std::ios::beg);
-            cache_data.resize(static_cast<std::size_t>(file_size));
+            cache_data.resize(static_cast<size_t>(file_size));
             if (cache_file_stream.read(cache_data.data(), file_size))
             {
                 Logger::logMessage(Input_Format{"Pipeline_Cache_Manager::initializePipelineCache: Loaded {} bytes from cache file", file_size},
@@ -157,7 +157,7 @@ public:
         }
 
         VkDevice device = context.getDevice();
-        std::size_t cache_data_size = 0;
+        size_t cache_data_size = 0;
         if (vkGetPipelineCacheData(device, pipeline_cache, &cache_data_size, nullptr) != VK_SUCCESS || cache_data_size == 0)
         {
             Logger::logMessage("Pipeline_Cache_Manager::savePipelineCache: Failed to retrieve pipeline cache size or size is zero",
@@ -207,7 +207,7 @@ public:
 
     VkPipeline getOrCreatePipeline(const std::string &_glsl_code)
     {
-        std::size_t code_hash = std::hash<std::string>{}(_glsl_code);
+        size_t code_hash = std::hash<std::string>{}(_glsl_code);
 
         if (is_frozen.load(std::memory_order_acquire))
         {
@@ -236,13 +236,13 @@ public:
                            0,
                            Log_Feature::SHADER_GENERATION);
 
-        std::vector<std::uint32_t> spirv_code = shader_compiler.compileGlslToSpirv(_glsl_code, "fused_compute_shader");
+        std::vector<uint32_t> spirv_code = shader_compiler.compileGlslToSpirv(_glsl_code, "fused_compute_shader");
 
         VkShaderModuleCreateInfo shader_module_create_information{
             .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
             .pNext = nullptr,
             .flags = 0,
-            .codeSize = spirv_code.size() * sizeof(std::uint32_t),
+            .codeSize = spirv_code.size() * sizeof(uint32_t),
             .pCode = spirv_code.data()};
 
         VkShaderModule shader_module = VK_NULL_HANDLE;
@@ -313,12 +313,12 @@ public:
         return new_pipeline;
     }
 
-    const std::unordered_map<std::size_t, VkPipeline> &getCachedPipelines() const noexcept { return cached_pipelines; }
+    const std::unordered_map<size_t, VkPipeline> &getCachedPipelines() const noexcept { return cached_pipelines; }
     const std::string &getCacheFilePath() const noexcept { return cache_file_path; }
     const Shader_Compiler &getShaderCompiler() const noexcept { return shader_compiler; }
     Shader_Compiler &getShaderCompiler() noexcept { return shader_compiler; }
     const Vulkan_Context &getContext() const noexcept { return context; }
-    std::size_t getCachedPipelineCount() const noexcept
+    size_t getCachedPipelineCount() const noexcept
     {
         if (is_frozen.load(std::memory_order_relaxed))
         {
@@ -329,7 +329,7 @@ public:
     }
     VkPipelineLayout getPipelineLayout() const noexcept { return pipeline_layout; }
     VkPipelineCache getPipelineCache() const noexcept { return pipeline_cache; }
-    bool hasPipeline(std::size_t _code_hash) const noexcept
+    bool hasPipeline(size_t _code_hash) const noexcept
     {
         if (is_frozen.load(std::memory_order_relaxed))
         {
@@ -340,7 +340,7 @@ public:
     }
     bool isFrozen() const noexcept { return is_frozen.load(std::memory_order_relaxed); }
 
-    void setCachedPipelines(const std::unordered_map<std::size_t, VkPipeline> &_pipelines)
+    void setCachedPipelines(const std::unordered_map<size_t, VkPipeline> &_pipelines)
     {
         std::lock_guard<std::mutex> lock(cache_mutex);
         cached_pipelines = _pipelines;

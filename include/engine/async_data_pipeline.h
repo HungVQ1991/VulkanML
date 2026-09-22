@@ -37,7 +37,7 @@ struct Batch_Data
 class Async_Data_Pipeline
 {
 private:
-    static constexpr std::size_t BUFFER_SLOTS_COUNT = 2;
+    static constexpr size_t BUFFER_SLOTS_COUNT = 2;
 
     struct Buffer_Slot
     {
@@ -51,8 +51,8 @@ private:
     };
 
     std::array<Buffer_Slot, BUFFER_SLOTS_COUNT> buffer_slots;
-    std::size_t producer_index = 0;
-    std::size_t consumer_index = 0;
+    size_t producer_index = 0;
+    size_t consumer_index = 0;
 
     std::atomic<bool> is_running{false};
     std::jthread worker_thread;
@@ -132,11 +132,11 @@ private:
                            true,
                            0,
                            Log_Feature::DATA_PIPELINE);
-        std::size_t current_batch_step = 0;
+        size_t current_batch_step = 0;
 
         while (is_running.load())
         {
-            std::size_t slot_index = producer_index % BUFFER_SLOTS_COUNT;
+            size_t slot_index = producer_index % BUFFER_SLOTS_COUNT;
 
             {
                 std::unique_lock<std::mutex> lock(pipeline_mutex);
@@ -189,7 +189,7 @@ private:
     }
 
 protected:
-    virtual void prepareBatchHost(std::size_t batch_step, std::vector<float> &output_inputs, std::vector<float> &output_targets) = 0;
+    virtual void prepareBatchHost(size_t batch_step, std::vector<float> &output_inputs, std::vector<float> &output_targets) = 0;
 
 public:
     explicit Async_Data_Pipeline(VkDevice _device = VK_NULL_HANDLE, Execution_Target _execution_target = Execution_Target::VULKAN_GPU)
@@ -212,13 +212,13 @@ public:
         destroyFences();
     }
 
-    void initializeBuffers(std::size_t batch_size,
-                           std::size_t input_dimension,
-                           std::size_t output_dimension,
+    void initializeBuffers(size_t batch_size,
+                           size_t input_dimension,
+                           size_t output_dimension,
                            Execution_Target _execution_target = Execution_Target::VULKAN_GPU)
     {
         execution_target = _execution_target;
-        for (std::size_t i = 0; i < BUFFER_SLOTS_COUNT; ++i)
+        for (size_t i = 0; i < BUFFER_SLOTS_COUNT; ++i)
         {
             buffer_slots[i].host_inputs.resize(batch_size * input_dimension, 0.0f);
             buffer_slots[i].host_targets.resize(batch_size * output_dimension, 0.0f);
@@ -278,9 +278,9 @@ public:
         }
     }
 
-    Batch_Data nextBatch(std::size_t batch_size, std::size_t input_dimension, std::size_t output_dimension)
+    Batch_Data nextBatch(size_t batch_size, size_t input_dimension, size_t output_dimension)
     {
-        std::size_t slot_index = consumer_index % BUFFER_SLOTS_COUNT;
+        size_t slot_index = consumer_index % BUFFER_SLOTS_COUNT;
         Buffer_Slot &slot = buffer_slots[slot_index];
 
         if (device != VK_NULL_HANDLE && slot.fence != VK_NULL_HANDLE)
@@ -334,8 +334,8 @@ public:
             throw;
         }
 
-        std::uint64_t input_buffer_handle = 0;
-        std::uint64_t target_buffer_handle = 0;
+        uint64_t input_buffer_handle = 0;
+        uint64_t target_buffer_handle = 0;
 
         if (slot.input_matrix.getTarget() == Execution_Target::VULKAN_GPU)
         {
@@ -345,7 +345,7 @@ public:
                 const auto &gpu_vec = std::get<std::shared_ptr<gpu::vector>>(storage_handle);
                 if (gpu_vec)
                 {
-                    input_buffer_handle = reinterpret_cast<std::uint64_t>(gpu_vec->getBuffer());
+                    input_buffer_handle = reinterpret_cast<uint64_t>(gpu_vec->getBuffer());
                 }
             }
         }
@@ -358,7 +358,7 @@ public:
                 const auto &gpu_vec = std::get<std::shared_ptr<gpu::vector>>(storage_handle);
                 if (gpu_vec)
                 {
-                    target_buffer_handle = reinterpret_cast<std::uint64_t>(gpu_vec->getBuffer());
+                    target_buffer_handle = reinterpret_cast<uint64_t>(gpu_vec->getBuffer());
                 }
             }
         }
@@ -386,10 +386,10 @@ public:
         return batch_data;
     }
 
-    virtual std::size_t getBatchSize() const = 0;
-    std::size_t getBufferSlotsCount() const noexcept { return BUFFER_SLOTS_COUNT; }
-    std::size_t getProducerIndex() const noexcept { return producer_index; }
-    std::size_t getConsumerIndex() const noexcept { return consumer_index; }
+    virtual size_t getBatchSize() const = 0;
+    size_t getBufferSlotsCount() const noexcept { return BUFFER_SLOTS_COUNT; }
+    size_t getProducerIndex() const noexcept { return producer_index; }
+    size_t getConsumerIndex() const noexcept { return consumer_index; }
     VkDevice getDevice() const noexcept { return device; }
     Execution_Target getExecutionTarget() const noexcept { return execution_target; }
     bool isRunning() const noexcept { return is_running.load(); }
@@ -408,8 +408,8 @@ public:
             createFences();
         }
     }
-    void setProducerIndex(std::size_t _index) noexcept { producer_index = _index; }
-    void setConsumerIndex(std::size_t _index) noexcept { consumer_index = _index; }
+    void setProducerIndex(size_t _index) noexcept { producer_index = _index; }
+    void setConsumerIndex(size_t _index) noexcept { consumer_index = _index; }
     void setExecutionTarget(Execution_Target _execution_target) noexcept { execution_target = _execution_target; }
     void setRunning(bool _running) noexcept { is_running.store(_running); }
 };

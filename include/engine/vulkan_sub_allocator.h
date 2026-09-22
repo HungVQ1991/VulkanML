@@ -20,7 +20,7 @@ struct Memory_Allocation
     VkDeviceMemory memory = VK_NULL_HANDLE;
     VkDeviceSize offset = 0;
     VkDeviceSize size = 0;
-    std::size_t chunk_index = 0;
+    size_t chunk_index = 0;
 };
 
 struct Free_Block
@@ -33,7 +33,7 @@ struct Memory_Chunk
 {
     VkDeviceMemory device_memory = VK_NULL_HANDLE;
     VkDeviceSize chunk_size = 0;
-    std::uint32_t memory_type_index = 0;
+    uint32_t memory_type_index = 0;
     VkMemoryPropertyFlags memory_properties = 0;
     std::vector<Free_Block> free_blocks;
     bool is_dedicated_arena = false;
@@ -41,11 +41,11 @@ struct Memory_Chunk
 
 struct Tensor_Lifetime
 {
-    std::uint32_t tensor_id = 0;
+    uint32_t tensor_id = 0;
     VkDeviceSize size = 0;
     VkDeviceSize alignment = 4;
-    std::uint32_t start_node_index = 0;
-    std::uint32_t end_node_index = 0;
+    uint32_t start_node_index = 0;
+    uint32_t end_node_index = 0;
     VkDeviceSize allocated_offset = std::numeric_limits<VkDeviceSize>::max();
 };
 
@@ -53,7 +53,7 @@ struct Virtual_Block
 {
     VkDeviceSize offset = 0;
     VkDeviceSize size = 0;
-    std::uint32_t free_after_node_index = 0;
+    uint32_t free_after_node_index = 0;
 };
 
 class Memory_Planner
@@ -63,7 +63,7 @@ private:
     std::vector<Tensor_Lifetime> tensor_lifetimes;
 
 public:
-    void registerTensor(std::uint32_t _tensor_id, VkDeviceSize _size, VkDeviceSize _alignment, std::uint32_t _birth_node_index)
+    void registerTensor(uint32_t _tensor_id, VkDeviceSize _size, VkDeviceSize _alignment, uint32_t _birth_node_index)
     {
         tensor_lifetimes.push_back(Tensor_Lifetime{
             .tensor_id = _tensor_id,
@@ -74,7 +74,7 @@ public:
             .allocated_offset = std::numeric_limits<VkDeviceSize>::max()});
     }
 
-    void updateLastUsage(std::uint32_t _tensor_id, std::uint32_t _current_node_index)
+    void updateLastUsage(uint32_t _tensor_id, uint32_t _current_node_index)
     {
         for (auto &lifetime : tensor_lifetimes)
         {
@@ -101,11 +101,11 @@ public:
 
         for (auto &tensor : tensor_lifetimes)
         {
-            std::size_t best_block_index = std::numeric_limits<std::size_t>::max();
+            size_t best_block_index = std::numeric_limits<size_t>::max();
             VkDeviceSize minimum_leftover = std::numeric_limits<VkDeviceSize>::max();
             VkDeviceSize best_aligned_offset = 0;
 
-            for (std::size_t block_index = 0; block_index < virtual_blocks.size(); ++block_index)
+            for (size_t block_index = 0; block_index < virtual_blocks.size(); ++block_index)
             {
                 const auto &block = virtual_blocks[block_index];
                 if (block.free_after_node_index < tensor.start_node_index)
@@ -130,7 +130,7 @@ public:
                 }
             }
 
-            if (best_block_index != std::numeric_limits<std::size_t>::max())
+            if (best_block_index != std::numeric_limits<size_t>::max())
             {
                 tensor.allocated_offset = best_aligned_offset;
                 virtual_blocks[best_block_index].free_after_node_index = tensor.end_node_index;
@@ -160,7 +160,7 @@ public:
     }
 
     const std::vector<Tensor_Lifetime> &getTensorLifetimes() const noexcept { return tensor_lifetimes; }
-    VkDeviceSize getOffset(std::uint32_t _tensor_id) const
+    VkDeviceSize getOffset(uint32_t _tensor_id) const
     {
         for (const auto &tensor : tensor_lifetimes)
         {
@@ -186,7 +186,7 @@ public:
         throw std::runtime_error(std::format("Memory_Planner::getOffset: Tensor ID {} not found in registry", _tensor_id));
     }
     VkDeviceSize getTotalMemoryRequired() const noexcept { return total_allocated_size; }
-    bool isTensorPlanned(std::uint32_t _tensor_id) const noexcept
+    bool isTensorPlanned(uint32_t _tensor_id) const noexcept
     {
         for (const auto &tensor : tensor_lifetimes)
         {
@@ -197,7 +197,7 @@ public:
         }
         return false;
     }
-    bool hasTensor(std::uint32_t _tensor_id) const noexcept
+    bool hasTensor(uint32_t _tensor_id) const noexcept
     {
         return std::any_of(tensor_lifetimes.begin(), tensor_lifetimes.end(), [_tensor_id](const Tensor_Lifetime &lifetime)
                            { return lifetime.tensor_id == _tensor_id; });
@@ -215,13 +215,13 @@ private:
     VkPhysicalDeviceMemoryProperties physical_device_memory_properties{};
     std::vector<Memory_Chunk> memory_chunks;
     VkDeviceSize default_chunk_size = 256 * 1024 * 1024;
-    std::size_t arena_chunk_index = std::numeric_limits<std::size_t>::max();
+    size_t arena_chunk_index = std::numeric_limits<size_t>::max();
     mutable std::mutex allocator_mutex;
     Memory_Planner memory_planner;
 
-    std::uint32_t findMemoryType(std::uint32_t _type_filter, VkMemoryPropertyFlags _memory_properties) const
+    uint32_t findMemoryType(uint32_t _type_filter, VkMemoryPropertyFlags _memory_properties) const
     {
-        for (std::uint32_t i = 0; i < physical_device_memory_properties.memoryTypeCount; ++i)
+        for (uint32_t i = 0; i < physical_device_memory_properties.memoryTypeCount; ++i)
         {
             if ((_type_filter & (1u << i)) && (physical_device_memory_properties.memoryTypes[i].propertyFlags & _memory_properties) == _memory_properties)
             {
@@ -236,13 +236,13 @@ private:
         throw std::runtime_error("Vulkan_Sub_Allocator::findMemoryType: Failed to find suitable memory type");
     }
 
-    std::size_t createChunk(const VkMemoryRequirements &_memory_requirements, VkMemoryPropertyFlags _memory_properties, bool _is_dedicated_arena = false)
+    size_t createChunk(const VkMemoryRequirements &_memory_requirements, VkMemoryPropertyFlags _memory_properties, bool _is_dedicated_arena = false)
     {
-        std::uint32_t memory_type_index = findMemoryType(_memory_requirements.memoryTypeBits, _memory_properties);
+        uint32_t memory_type_index = findMemoryType(_memory_requirements.memoryTypeBits, _memory_properties);
         VkDeviceSize allocation_size = std::max(default_chunk_size, _memory_requirements.size);
 
         Logger::logMessage(Input_Format{"Vulkan_Sub_Allocator::createChunk: Allocating new memory chunk of size {} bytes (memory_type_index={}, memory_properties={}, is_dedicated_arena={})",
-                                       allocation_size, memory_type_index, static_cast<std::uint32_t>(_memory_properties), _is_dedicated_arena},
+                                       allocation_size, memory_type_index, static_cast<uint32_t>(_memory_properties), _is_dedicated_arena},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -395,7 +395,7 @@ public:
         }
     }
 
-    // Memory_Allocation allocateAliased(std::uint32_t _tensor_id, VkDeviceSize _size, VkMemoryPropertyFlags _memory_properties, VkPhysicalDevice _target_physical_device = VK_NULL_HANDLE)
+    // Memory_Allocation allocateAliased(uint32_t _tensor_id, VkDeviceSize _size, VkMemoryPropertyFlags _memory_properties, VkPhysicalDevice _target_physical_device = VK_NULL_HANDLE)
     // {
     //     std::lock_guard<std::mutex> lock(allocator_mutex);
 
@@ -408,7 +408,7 @@ public:
     //     VkDeviceSize planned_offset = memory_planner.getOffset(_tensor_id);
     //     VkDeviceSize total_required = memory_planner.getTotalMemoryRequired();
 
-    //     if (arena_chunk_index == std::numeric_limits<std::size_t>::max())
+    //     if (arena_chunk_index == std::numeric_limits<size_t>::max())
     //     {
     //         VkMemoryRequirements memory_requirements{
     //             .size = total_required,
@@ -441,7 +441,7 @@ public:
         std::lock_guard<std::mutex> lock(allocator_mutex);
 
         Logger::logMessage(Input_Format{"Vulkan_Sub_Allocator::allocate: Requesting size {} bytes, alignment {} bytes, memory_properties {}",
-                                       _memory_requirements.size, _memory_requirements.alignment, static_cast<std::uint32_t>(_memory_properties)},
+                                       _memory_requirements.size, _memory_requirements.alignment, static_cast<uint32_t>(_memory_properties)},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -453,13 +453,13 @@ public:
             vkGetPhysicalDeviceMemoryProperties(physical_device, &physical_device_memory_properties);
         }
 
-        std::size_t best_chunk_index = std::numeric_limits<std::size_t>::max();
-        std::size_t best_block_index = std::numeric_limits<std::size_t>::max();
+        size_t best_chunk_index = std::numeric_limits<size_t>::max();
+        size_t best_block_index = std::numeric_limits<size_t>::max();
         VkDeviceSize minimum_leftover_size = std::numeric_limits<VkDeviceSize>::max();
         VkDeviceSize best_aligned_offset = 0;
         VkDeviceSize best_padding = 0;
 
-        for (std::size_t chunk_index = 0; chunk_index < memory_chunks.size(); ++chunk_index)
+        for (size_t chunk_index = 0; chunk_index < memory_chunks.size(); ++chunk_index)
         {
             auto &chunk = memory_chunks[chunk_index];
 
@@ -470,7 +470,7 @@ public:
                 continue;
             }
 
-            for (std::size_t block_index = 0; block_index < chunk.free_blocks.size(); ++block_index)
+            for (size_t block_index = 0; block_index < chunk.free_blocks.size(); ++block_index)
             {
                 const auto &block = chunk.free_blocks[block_index];
                 VkDeviceSize alignment = _memory_requirements.alignment;
@@ -503,7 +503,7 @@ public:
             }
         }
 
-        if (best_chunk_index != std::numeric_limits<std::size_t>::max())
+        if (best_chunk_index != std::numeric_limits<size_t>::max())
         {
             auto &chunk = memory_chunks[best_chunk_index];
             auto it = chunk.free_blocks.begin() + best_block_index;
@@ -547,7 +547,7 @@ public:
                 .chunk_index = best_chunk_index};
         }
 
-        std::size_t new_chunk_index = createChunk(_memory_requirements, _memory_properties, false);
+        size_t new_chunk_index = createChunk(_memory_requirements, _memory_properties, false);
         auto &new_chunk = memory_chunks[new_chunk_index];
         auto &block = new_chunk.free_blocks.front();
 
@@ -600,13 +600,13 @@ public:
     const Memory_Planner &getPlanner() const noexcept { return memory_planner; }
     Memory_Planner &getPlanner() noexcept { return memory_planner; }
     const std::vector<Memory_Chunk> &getMemoryChunks() const noexcept { return memory_chunks; }
-    std::size_t getMemoryChunkCount() const noexcept { return memory_chunks.size(); }
-    std::size_t getArenaChunkIndex() const noexcept { return arena_chunk_index; }
+    size_t getMemoryChunkCount() const noexcept { return memory_chunks.size(); }
+    size_t getArenaChunkIndex() const noexcept { return arena_chunk_index; }
     VkDeviceSize getDefaultChunkSize() const noexcept { return default_chunk_size; }
     VkPhysicalDevice getPhysicalDevice() const noexcept { return physical_device; }
     VkDevice getDevice() const noexcept { return device; }
-    bool hasArenaChunk() const noexcept { return arena_chunk_index != std::numeric_limits<std::size_t>::max(); }
+    bool hasArenaChunk() const noexcept { return arena_chunk_index != std::numeric_limits<size_t>::max(); }
 
     void setDefaultChunkSize(VkDeviceSize _size) noexcept { default_chunk_size = _size; }
-    void setArenaChunkIndex(std::size_t _index) noexcept { arena_chunk_index = _index; }
+    void setArenaChunkIndex(size_t _index) noexcept { arena_chunk_index = _index; }
 };

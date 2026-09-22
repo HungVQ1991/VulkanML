@@ -33,24 +33,24 @@ private:
     Compute_Graph current_graph;
     std::unique_ptr<Graph_Executor> graph_executor;
 
-    std::unordered_map<std::size_t, Cached_Graph_Template> cached_graph_templates;
+    std::unordered_map<size_t, Cached_Graph_Template> cached_graph_templates;
     bool is_graph_cache_enabled = true;
     bool is_static_graph_enabled = false;
 
-    std::size_t computeGraphSignature(const Compute_Graph &graph) const
+    size_t computeGraphSignature(const Compute_Graph &graph) const
     {
         const auto &nodes = graph.getNodes();
-        std::size_t graph_signature_hash = nodes.size();
-        graph_signature_hash ^= static_cast<std::size_t>(is_coop ? 1 : 0) + 0x9e3779b9 + (graph_signature_hash << 6) + (graph_signature_hash >> 2);
+        size_t graph_signature_hash = nodes.size();
+        graph_signature_hash ^= static_cast<size_t>(is_coop ? 1 : 0) + 0x9e3779b9 + (graph_signature_hash << 6) + (graph_signature_hash >> 2);
 
-        std::unordered_map<VkBuffer, std::size_t> buffer_to_id;
+        std::unordered_map<VkBuffer, size_t> buffer_to_id;
         buffer_to_id.reserve(nodes.size() * 2);
-        std::size_t next_id = 0;
+        size_t next_id = 0;
 
-        auto getCanonicalBufferId = [&](const std::shared_ptr<gpu::vector> &buf) -> std::size_t {
+        auto getCanonicalBufferId = [&](const std::shared_ptr<gpu::vector> &buf) -> size_t {
             if (!buf)
             {
-                return static_cast<std::size_t>(-1);
+                return static_cast<size_t>(-1);
             }
             VkBuffer handle = buf->getBuffer();
             if (handle == VK_NULL_HANDLE)
@@ -65,17 +65,17 @@ private:
             return it->second;
         };
 
-        for (std::size_t i = 0; i < nodes.size(); ++i)
+        for (size_t i = 0; i < nodes.size(); ++i)
         {
-            graph_signature_hash ^= static_cast<std::size_t>(nodes[i].pipeline_id) + 0x9e3779b9 + (graph_signature_hash << 6) + (graph_signature_hash >> 2);
-            graph_signature_hash ^= static_cast<std::size_t>(nodes[i].workgroup_count_x) + 0x9e3779b9 + (graph_signature_hash << 6) + (graph_signature_hash >> 2);
-            graph_signature_hash ^= static_cast<std::size_t>(nodes[i].workgroup_count_y) + 0x9e3779b9 + (graph_signature_hash << 6) + (graph_signature_hash >> 2);
-            graph_signature_hash ^= static_cast<std::size_t>(nodes[i].workgroup_count_z) + 0x9e3779b9 + (graph_signature_hash << 6) + (graph_signature_hash >> 2);
+            graph_signature_hash ^= static_cast<size_t>(nodes[i].pipeline_id) + 0x9e3779b9 + (graph_signature_hash << 6) + (graph_signature_hash >> 2);
+            graph_signature_hash ^= static_cast<size_t>(nodes[i].workgroup_count_x) + 0x9e3779b9 + (graph_signature_hash << 6) + (graph_signature_hash >> 2);
+            graph_signature_hash ^= static_cast<size_t>(nodes[i].workgroup_count_y) + 0x9e3779b9 + (graph_signature_hash << 6) + (graph_signature_hash >> 2);
+            graph_signature_hash ^= static_cast<size_t>(nodes[i].workgroup_count_z) + 0x9e3779b9 + (graph_signature_hash << 6) + (graph_signature_hash >> 2);
             graph_signature_hash ^= nodes[i].push_constants_data.size() + 0x9e3779b9 + (graph_signature_hash << 6) + (graph_signature_hash >> 2);
 
             for (const auto &buffer : nodes[i].buffers)
             {
-                std::size_t canon_id = getCanonicalBufferId(buffer);
+                size_t canon_id = getCanonicalBufferId(buffer);
                 graph_signature_hash ^= canon_id + 0x9e3779b9 + (graph_signature_hash << 6) + (graph_signature_hash >> 2);
             }
         }
@@ -105,7 +105,7 @@ private:
                 }
             }
         }
-        for (std::uint32_t frame_index = 0; frame_index < MAX_FRAMES_IN_FLIGHT; ++frame_index)
+        for (uint32_t frame_index = 0; frame_index < MAX_FRAMES_IN_FLIGHT; ++frame_index)
         {
             _template.instantiated_graphs[frame_index].setNodes(_template.fused_nodes);
         }
@@ -126,7 +126,7 @@ private:
         shader_dictionary = std::make_unique<Shader_Dictionary>("compute_shader/shader_dictionary.json");
         graph_executor = std::make_unique<Graph_Executor>(*context, *network, *pipeline_cache_manager, *shader_dictionary);
 
-        std::uint32_t initial_frame_index = context->getCurrentFrame();
+        uint32_t initial_frame_index = context->getCurrentFrame();
         context->prepareFrame();
         context->cleanGarbage(initial_frame_index);
         graph_executor->resetFrameState(initial_frame_index);
@@ -195,7 +195,7 @@ public:
             return;
         }
 
-        std::size_t graph_signature = computeGraphSignature(_raw_graph);
+        size_t graph_signature = computeGraphSignature(_raw_graph);
         auto template_iterator = cached_graph_templates.find(graph_signature);
         if (template_iterator == cached_graph_templates.end())
         {
@@ -204,7 +204,7 @@ public:
             precompileTemplatePipelines(template_iterator->second);
         }
 
-        std::uint32_t current_frame_index = context->getCurrentFrame();
+        uint32_t current_frame_index = context->getCurrentFrame();
         auto &cached_graph = template_iterator->second.instantiated_graphs[current_frame_index];
         Graph_Optimizer::applyCachedTemplateInPlace(_raw_graph, template_iterator->second, cached_graph);
         graph_executor->warmupPipelineCache(cached_graph);
@@ -219,7 +219,7 @@ public:
 
     void executeGraph(VkFence _external_fence = VK_NULL_HANDLE)
     {
-        std::uint32_t current_frame_index = context->getCurrentFrame();
+        uint32_t current_frame_index = context->getCurrentFrame();
 
         if (current_graph.getNodes().empty() && context->getTransferTasks().empty())
         {
@@ -240,7 +240,7 @@ public:
         {
             if (is_graph_cache_enabled && !current_graph.getNodes().empty())
             {
-                std::size_t graph_signature = computeGraphSignature(current_graph);
+                size_t graph_signature = computeGraphSignature(current_graph);
                 auto template_iterator = cached_graph_templates.find(graph_signature);
                 if (template_iterator == cached_graph_templates.end())
                 {
@@ -264,7 +264,7 @@ public:
             else if (!current_graph.getNodes().empty())
             {
                 Graph_Optimizer::optimize(current_graph);
-                std::size_t graph_signature = computeGraphSignature(current_graph);
+                size_t graph_signature = computeGraphSignature(current_graph);
                 if (!graph_executor->isStaticBaked(current_frame_index) ||
                     graph_executor->getStaticGraphSignature(current_frame_index) != graph_signature ||
                     !graph_executor->isStaticGraphBuffersMatching(current_graph, current_frame_index))
@@ -280,7 +280,7 @@ public:
         }
         else if (is_graph_cache_enabled && !current_graph.getNodes().empty())
         {
-            std::size_t graph_signature = computeGraphSignature(current_graph);
+            size_t graph_signature = computeGraphSignature(current_graph);
             auto template_iterator = cached_graph_templates.find(graph_signature);
             if (template_iterator == cached_graph_templates.end())
             {
@@ -305,7 +305,7 @@ public:
 
         context->advanceFrame();
 
-        std::uint32_t next_frame_index = context->getCurrentFrame();
+        uint32_t next_frame_index = context->getCurrentFrame();
         context->prepareFrame();
         context->cleanGarbage(next_frame_index);
         graph_executor->resetFrameState(next_frame_index);
@@ -343,7 +343,7 @@ public:
         Graph_Optimizer::optimize(current_graph);
     }
 
-    const std::unordered_map<std::size_t, Cached_Graph_Template> &getCachedGraphTemplates() const noexcept { return cached_graph_templates; }
+    const std::unordered_map<size_t, Cached_Graph_Template> &getCachedGraphTemplates() const noexcept { return cached_graph_templates; }
     const std::string &getShaderFolderPath() const noexcept { return shader_folder_path; }
     const Pipeline_Cache_Manager &getPipelineCacheManager() const noexcept { return *pipeline_cache_manager; }
     Pipeline_Cache_Manager &getPipelineCacheManager() noexcept { return *pipeline_cache_manager; }

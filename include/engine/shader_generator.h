@@ -22,7 +22,7 @@ enum class Buffer_Access
 
 struct Specialization_Constant_Entry
 {
-    std::uint32_t constant_id;
+    uint32_t constant_id;
     std::string name;
     std::string type_name;
     std::string default_val;
@@ -30,12 +30,12 @@ struct Specialization_Constant_Entry
     const std::string &getDefaultVal() const noexcept { return default_val; }
     const std::string &getTypeName() const noexcept { return type_name; }
     const std::string &getName() const noexcept { return name; }
-    std::uint32_t getConstantId() const noexcept { return constant_id; }
+    uint32_t getConstantId() const noexcept { return constant_id; }
 
     void setDefaultVal(const std::string &_default_val) { default_val = _default_val; }
     void setTypeName(const std::string &_type_name) { type_name = _type_name; }
     void setName(const std::string &_name) { name = _name; }
-    void setConstantId(std::uint32_t _constant_id) noexcept { constant_id = _constant_id; }
+    void setConstantId(uint32_t _constant_id) noexcept { constant_id = _constant_id; }
 };
 
 class Specialization_Map_Builder
@@ -46,14 +46,14 @@ private:
 
 public:
     template <typename T>
-    void addConstant(std::uint32_t _constant_id, const T &_value)
+    void addConstant(uint32_t _constant_id, const T &_value)
     {
-        std::size_t offset = data.size();
-        std::size_t size = sizeof(T);
+        size_t offset = data.size();
+        size_t size = sizeof(T);
 
         entries.push_back(VkSpecializationMapEntry{
             .constantID = _constant_id,
-            .offset = static_cast<std::uint32_t>(offset),
+            .offset = static_cast<uint32_t>(offset),
             .size = size});
 
         const auto *byte_pointer = reinterpret_cast<const std::uint8_t *>(&_value);
@@ -63,7 +63,7 @@ public:
     VkSpecializationInfo build() const noexcept
     {
         return VkSpecializationInfo{
-            .mapEntryCount = static_cast<std::uint32_t>(entries.size()),
+            .mapEntryCount = static_cast<uint32_t>(entries.size()),
             .pMapEntries = entries.data(),
             .dataSize = data.size(),
             .pData = data.data()};
@@ -90,11 +90,11 @@ public:
 class Shader_Generator
 {
 private:
-    std::uint32_t group_x;
-    std::uint32_t group_y;
-    std::uint32_t group_z;
-    std::uint32_t current_binding = 0;
-    std::uint32_t var_counter = 0;
+    uint32_t group_x;
+    uint32_t group_y;
+    uint32_t group_z;
+    uint32_t current_binding = 0;
+    uint32_t var_counter = 0;
     std::string default_data_type = "float";
 
     std::ostringstream header_stream;
@@ -109,7 +109,7 @@ private:
     std::vector<Specialization_Constant_Entry> spec_constants;
 
 public:
-    Shader_Generator(std::uint32_t _group_x, std::uint32_t _group_y = 1, std::uint32_t _group_z = 1, const std::string &_default_data_type = "float")
+    Shader_Generator(uint32_t _group_x, uint32_t _group_y = 1, uint32_t _group_z = 1, const std::string &_default_data_type = "float")
         : group_x(_group_x), group_y(_group_y), group_z(_group_z), default_data_type(_default_data_type)
     {
         if (default_data_type == "float16_t")
@@ -148,7 +148,7 @@ public:
         is_control_flow_enabled = true;
     }
 
-    void addSpecializationConstant(std::uint32_t _constant_id,
+    void addSpecializationConstant(uint32_t _constant_id,
                                    const std::string &_name,
                                    const std::string &_type_name = "uint",
                                    const std::string &_default_value = "0")
@@ -169,7 +169,7 @@ public:
                                              _constant_id, _type_name, _name, _default_value);
     }
 
-    std::string addBuffer(std::uint32_t _binding_index,
+    std::string addBuffer(uint32_t _binding_index,
                           const std::string &_buffer_name = "",
                           const std::string &_type_name = "",
                           Buffer_Access _access = Buffer_Access::READ_WRITE)
@@ -219,7 +219,7 @@ public:
         bindings_stream << "} pc;\n\n";
     }
 
-    std::string addSharedMemory(std::uint32_t _size, const std::string &_prefix = "shared_mem", const std::string &_type_name = "")
+    std::string addSharedMemory(uint32_t _size, const std::string &_prefix = "shared_mem", const std::string &_type_name = "")
     {
         std::string resolved_type = _type_name.empty() ? default_data_type : _type_name;
         std::string name = std::format("{}_{}", _prefix, var_counter++);
@@ -310,16 +310,16 @@ public:
     void setDefaultDataType(const std::string &_type_name) noexcept { default_data_type = _type_name; }
     const std::vector<Specialization_Constant_Entry> &getSpecializationConstants() const noexcept { return spec_constants; }
     void setSpecializationConstants(const std::vector<Specialization_Constant_Entry> &_constants) { spec_constants = _constants; }
-    std::uint32_t getCurrentBinding() const noexcept { return current_binding; }
-    std::uint32_t getVarCounter() const noexcept { return var_counter; }
-    std::uint32_t getGroupX() const noexcept { return group_x; }
-    std::uint32_t getGroupY() const noexcept { return group_y; }
-    std::uint32_t getGroupZ() const noexcept { return group_z; }
-    void setCurrentBinding(std::uint32_t _binding) noexcept { current_binding = _binding; }
-    void setVarCounter(std::uint32_t _counter) noexcept { var_counter = _counter; }
-    void setGroupX(std::uint32_t _group_x) noexcept { group_x = _group_x; }
-    void setGroupY(std::uint32_t _group_y) noexcept { group_y = _group_y; }
-    void setGroupZ(std::uint32_t _group_z) noexcept { group_z = _group_z; }
+    uint32_t getCurrentBinding() const noexcept { return current_binding; }
+    uint32_t getVarCounter() const noexcept { return var_counter; }
+    uint32_t getGroupX() const noexcept { return group_x; }
+    uint32_t getGroupY() const noexcept { return group_y; }
+    uint32_t getGroupZ() const noexcept { return group_z; }
+    void setCurrentBinding(uint32_t _binding) noexcept { current_binding = _binding; }
+    void setVarCounter(uint32_t _counter) noexcept { var_counter = _counter; }
+    void setGroupX(uint32_t _group_x) noexcept { group_x = _group_x; }
+    void setGroupY(uint32_t _group_y) noexcept { group_y = _group_y; }
+    void setGroupZ(uint32_t _group_z) noexcept { group_z = _group_z; }
     bool isControlFlowEnabled() const noexcept { return is_control_flow_enabled; }
     bool isSubgroupEnabled() const noexcept { return is_subgroup_enabled; }
     bool isFloat16Enabled() const noexcept { return is_float16_enabled; }

@@ -75,7 +75,7 @@ public:
             loss_matrix.setExecutionTarget(_prediction_matrix.getExecutionTarget());
         }
 
-        std::size_t total_elements = _prediction_matrix.getRows() * _prediction_matrix.getColumns();
+        size_t total_elements = _prediction_matrix.getRows() * _prediction_matrix.getColumns();
         _prediction_matrix.mseLoss(_target_matrix, loss_matrix);
         return loss_matrix.getScalar() / static_cast<float>(total_elements);
     }
@@ -128,7 +128,7 @@ public:
             gradient_matrix.setExecutionTarget(execution_target);
         }
 
-        std::size_t total_elements = _prediction_matrix.getRows() * _prediction_matrix.getColumns();
+        size_t total_elements = _prediction_matrix.getRows() * _prediction_matrix.getColumns();
         float scaling_factor = 2.0f / static_cast<float>(total_elements);
 
         _prediction_matrix.sub(synced_target_matrix, difference_matrix);

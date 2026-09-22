@@ -5,7 +5,7 @@
 
 #include "helper/logger.h"
 
-enum class Decay_Mode : std::uint32_t
+enum class Decay_Mode : uint32_t
 {
     NO_DECAY = 0,
     STEP_DECAY,

@@ -138,7 +138,7 @@ public:
         _output_file_stream.write(reinterpret_cast<const char *>(&current_learning_rate), sizeof(current_learning_rate));
         _output_file_stream.write(reinterpret_cast<const char *>(&current_epoch), sizeof(current_epoch));
 
-        std::uint32_t vector_size = static_cast<std::uint32_t>(decay_epochs.size());
+        uint32_t vector_size = static_cast<uint32_t>(decay_epochs.size());
         _output_file_stream.write(reinterpret_cast<const char *>(&vector_size), sizeof(vector_size));
         if (vector_size > 0)
         {
@@ -154,7 +154,7 @@ public:
         _input_file_stream.read(reinterpret_cast<char *>(&current_learning_rate), sizeof(current_learning_rate));
         _input_file_stream.read(reinterpret_cast<char *>(&current_epoch), sizeof(current_epoch));
 
-        std::uint32_t vector_size = 0;
+        uint32_t vector_size = 0;
         _input_file_stream.read(reinterpret_cast<char *>(&vector_size), sizeof(vector_size));
         decay_epochs.resize(vector_size);
         if (vector_size > 0)

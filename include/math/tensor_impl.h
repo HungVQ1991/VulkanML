@@ -24,8 +24,8 @@ class Tensor_Impl
 protected:
     Shape shape;
     Stride strides;
-    std::size_t byte_offset = 0;
-    std::size_t total_elements = 0;
+    size_t byte_offset = 0;
+    size_t total_elements = 0;
     Data_Type data_type = Data_Type::FLOAT32;
 
     void updateShapeAndStrides(Shape target_shape)
@@ -47,8 +47,8 @@ public:
 
     bool isContiguous() const noexcept
     {
-        std::size_t acc_stride = 1;
-        for (std::size_t i = shape.getRank(); i > 0; --i)
+        size_t acc_stride = 1;
+        for (size_t i = shape.getRank(); i > 0; --i)
         {
             if (shape[i - 1] == 1)
                 continue;
@@ -92,10 +92,10 @@ public:
         }
     }
 
-    virtual void reshape(std::size_t rows, std::size_t columns) = 0;
+    virtual void reshape(size_t rows, size_t columns) = 0;
     virtual void reshape(Shape new_shape) = 0;
-    virtual void permute(const std::vector<std::size_t> &axes_permutation, Tensor_Impl &output) const = 0;
-    virtual void slice(std::size_t axis, std::size_t start, std::size_t length, Tensor_Impl &output) const = 0;
+    virtual void permute(const std::vector<size_t> &axes_permutation, Tensor_Impl &output) const = 0;
+    virtual void slice(size_t axis, size_t start, size_t length, Tensor_Impl &output) const = 0;
     virtual void contiguous(Tensor_Impl &output) const = 0;
     virtual void to(Data_Type target_type, Tensor_Impl &output) const = 0;
 
@@ -125,39 +125,39 @@ public:
                             float beta1,
                             float beta2,
                             float epsilon,
-                            std::size_t timestep,
+                            size_t timestep,
                             float max_gradient = 1.0f,
                             float inv_scale = 1.0f) = 0;
 
     virtual void matmulAdd(const Tensor_Impl &weights, const Tensor_Impl &biases, Tensor_Impl &output) const = 0;
 
     virtual void conv2d(const Tensor_Impl &weights, const Tensor_Impl &biases, Tensor_Impl &output,
-                        std::uint32_t input_height, std::uint32_t input_width, std::uint32_t input_channels,
-                        std::uint32_t output_channels, std::uint32_t kernel_size,
-                        std::uint32_t stride, std::uint32_t padding) const = 0;
+                        uint32_t input_height, uint32_t input_width, uint32_t input_channels,
+                        uint32_t output_channels, uint32_t kernel_size,
+                        uint32_t stride, uint32_t padding) const = 0;
 
     virtual void conv2dBackwardInput(const Tensor_Impl &weights, Tensor_Impl &input_gradient,
-                                     std::uint32_t input_height, std::uint32_t input_width, std::uint32_t input_channels,
-                                     std::uint32_t output_height, std::uint32_t output_width, std::uint32_t output_channels,
-                                     std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const = 0;
+                                     uint32_t input_height, uint32_t input_width, uint32_t input_channels,
+                                     uint32_t output_height, uint32_t output_width, uint32_t output_channels,
+                                     uint32_t kernel_size, uint32_t stride, uint32_t padding) const = 0;
 
     virtual void conv2dBackwardWeight(const Tensor_Impl &output_gradient, Tensor_Impl &weight_gradient, Tensor_Impl &bias_gradient,
-                                      std::uint32_t input_height, std::uint32_t input_width, std::uint32_t input_channels,
-                                      std::uint32_t output_height, std::uint32_t output_width, std::uint32_t output_channels,
-                                      std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding,
+                                      uint32_t input_height, uint32_t input_width, uint32_t input_channels,
+                                      uint32_t output_height, uint32_t output_width, uint32_t output_channels,
+                                      uint32_t kernel_size, uint32_t stride, uint32_t padding,
                                       Tensor_Impl *im2col_scratch = nullptr) const = 0;
 
     virtual void maxpool2d(Tensor_Impl &output, Tensor_Impl &output_mask,
-                           std::uint32_t input_height, std::uint32_t input_width, std::uint32_t channels,
-                           std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const = 0;
+                           uint32_t input_height, uint32_t input_width, uint32_t channels,
+                           uint32_t kernel_size, uint32_t stride, uint32_t padding) const = 0;
 
     virtual void maxpool2dBackward(const Tensor_Impl &mask, Tensor_Impl &input_gradient,
-                                   std::uint32_t input_height, std::uint32_t input_width, std::uint32_t channels,
-                                   std::uint32_t output_height, std::uint32_t output_width,
-                                   std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const = 0;
+                                   uint32_t input_height, uint32_t input_width, uint32_t channels,
+                                   uint32_t output_height, uint32_t output_width,
+                                   uint32_t kernel_size, uint32_t stride, uint32_t padding) const = 0;
 
-    virtual void globalAvgPool2d(Tensor_Impl &output, std::uint32_t input_height, std::uint32_t input_width, std::uint32_t channels) const = 0;
-    virtual void globalAvgPool2dBackward(Tensor_Impl &input_gradient, std::uint32_t input_height, std::uint32_t input_width, std::uint32_t channels) const = 0;
+    virtual void globalAvgPool2d(Tensor_Impl &output, uint32_t input_height, uint32_t input_width, uint32_t channels) const = 0;
+    virtual void globalAvgPool2dBackward(Tensor_Impl &input_gradient, uint32_t input_height, uint32_t input_width, uint32_t channels) const = 0;
 
     virtual void batchNormForward(const Tensor_Impl &gamma, const Tensor_Impl &beta,
                                   Tensor_Impl &running_mean, Tensor_Impl &running_variance,
@@ -176,12 +176,12 @@ public:
                                     Tensor_Impl &running_mean, Tensor_Impl &running_variance,
                                     Tensor_Impl &batch_mean, Tensor_Impl &batch_variance,
                                     Tensor_Impl &normalized_input, Tensor_Impl &output,
-                                    std::uint32_t input_height, std::uint32_t input_width, std::uint32_t input_channels,
+                                    uint32_t input_height, uint32_t input_width, uint32_t input_channels,
                                     float epsilon, float momentum, bool is_training) const = 0;
 
     virtual void batchNorm2dBackward(const Tensor_Impl &gamma, const Tensor_Impl &batch_variance, const Tensor_Impl &normalized_input,
                                      Tensor_Impl &gamma_gradient, Tensor_Impl &beta_gradient, Tensor_Impl &input_gradient,
-                                     std::uint32_t input_height, std::uint32_t input_width, std::uint32_t input_channels, float epsilon) const = 0;
+                                     uint32_t input_height, uint32_t input_width, uint32_t input_channels, float epsilon) const = 0;
 
     virtual void cceLoss(const Tensor_Impl &target, Tensor_Impl &output, float epsilon) const = 0;
     virtual void mseLoss(const Tensor_Impl &target, Tensor_Impl &output) const = 0;
@@ -191,25 +191,25 @@ public:
 
     virtual void concatenateCollumns(const Tensor_Impl &other, Tensor_Impl &output) const = 0;
     virtual void concatenateRows(const Tensor_Impl &other, Tensor_Impl &output) const = 0;
-    virtual void splitCollumns(std::size_t split_index, Tensor_Impl &result_left, Tensor_Impl &result_right) const = 0;
-    virtual void splitRows(std::size_t split_index, Tensor_Impl &result_up, Tensor_Impl &result_down) const = 0;
+    virtual void splitCollumns(size_t split_index, Tensor_Impl &result_left, Tensor_Impl &result_right) const = 0;
+    virtual void splitRows(size_t split_index, Tensor_Impl &result_up, Tensor_Impl &result_down) const = 0;
     
     const Shape &getShape() const noexcept { return shape; }
     const Stride &getStrides() const noexcept { return strides; }
-    std::size_t getColumns() const noexcept
+    size_t getColumns() const noexcept
     {
         if (shape.getRank() == 0)
             return 0;
         if (shape.getRank() == 1)
             return shape[0];
-        std::size_t cols = 1;
-        for (std::size_t i = 1; i < shape.getRank(); ++i)
+        size_t cols = 1;
+        for (size_t i = 1; i < shape.getRank(); ++i)
         {
             cols *= shape[i];
         }
         return cols;
     }
-    std::size_t getRows() const noexcept
+    size_t getRows() const noexcept
     {
         if (shape.getRank() == 0)
             return 0;
@@ -217,15 +217,15 @@ public:
             return 1;
         return shape[0];
     }
-    std::size_t getTotalElements() const noexcept { return total_elements; }
-    std::size_t getByteOffset() const noexcept { return byte_offset; }
-    std::size_t getRank() const noexcept { return shape.getRank(); }
-    std::size_t getCols() const noexcept { return getColumns(); }
+    size_t getTotalElements() const noexcept { return total_elements; }
+    size_t getByteOffset() const noexcept { return byte_offset; }
+    size_t getRank() const noexcept { return shape.getRank(); }
+    size_t getCols() const noexcept { return getColumns(); }
 
     void setShape(const Shape &_shape) { updateShapeAndStrides(_shape); }
     void setStrides(const Stride &_strides) noexcept { strides = _strides; }
-    void setTotalElements(std::size_t _total_elements) noexcept { total_elements = _total_elements; }
-    void setByteOffset(std::size_t _byte_offset) noexcept { byte_offset = _byte_offset; }
+    void setTotalElements(size_t _total_elements) noexcept { total_elements = _total_elements; }
+    void setByteOffset(size_t _byte_offset) noexcept { byte_offset = _byte_offset; }
     Data_Type getDataType() const noexcept { return data_type; }
     void setDataType(Data_Type _type) noexcept { data_type = _type; }
 };

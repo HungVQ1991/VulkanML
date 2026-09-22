@@ -116,9 +116,9 @@ public:
         }
         float norm_value = static_cast<float>(std::sqrt(sum_of_squares));
 
-        std::size_t sample_size = std::min<std::size_t>(4, host_data.size());
+        size_t sample_size = std::min<size_t>(4, host_data.size());
         std::string sample_string;
-        for (std::size_t i = 0; i < sample_size; ++i)
+        for (size_t i = 0; i < sample_size; ++i)
         {
             sample_string += std::format("{:.4e} ", host_data[i]);
         }
@@ -161,7 +161,7 @@ public:
             getEnumString<Layer_Type>(getLayerType())));
     }
 
-    virtual std::function<float(std::mt19937&)> getPopulationParameterInitializer(std::size_t param_index) const
+    virtual std::function<float(std::mt19937&)> getPopulationParameterInitializer(size_t param_index) const
     {
         return [](std::mt19937&) { return 0.0f; }; 
     }
@@ -185,12 +185,12 @@ public:
     virtual std::vector<std::pair<Tensor *, Tensor *>> getParamsAndGrads() { return getParametersAndGradients(); }
     virtual std::vector<Shape> getPopulationParameterDims() const { return {}; }
     virtual std::vector<bool> getPopulationParameterIsEvolvable() const { return std::vector<bool>(getPopulationParameterDims().size(), true); }
-    virtual std::vector<float> getPopulationParameter(std::size_t param_index) const { return {}; }
+    virtual std::vector<float> getPopulationParameter(size_t param_index) const { return {}; }
     virtual Execution_Target getExecutionTarget() const = 0;
     virtual Layer_Type getLayerType() const = 0;
     virtual bool isAccumulated() const noexcept { return is_accumulated; }
 
-    virtual void setPopulationParameter(std::size_t param_index, std::vector<float> flat_data) {}
+    virtual void setPopulationParameter(size_t param_index, std::vector<float> flat_data) {}
     virtual void setExecutionTarget(Execution_Target _execution_target) = 0;
     virtual void setTarget(Execution_Target _execution_target) { setExecutionTarget(_execution_target); }
     virtual void setAccumulated(bool _is_accumulated) noexcept { is_accumulated = _is_accumulated; }

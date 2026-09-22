@@ -10,7 +10,7 @@
 #include "learning_rate/ilearning_rate.h"
 #include "math/tensor.h"
 
-enum class Optimizer_Type : std::uint32_t
+enum class Optimizer_Type : uint32_t
 {
     SGD_OPTIMIZER,
     ADAM_OPTIMIZER,

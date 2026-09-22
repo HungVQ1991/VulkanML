@@ -147,7 +147,7 @@ public:
             loss_scaler.scaleGradient(gradient_tensor);
         }
 
-        for (std::size_t i = layers.size(); i > 0; --i)
+        for (size_t i = layers.size(); i > 0; --i)
         {
             gradient_tensor = layers[i - 1]->backward(gradient_tensor);
         }
@@ -197,7 +197,7 @@ public:
         zeroGradients();
     }
 
-    void compileAndWarmup(std::size_t _batch_size, std::size_t _input_dimension, std::size_t _output_dimension)
+    void compileAndWarmup(size_t _batch_size, size_t _input_dimension, size_t _output_dimension)
     {
         if (layers.empty())
         {
@@ -235,7 +235,7 @@ public:
     void printL2Norms()
     {
         auto parameter_gradient_pairs = getParametersAndGradients();
-        std::size_t parameter_index = 0;
+        size_t parameter_index = 0;
 
         auto compute_l2_norm = [](const Tensor &_tensor) -> float
         {
@@ -378,11 +378,11 @@ public:
 
         compileAndWarmup(_batch_size, _input_dimension, _output_dimension);
 
-        for (std::size_t epoch = training_context.getCurrentEpoch(); epoch < _total_epochs; ++epoch)
+        for (size_t epoch = training_context.getCurrentEpoch(); epoch < _total_epochs; ++epoch)
         {
             Logger::logMessage("Start of epoch " + std::to_string(epoch), Log_Level::LOG_INFO, true);
             training_context.setCurrentEpoch(epoch);
-            for (std::size_t step_index = 0; step_index < _steps_per_epoch; ++step_index)
+            for (size_t step_index = 0; step_index < _steps_per_epoch; ++step_index)
             {
                 // Logger::logMessage("Start of step " + std::to_string(step_index), Log_Level::LOG_INFO, true);
                 Batch_Data batch_data = _data_pipeline.nextBatch(_batch_size, _input_dimension, _output_dimension);
@@ -439,7 +439,7 @@ public:
         const char magic_header[4] = {'N', 'N', 'I', '1'};
         output_file_stream.write(magic_header, 4);
 
-        std::uint32_t total_layer_count = static_cast<std::uint32_t>(layers.size());
+        uint32_t total_layer_count = static_cast<uint32_t>(layers.size());
         output_file_stream.write(reinterpret_cast<const char *>(&total_layer_count), sizeof(total_layer_count));
 
         for (const auto &layer : layers)
@@ -484,7 +484,7 @@ public:
             throw std::runtime_error("Invalid magic header for inference model");
         }
 
-        std::uint32_t total_layer_count = 0;
+        uint32_t total_layer_count = 0;
         input_file_stream.read(reinterpret_cast<char *>(&total_layer_count), sizeof(total_layer_count));
 
         Logger::logMessage(Input_Format{"Neural_Network::loadInference: Loading inference model from {}, total_layers={}",
@@ -498,7 +498,7 @@ public:
         layers.clear();
         layers.reserve(total_layer_count);
 
-        for (std::uint32_t i = 0; i < total_layer_count; ++i)
+        for (uint32_t i = 0; i < total_layer_count; ++i)
         {
             Layer_Type layer_type;
             input_file_stream.read(reinterpret_cast<char *>(&layer_type), sizeof(layer_type));
@@ -524,7 +524,7 @@ public:
         Logger::logMessage(Input_Format{"Neural_Network::loadInference: Inference loaded from {}", _file_path}, Log_Level::LOG_INFO, true, 1);
     }
 
-    void saveTrainingCheckpoint(const std::string &_file_path, std::size_t _current_epoch) const
+    void saveTrainingCheckpoint(const std::string &_file_path, size_t _current_epoch) const
     {
         std::ofstream output_file_stream(_file_path, std::ios::binary);
         if (!output_file_stream.is_open())
@@ -548,7 +548,7 @@ public:
         const char magic_header[4] = {'N', 'N', 'C', 'K'};
         output_file_stream.write(magic_header, 4);
 
-        std::uint32_t epoch_value = static_cast<std::uint32_t>(_current_epoch);
+        uint32_t epoch_value = static_cast<uint32_t>(_current_epoch);
         output_file_stream.write(reinterpret_cast<const char *>(&epoch_value), sizeof(epoch_value));
 
         const ICost_Function &cost_function = training_context.getCostFunction();
@@ -566,7 +566,7 @@ public:
         output_file_stream.write(reinterpret_cast<const char *>(&optimizer_type), sizeof(optimizer_type));
         optimizer.saveCheckpoint(output_file_stream);
 
-        std::uint32_t total_layer_count = static_cast<std::uint32_t>(layers.size());
+        uint32_t total_layer_count = static_cast<uint32_t>(layers.size());
         output_file_stream.write(reinterpret_cast<const char *>(&total_layer_count), sizeof(total_layer_count));
 
         for (const auto &layer : layers)
@@ -585,7 +585,7 @@ public:
         }
     }
 
-    void loadTrainingCheckpoint(const std::string &_file_path, std::size_t _total_epochs)
+    void loadTrainingCheckpoint(const std::string &_file_path, size_t _total_epochs)
     {
         Execution_Target _execution_target = getExecutionTarget();
         std::ifstream input_file_stream(_file_path, std::ios::binary);
@@ -609,7 +609,7 @@ public:
             throw std::runtime_error("Failed to load context header");
         }
 
-        std::uint32_t total_layer_count = 0;
+        uint32_t total_layer_count = 0;
         input_file_stream.read(reinterpret_cast<char *>(&total_layer_count), sizeof(total_layer_count));
 
         Logger::logMessage(Input_Format{"Neural_Network::loadTrainingCheckpoint: Loading checkpoint from {}, total_layers={}",
@@ -623,7 +623,7 @@ public:
         layers.clear();
         layers.reserve(total_layer_count);
 
-        for (std::uint32_t i = 0; i < total_layer_count; ++i)
+        for (uint32_t i = 0; i < total_layer_count; ++i)
         {
             Layer_Type layer_type;
             input_file_stream.read(reinterpret_cast<char *>(&layer_type), sizeof(layer_type));
@@ -655,18 +655,18 @@ public:
     ILearning_Rate &getLearningRate() { return training_context.getLearningRate(); }
     const ICost_Function &getCostFunction() const { return training_context.getCostFunction(); }
     ICost_Function &getCostFunction() { return training_context.getCostFunction(); }
-    std::size_t getCurrentEpoch() const noexcept { return training_context.getCurrentEpoch(); }
+    size_t getCurrentEpoch() const noexcept { return training_context.getCurrentEpoch(); }
     const IOptimizer &getOptimizer() const { return training_context.getOptimizer(); }
     IOptimizer &getOptimizer() { return training_context.getOptimizer(); }
-    const ILayer &getLayer(std::size_t _index) const { return *layers.at(_index); }
-    ILayer &getLayer(std::size_t _index) { return *layers.at(_index); }
+    const ILayer &getLayer(size_t _index) const { return *layers.at(_index); }
+    ILayer &getLayer(size_t _index) { return *layers.at(_index); }
     const Training_Context &getTrainingContext() const noexcept { return training_context; }
     Training_Context &getTrainingContext() noexcept { return training_context; }
     const Training_Context &getContext() const noexcept { return training_context; }
     Training_Context &getContext() noexcept { return training_context; }
     const Tensor &getLastPrediction() const noexcept { return last_prediction; }
     Tensor &getLastPrediction() noexcept { return last_prediction; }
-    std::size_t getLayerCount() const noexcept { return layers.size(); }
+    size_t getLayerCount() const noexcept { return layers.size(); }
     const std::vector<std::unique_ptr<ILayer>> &getLayers() const noexcept { return layers; }
     std::vector<std::unique_ptr<ILayer>> &getLayers() noexcept { return layers; }
     const Loss_Scaler &getLossScaler() const noexcept { return loss_scaler; }
@@ -747,7 +747,7 @@ public:
         return opt_reference;
     }
 
-    void setCurrentEpoch(std::size_t _epoch) noexcept { training_context.setCurrentEpoch(_epoch); }
+    void setCurrentEpoch(size_t _epoch) noexcept { training_context.setCurrentEpoch(_epoch); }
     void setLastPrediction(const Tensor &_prediction) { last_prediction = _prediction; }
 
     void setExecutionTarget(Execution_Target _new_execution_target)

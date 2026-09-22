@@ -18,7 +18,7 @@
 class Batch_Norm_Layer : public ILayer
 {
 private:
-    std::size_t input_dimension = 0;
+    size_t input_dimension = 0;
     float epsilon = 1e-5f;
     float momentum = 0.1f;
     bool is_training = true;
@@ -62,7 +62,7 @@ private:
 
 public:
     using ILayer::forward;
-    explicit Batch_Norm_Layer(std::size_t _dimension,
+    explicit Batch_Norm_Layer(size_t _dimension,
                               float _epsilon = 1e-5f,
                               float _momentum = 0.1f,
                               Execution_Target _execution_target = Execution_Target::CPU)
@@ -238,7 +238,7 @@ public:
 
     void saveConfiguration(std::ofstream &_output_file_stream) const override
     {
-        std::uint32_t feature_count = static_cast<std::uint32_t>(input_dimension);
+        uint32_t feature_count = static_cast<uint32_t>(input_dimension);
         _output_file_stream.write(reinterpret_cast<const char *>(&feature_count), sizeof(feature_count));
         _output_file_stream.write(reinterpret_cast<const char *>(&epsilon), sizeof(epsilon));
         _output_file_stream.write(reinterpret_cast<const char *>(&momentum), sizeof(momentum));
@@ -280,7 +280,7 @@ public:
         beta_gradient_tensor = Tensor::loadTensor(_input_file_stream, execution_target);
     }
 
-    std::function<float(std::mt19937&)> getPopulationParameterInitializer(std::size_t param_index) const override
+    std::function<float(std::mt19937&)> getPopulationParameterInitializer(size_t param_index) const override
     {
         if (param_index == 0 || param_index == 3)
         {
@@ -302,7 +302,7 @@ public:
                 return 0.0f;
             };
     }
-    std::vector<float> getPopulationParameter(std::size_t param_index) const override
+    std::vector<float> getPopulationParameter(size_t param_index) const override
     {
         switch (param_index)
         {
@@ -336,7 +336,7 @@ public:
     const Tensor &getInput() const override { return input_tensor; }
     const Tensor &getGamma() const noexcept { return gamma; }
     const Tensor &getBeta() const noexcept { return beta; }
-    std::size_t getInputDimension() const noexcept { return input_dimension; }
+    size_t getInputDimension() const noexcept { return input_dimension; }
     Execution_Target getExecutionTarget() const override { return execution_target; }
     Layer_Type getLayerType() const noexcept override { return Layer_Type::BATCH_NORM; }
     float getMomentum() const noexcept { return momentum; }
@@ -346,7 +346,7 @@ public:
     bool hasParameters() const noexcept override { return true; }
     bool isTraining() const noexcept { return is_training; }
 
-    void setPopulationParameter(std::size_t param_index, std::vector<float> flat_data) override
+    void setPopulationParameter(size_t param_index, std::vector<float> flat_data) override
     {
         if (flat_data.size() != input_dimension)
         {
@@ -383,7 +383,7 @@ public:
     void setGamma(const Tensor &_tensor) { gamma = _tensor; }
     void setInput(const Tensor &_tensor) { input_tensor = _tensor; }
     void setBeta(const Tensor &_tensor) { beta = _tensor; }
-    void setInputDimension(std::size_t _dimension) noexcept { input_dimension = _dimension; }
+    void setInputDimension(size_t _dimension) noexcept { input_dimension = _dimension; }
     void setExecutionTarget(Execution_Target _new_execution_target) override
     {
         if (execution_target == _new_execution_target)

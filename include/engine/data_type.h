@@ -22,11 +22,11 @@ using float16_t = std::float16_t;
 #else
 struct float16_t
 {
-    std::uint16_t value = 0;
+    uint16_t value = 0;
 };
 #endif
 
-constexpr std::size_t getDataTypeSize(Data_Type _type) noexcept
+constexpr size_t getDataTypeSize(Data_Type _type) noexcept
 {
     switch (_type)
     {
@@ -62,54 +62,54 @@ constexpr std::string_view getDataTypeName(Data_Type _type) noexcept
     }
 }
 
-inline void convertFp32ToFp16(const float *_source, float16_t *_destination, std::size_t _count) noexcept
+inline void convertFp32ToFp16(const float *_source, float16_t *_destination, size_t _count) noexcept
 {
 #if defined(__STDCPP_FLOAT16_T__)
-    for (std::size_t i = 0; i < _count; ++i)
+    for (size_t i = 0; i < _count; ++i)
     {
         _destination[i] = static_cast<std::float16_t>(_source[i]);
     }
 #else
-    for (std::size_t i = 0; i < _count; ++i)
+    for (size_t i = 0; i < _count; ++i)
     {
-        std::uint32_t x = 0;
+        uint32_t x = 0;
         std::memcpy(&x, &_source[i], sizeof(float));
-        std::uint32_t sign = (x >> 31) & 0x1;
+        uint32_t sign = (x >> 31) & 0x1;
         std::int32_t exp = static_cast<std::int32_t>((x >> 23) & 0xFF) - 127 + 15;
-        std::uint32_t mantissa = x & 0x7FFFFF;
-        std::uint16_t h = 0;
+        uint32_t mantissa = x & 0x7FFFFF;
+        uint16_t h = 0;
         if (exp <= 0)
         {
-            h = static_cast<std::uint16_t>(sign << 15);
+            h = static_cast<uint16_t>(sign << 15);
         }
         else if (exp >= 31)
         {
-            h = static_cast<std::uint16_t>((sign << 15) | 0x7C00);
+            h = static_cast<uint16_t>((sign << 15) | 0x7C00);
         }
         else
         {
-            h = static_cast<std::uint16_t>((sign << 15) | (exp << 10) | (mantissa >> 13));
+            h = static_cast<uint16_t>((sign << 15) | (exp << 10) | (mantissa >> 13));
         }
         _destination[i].value = h;
     }
 #endif
 }
 
-inline void convertFp16ToFp32(const float16_t *_source, float *_destination, std::size_t _count) noexcept
+inline void convertFp16ToFp32(const float16_t *_source, float *_destination, size_t _count) noexcept
 {
 #if defined(__STDCPP_FLOAT16_T__)
-    for (std::size_t i = 0; i < _count; ++i)
+    for (size_t i = 0; i < _count; ++i)
     {
         _destination[i] = static_cast<float>(_source[i]);
     }
 #else
-    for (std::size_t i = 0; i < _count; ++i)
+    for (size_t i = 0; i < _count; ++i)
     {
-        std::uint16_t h = _source[i].value;
-        std::uint32_t sign = (h >> 15) & 0x1;
-        std::uint32_t exp = (h >> 10) & 0x1F;
-        std::uint32_t mantissa = h & 0x3FF;
-        std::uint32_t f = 0;
+        uint16_t h = _source[i].value;
+        uint32_t sign = (h >> 15) & 0x1;
+        uint32_t exp = (h >> 10) & 0x1F;
+        uint32_t mantissa = h & 0x3FF;
+        uint32_t f = 0;
         if (exp == 0)
         {
             f = sign << 31;

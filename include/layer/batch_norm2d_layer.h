@@ -17,9 +17,9 @@
 class Batch_Norm_2d_Layer : public ILayer
 {
 private:
-    std::uint32_t input_height = 0;
-    std::uint32_t input_width = 0;
-    std::uint32_t channels = 0;
+    uint32_t input_height = 0;
+    uint32_t input_width = 0;
+    uint32_t channels = 0;
     float epsilon = 1e-5f;
     float momentum = 0.1f;
     bool is_training = true;
@@ -46,9 +46,9 @@ private:
 public:
     using ILayer::forward;
     Batch_Norm_2d_Layer(
-        std::uint32_t _height,
-        std::uint32_t _width,
-        std::uint32_t _channels,
+        uint32_t _height,
+        uint32_t _width,
+        uint32_t _channels,
         float _epsilon = 1e-5f,
         float _momentum = 0.1f,
         Execution_Target _execution_target = Execution_Target::CPU)
@@ -252,7 +252,7 @@ public:
         running_variance = Tensor::loadTensor(_input_file_stream, execution_target);
     }
 
-    std::function<float(std::mt19937&)> getPopulationParameterInitializer(std::size_t param_index) const override
+    std::function<float(std::mt19937&)> getPopulationParameterInitializer(size_t param_index) const override
     {
         if (param_index == 0 || param_index == 3)
         {
@@ -274,7 +274,7 @@ public:
                 return 0.0f;
             };
     }
-    std::vector<float> getPopulationParameter(std::size_t param_index) const override
+    std::vector<float> getPopulationParameter(size_t param_index) const override
     {
         switch (param_index)
         {
@@ -310,9 +310,9 @@ public:
     const Tensor &getBeta() const noexcept { return beta; }
     Execution_Target getExecutionTarget() const override { return execution_target; }
     Layer_Type getLayerType() const noexcept override { return Layer_Type::BATCH_NORM_2D; }
-    std::uint32_t getInputHeight() const noexcept { return input_height; }
-    std::uint32_t getInputWidth() const noexcept { return input_width; }
-    std::uint32_t getChannels() const noexcept { return channels; }
+    uint32_t getInputHeight() const noexcept { return input_height; }
+    uint32_t getInputWidth() const noexcept { return input_width; }
+    uint32_t getChannels() const noexcept { return channels; }
     float getMomentum() const noexcept { return momentum; }
     float getEpsilon() const noexcept { return epsilon; }
     bool supportsPopulationBatch() const override { return true; }
@@ -320,7 +320,7 @@ public:
     bool hasParameters() const noexcept override { return true; }
     bool isTraining() const noexcept { return is_training; }
 
-    void setPopulationParameter(std::size_t param_index, std::vector<float> flat_data) override
+    void setPopulationParameter(size_t param_index, std::vector<float> flat_data) override
     {
         if (flat_data.size() != channels)
         {
@@ -380,9 +380,9 @@ public:
         output_tensor.setExecutionTarget(_new_execution_target);
         input_gradient_tensor.setExecutionTarget(_new_execution_target);
     }
-    void setInputHeight(std::uint32_t _height) noexcept { input_height = _height; }
-    void setInputWidth(std::uint32_t _width) noexcept { input_width = _width; }
-    void setChannels(std::uint32_t _channels) noexcept { channels = _channels; }
+    void setInputHeight(uint32_t _height) noexcept { input_height = _height; }
+    void setInputWidth(uint32_t _width) noexcept { input_width = _width; }
+    void setChannels(uint32_t _channels) noexcept { channels = _channels; }
     void setMomentum(float _momentum) noexcept { momentum = _momentum; }
     void setEpsilon(float _epsilon) noexcept { epsilon = _epsilon; }
     void setIsForwardCompleted(bool _is_completed) noexcept { is_forward_completed = _is_completed; }

@@ -23,10 +23,10 @@
 class Res_Net_20_Layer : public ILayer
 {
 private:
-    std::uint32_t input_height = 32;
-    std::uint32_t input_width = 32;
-    std::uint32_t input_channels = 3;
-    std::uint32_t num_classes = 100;
+    uint32_t input_height = 32;
+    uint32_t input_width = 32;
+    uint32_t input_channels = 3;
+    uint32_t num_classes = 100;
 
     Execution_Target execution_target = Execution_Target::CPU;
 
@@ -45,19 +45,19 @@ private:
         layers.clear();
         layers.reserve(14);
 
-        std::uint32_t current_h = input_height;
-        std::uint32_t current_w = input_width;
+        uint32_t current_h = input_height;
+        uint32_t current_w = input_width;
 
         layers.push_back(std::make_unique<Conv2d_Layer>(current_h, current_w, input_channels, 16, 3, 1, 1, execution_target));
         layers.push_back(std::make_unique<Batch_Norm_2d_Layer>(current_h, current_w, 16, 1e-5f, 0.1f, execution_target));
         layers.push_back(std::make_unique<Gelu_Layer>(execution_target));
 
-        auto add_stage = [this, &current_h, &current_w](std::uint32_t _in_channels, std::uint32_t _out_channels, std::uint32_t _stride, std::size_t _count)
+        auto add_stage = [this, &current_h, &current_w](uint32_t _in_channels, uint32_t _out_channels, uint32_t _stride, size_t _count)
         {
-            for (std::size_t i = 0; i < _count; ++i)
+            for (size_t i = 0; i < _count; ++i)
             {
-                std::uint32_t block_stride = (i == 0) ? _stride : 1;
-                std::uint32_t block_in_channels = (i == 0) ? _in_channels : _out_channels;
+                uint32_t block_stride = (i == 0) ? _stride : 1;
+                uint32_t block_in_channels = (i == 0) ? _in_channels : _out_channels;
                 layers.push_back(std::make_unique<Res_Net_Block_2d_Layer>(
                     current_h, current_w, block_in_channels, _out_channels, block_stride, execution_target));
                 current_h = (current_h + block_stride - 1) / block_stride;
@@ -76,10 +76,10 @@ private:
 public:
     using ILayer::forward;
     Res_Net_20_Layer(
-        std::uint32_t _height = 32,
-        std::uint32_t _width = 32,
-        std::uint32_t _input_channels = 3,
-        std::uint32_t _num_classes = 100,
+        uint32_t _height = 32,
+        uint32_t _width = 32,
+        uint32_t _input_channels = 3,
+        uint32_t _num_classes = 100,
         Execution_Target _execution_target = Execution_Target::CPU)
         : input_height(_height),
           input_width(_width),
@@ -197,12 +197,12 @@ public:
         }
     }
 
-    std::function<float(std::mt19937&)> getPopulationParameterInitializer(std::size_t param_index) const override
+    std::function<float(std::mt19937&)> getPopulationParameterInitializer(size_t param_index) const override
     {
-        std::size_t current_offset = 0;
+        size_t current_offset = 0;
         for (const auto& layer : layers)
         {
-            std::size_t count = layer->getPopulationParameterDims().size();
+            size_t count = layer->getPopulationParameterDims().size();
             if (param_index < current_offset + count)
             {
                 return layer->getPopulationParameterInitializer(param_index - current_offset);
@@ -221,12 +221,12 @@ public:
         }
         return all_parameters;
     }
-    std::vector<float> getPopulationParameter(std::size_t param_index) const override
+    std::vector<float> getPopulationParameter(size_t param_index) const override
     {
-        std::size_t current_offset = 0;
+        size_t current_offset = 0;
         for (const auto &layer : layers)
         {
-            std::size_t count = layer->getPopulationParameterDims().size();
+            size_t count = layer->getPopulationParameterDims().size();
             if (param_index < current_offset + count)
             {
                 return layer->getPopulationParameter(param_index - current_offset);
@@ -260,10 +260,10 @@ public:
     const Tensor &getInput() const override { return input_tensor; }
     const Tensor &getOutput() const override { return output_tensor; }
     Execution_Target getExecutionTarget() const override { return execution_target; }
-    std::uint32_t getInputChannels() const noexcept { return input_channels; }
-    std::uint32_t getInputHeight() const noexcept { return input_height; }
-    std::uint32_t getNumClasses() const noexcept { return num_classes; }
-    std::uint32_t getInputWidth() const noexcept { return input_width; }
+    uint32_t getInputChannels() const noexcept { return input_channels; }
+    uint32_t getInputHeight() const noexcept { return input_height; }
+    uint32_t getNumClasses() const noexcept { return num_classes; }
+    uint32_t getInputWidth() const noexcept { return input_width; }
     Layer_Type getLayerType() const noexcept override { return Layer_Type::RES_NET_20; }
     bool supportsPopulationBatch() const noexcept override
     {
@@ -281,12 +281,12 @@ public:
     bool hasParameters() const noexcept override { return true; }
     bool isTraining() const noexcept { return is_training; }
 
-    void setPopulationParameter(std::size_t param_index, std::vector<float> flat_data) override
+    void setPopulationParameter(size_t param_index, std::vector<float> flat_data) override
     {
-        std::size_t current_offset = 0;
+        size_t current_offset = 0;
         for (auto& layer : layers)
         {
-            std::size_t count = layer->getPopulationParameterDims().size();
+            size_t count = layer->getPopulationParameterDims().size();
             if (param_index < current_offset + count)
             {
                 layer->setPopulationParameter(param_index - current_offset, std::move(flat_data));
@@ -318,10 +318,10 @@ public:
         output_tensor.setExecutionTarget(_new_execution_target);
         input_gradient_tensor.setExecutionTarget(_new_execution_target);
     }
-    void setInputChannels(std::uint32_t _channels) noexcept { input_channels = _channels; }
-    void setInputHeight(std::uint32_t _height) noexcept { input_height = _height; }
-    void setNumClasses(std::uint32_t _classes) noexcept { num_classes = _classes; }
-    void setInputWidth(std::uint32_t _width) noexcept { input_width = _width; }
+    void setInputChannels(uint32_t _channels) noexcept { input_channels = _channels; }
+    void setInputHeight(uint32_t _height) noexcept { input_height = _height; }
+    void setNumClasses(uint32_t _classes) noexcept { num_classes = _classes; }
+    void setInputWidth(uint32_t _width) noexcept { input_width = _width; }
     void setAccumulated(bool _is_accumulated) noexcept override
     {
         is_accumulated = _is_accumulated;

@@ -23,13 +23,13 @@ private:
     mutable std::vector<float> materialized_cache;
     mutable std::mutex cache_mutex;
 
-    static std::string formatDataSample(const std::vector<float> &data, std::size_t sample_limit = 5)
+    static std::string formatDataSample(const std::vector<float> &data, size_t sample_limit = 5)
     {
         if (data.empty())
             return "[]";
         std::string formatted = "[";
-        std::size_t count = std::min(data.size(), sample_limit);
-        for (std::size_t i = 0; i < count; ++i)
+        size_t count = std::min(data.size(), sample_limit);
+        for (size_t i = 0; i < count; ++i)
         {
             formatted += std::format("{:.4e}{}", data[i], (i + 1 < count) ? ", " : "");
         }
@@ -41,11 +41,11 @@ private:
         return formatted;
     }
 
-    std::size_t resolveFlatIndex(std::span<const std::size_t> indices) const noexcept
+    size_t resolveFlatIndex(std::span<const size_t> indices) const noexcept
     {
-        std::size_t elem_size = getDataTypeSize(data_type);
-        std::size_t flat_idx = byte_offset / elem_size;
-        for (std::size_t i = 0; i < indices.size(); ++i)
+        size_t elem_size = getDataTypeSize(data_type);
+        size_t flat_idx = byte_offset / elem_size;
+        for (size_t i = 0; i < indices.size(); ++i)
         {
             flat_idx += indices[i] * strides[i];
         }
@@ -55,14 +55,14 @@ private:
     template <typename Op>
     void iterateCoordinates(Op &&op) const
     {
-        std::size_t rank = shape.getRank();
+        size_t rank = shape.getRank();
         if (rank == 0 || total_elements == 0)
             return;
-        std::array<std::size_t, MAX_TENSOR_RANK> coords{};
-        for (std::size_t i = 0; i < total_elements; ++i)
+        std::array<size_t, MAX_TENSOR_RANK> coords{};
+        for (size_t i = 0; i < total_elements; ++i)
         {
             op(i, resolveFlatIndex(std::span{coords.data(), rank}));
-            for (std::size_t d = rank; d > 0; --d)
+            for (size_t d = rank; d > 0; --d)
             {
                 if (++coords[d - 1] < shape[d - 1])
                     break;
@@ -72,13 +72,13 @@ private:
     }
 
 public:
-    Cpu_Tensor_Impl(std::size_t rows, std::size_t columns)
+    Cpu_Tensor_Impl(size_t rows, size_t columns)
     {
         updateShapeAndStrides(Shape{rows, columns});
         storage_buffer = std::make_shared<std::vector<float>>(total_elements, 0.0F);
     }
 
-    Cpu_Tensor_Impl(std::size_t rows, std::size_t columns, const std::vector<float> &host_data)
+    Cpu_Tensor_Impl(size_t rows, size_t columns, const std::vector<float> &host_data)
     {
         updateShapeAndStrides(Shape{rows, columns});
         if (host_data.size() != total_elements)
@@ -91,7 +91,7 @@ public:
         storage_buffer = std::make_shared<std::vector<float>>(host_data);
     }
 
-    Cpu_Tensor_Impl(std::size_t rows, std::size_t columns, std::vector<float> &&host_data)
+    Cpu_Tensor_Impl(size_t rows, size_t columns, std::vector<float> &&host_data)
     {
         updateShapeAndStrides(Shape{rows, columns});
         if (host_data.size() != total_elements)
@@ -137,7 +137,7 @@ public:
         storage_buffer = std::make_shared<std::vector<float>>(host_data);
     }
 
-    Cpu_Tensor_Impl(Shape tensor_shape, Stride tensor_strides, std::shared_ptr<std::vector<float>> buffer, std::size_t offset_elements)
+    Cpu_Tensor_Impl(Shape tensor_shape, Stride tensor_strides, std::shared_ptr<std::vector<float>> buffer, size_t offset_elements)
     {
         shape = tensor_shape;
         strides = tensor_strides;
@@ -148,14 +148,14 @@ public:
 
     ~Cpu_Tensor_Impl() noexcept override = default;
 
-    void reshape(std::size_t rows, std::size_t columns) override
+    void reshape(size_t rows, size_t columns) override
     {
         reshape(Shape{rows, columns});
     }
 
     void reshape(Shape new_shape) override
     {
-        std::size_t new_total = new_shape.getTotalElements();
+        size_t new_total = new_shape.getTotalElements();
         if (!isContiguous() || byte_offset != 0)
         {
             Logger::logMessage(Input_Format{"Cpu_Tensor_Impl::reshape: Cannot reshape non-contiguous view directly"},
@@ -195,11 +195,11 @@ public:
         updateShapeAndStrides(new_shape);
     }
 
-    void permute(const std::vector<std::size_t> &axes_permutation, Tensor_Impl &output) const override
+    void permute(const std::vector<size_t> &axes_permutation, Tensor_Impl &output) const override
     {
         Shape new_shape = shape;
         Stride new_strides = strides;
-        for (std::size_t i = 0; i < shape.getRank(); ++i)
+        for (size_t i = 0; i < shape.getRank(); ++i)
         {
             new_shape[i] = shape[axes_permutation[i]];
             new_strides[i] = strides[axes_permutation[i]];
@@ -218,11 +218,11 @@ public:
                             Log_Level::LOG_DEBUG, true, 0, Log_Feature::TENSOR_INSPECTION);
     }
 
-    void slice(std::size_t axis, std::size_t start, std::size_t length, Tensor_Impl &output) const override
+    void slice(size_t axis, size_t start, size_t length, Tensor_Impl &output) const override
     {
         Shape new_shape = shape;
         new_shape[axis] = length;
-        std::size_t additional_offset = start * strides[axis];
+        size_t additional_offset = start * strides[axis];
 
         auto &output_cpu = static_cast<Cpu_Tensor_Impl &>(output);
         output_cpu.data_type = data_type;
@@ -251,7 +251,7 @@ public:
         {
             output_cpu.storage_buffer_fp16 = std::make_shared<std::vector<float16_t>>(total_elements, static_cast<float16_t>(0.0f));
             output_cpu.storage_buffer.reset();
-            iterateCoordinates([this, &output_cpu](std::size_t out_idx, std::size_t src_idx)
+            iterateCoordinates([this, &output_cpu](size_t out_idx, size_t src_idx)
                                { (*output_cpu.storage_buffer_fp16)[out_idx] = (*storage_buffer_fp16)[src_idx]; });
         }
         else
@@ -260,7 +260,7 @@ public:
             output_cpu.storage_buffer_fp16.reset();
             if (storage_buffer)
             {
-                iterateCoordinates([this, &output_cpu](std::size_t out_idx, std::size_t src_idx)
+                iterateCoordinates([this, &output_cpu](size_t out_idx, size_t src_idx)
                                    { (*output_cpu.storage_buffer)[out_idx] = (*storage_buffer)[src_idx]; });
             }
         }
@@ -309,15 +309,15 @@ public:
         const auto &b_data = other.getData();
         auto &output_cpu = static_cast<Cpu_Tensor_Impl &>(output);
 
-        std::size_t rank_a = shape.getRank();
-        std::size_t m_dim = (rank_a >= 2) ? shape[rank_a - 2] : getRows();
-        std::size_t k_dim = (rank_a >= 2) ? shape[rank_a - 1] : getColumns();
-        std::size_t b_dim = (rank_a >= 3) ? (total_elements / (m_dim * k_dim)) : 1;
+        size_t rank_a = shape.getRank();
+        size_t m_dim = (rank_a >= 2) ? shape[rank_a - 2] : getRows();
+        size_t k_dim = (rank_a >= 2) ? shape[rank_a - 1] : getColumns();
+        size_t b_dim = (rank_a >= 3) ? (total_elements / (m_dim * k_dim)) : 1;
 
-        std::size_t rank_b = other.getShape().getRank();
-        std::size_t k_other = (rank_b >= 2) ? other.getShape()[rank_b - 2] : other.getRows();
-        std::size_t n_dim = (rank_b >= 2) ? other.getShape()[rank_b - 1] : other.getColumns();
-        std::size_t b_other = (rank_b >= 3) ? (other.getTotalElements() / (k_other * n_dim)) : 1;
+        size_t rank_b = other.getShape().getRank();
+        size_t k_other = (rank_b >= 2) ? other.getShape()[rank_b - 2] : other.getRows();
+        size_t n_dim = (rank_b >= 2) ? other.getShape()[rank_b - 1] : other.getColumns();
+        size_t b_other = (rank_b >= 3) ? (other.getTotalElements() / (k_other * n_dim)) : 1;
 
         if (k_dim != k_other)
         {
@@ -341,7 +341,7 @@ public:
         }
         else if (rank_a >= 4)
         {
-            std::vector<std::size_t> dims(shape.getDimensions().begin(), shape.getDimensions().end());
+            std::vector<size_t> dims(shape.getDimensions().begin(), shape.getDimensions().end());
             dims[rank_a - 2] = m_dim;
             dims[rank_a - 1] = n_dim;
             out_shape = Shape(dims);
@@ -354,18 +354,18 @@ public:
         output_cpu.reshape(out_shape);
         std::fill(output_cpu.storage_buffer->begin(), output_cpu.storage_buffer->end(), 0.0F);
 
-        for (std::size_t b = 0; b < b_dim; ++b)
+        for (size_t b = 0; b < b_dim; ++b)
         {
-            std::size_t a_batch_offset = b * m_dim * k_dim;
-            std::size_t b_batch_offset = broadcast_b ? 0 : (b * k_dim * n_dim);
-            std::size_t c_batch_offset = b * m_dim * n_dim;
+            size_t a_batch_offset = b * m_dim * k_dim;
+            size_t b_batch_offset = broadcast_b ? 0 : (b * k_dim * n_dim);
+            size_t c_batch_offset = b * m_dim * n_dim;
 
-            for (std::size_t i = 0; i < m_dim; ++i)
+            for (size_t i = 0; i < m_dim; ++i)
             {
-                for (std::size_t k = 0; k < k_dim; ++k)
+                for (size_t k = 0; k < k_dim; ++k)
                 {
                     float a_val = a_data[a_batch_offset + i * k_dim + k];
-                    for (std::size_t j = 0; j < n_dim; ++j)
+                    for (size_t j = 0; j < n_dim; ++j)
                     {
                         (*output_cpu.storage_buffer)[c_batch_offset + i * n_dim + j] += a_val * b_data[b_batch_offset + k * n_dim + j];
                     }
@@ -396,17 +396,17 @@ public:
 
         if (shape == other.getShape())
         {
-            for (std::size_t i = 0; i < total_elements; ++i)
+            for (size_t i = 0; i < total_elements; ++i)
             {
                 (*output_cpu.storage_buffer)[i] = a_data[i] + b_data[i];
             }
         }
         else if (is_broadcast)
         {
-            std::size_t cols = getColumns();
-            for (std::size_t r = 0; r < getRows(); ++r)
+            size_t cols = getColumns();
+            for (size_t r = 0; r < getRows(); ++r)
             {
-                for (std::size_t c = 0; c < cols; ++c)
+                for (size_t c = 0; c < cols; ++c)
                 {
                     (*output_cpu.storage_buffer)[r * cols + c] = a_data[r * cols + c] + b_data[c];
                 }
@@ -433,17 +433,17 @@ public:
 
         if (shape == other.getShape())
         {
-            for (std::size_t i = 0; i < total_elements; ++i)
+            for (size_t i = 0; i < total_elements; ++i)
             {
                 (*output_cpu.storage_buffer)[i] = a_data[i] - b_data[i];
             }
         }
         else if (is_broadcast)
         {
-            std::size_t cols = getColumns();
-            for (std::size_t r = 0; r < getRows(); ++r)
+            size_t cols = getColumns();
+            for (size_t r = 0; r < getRows(); ++r)
             {
-                for (std::size_t c = 0; c < cols; ++c)
+                for (size_t c = 0; c < cols; ++c)
                 {
                     (*output_cpu.storage_buffer)[r * cols + c] = a_data[r * cols + c] - b_data[c];
                 }
@@ -465,7 +465,7 @@ public:
         auto &output_cpu = static_cast<Cpu_Tensor_Impl &>(output);
         output_cpu.reshape(shape);
 
-        for (std::size_t i = 0; i < total_elements; ++i)
+        for (size_t i = 0; i < total_elements; ++i)
         {
             (*output_cpu.storage_buffer)[i] = a_data[i] * scalar;
         }
@@ -502,17 +502,17 @@ public:
 
         if (same_shape)
         {
-            for (std::size_t i = 0; i < total_elements; ++i)
+            for (size_t i = 0; i < total_elements; ++i)
             {
                 (*output_cpu.storage_buffer)[i] = a_data[i] * b_data[i];
             }
         }
         else if (is_broadcast)
         {
-            std::size_t cols = getColumns();
-            for (std::size_t r = 0; r < getRows(); ++r)
+            size_t cols = getColumns();
+            for (size_t r = 0; r < getRows(); ++r)
             {
-                for (std::size_t c = 0; c < cols; ++c)
+                for (size_t c = 0; c < cols; ++c)
                 {
                     (*output_cpu.storage_buffer)[r * cols + c] = a_data[r * cols + c] * b_data[c];
                 }
@@ -540,7 +540,7 @@ public:
 
         if (same_shape)
         {
-            for (std::size_t i = 0; i < total_elements; ++i)
+            for (size_t i = 0; i < total_elements; ++i)
             {
                 if (std::abs(b_data[i]) < 1e-8F)
                 {
@@ -553,10 +553,10 @@ public:
         }
         else if (is_broadcast)
         {
-            std::size_t cols = getColumns();
-            for (std::size_t r = 0; r < getRows(); ++r)
+            size_t cols = getColumns();
+            for (size_t r = 0; r < getRows(); ++r)
             {
-                for (std::size_t c = 0; c < cols; ++c)
+                for (size_t c = 0; c < cols; ++c)
                 {
                     if (std::abs(b_data[c]) < 1e-8F)
                     {
@@ -578,13 +578,13 @@ public:
     {
         const auto &a_data = getData();
         auto &output_cpu = static_cast<Cpu_Tensor_Impl &>(output);
-        std::size_t r_count = getRows();
-        std::size_t c_count = getColumns();
+        size_t r_count = getRows();
+        size_t c_count = getColumns();
         output_cpu.reshape(c_count, r_count);
 
-        for (std::size_t i = 0; i < r_count; ++i)
+        for (size_t i = 0; i < r_count; ++i)
         {
-            for (std::size_t j = 0; j < c_count; ++j)
+            for (size_t j = 0; j < c_count; ++j)
             {
                 (*output_cpu.storage_buffer)[j * r_count + i] = a_data[i * c_count + j];
             }
@@ -599,25 +599,25 @@ public:
     {
         validateSquare();
         const auto &a_data = getData();
-        std::size_t n = getRows();
+        size_t n = getRows();
         auto &output_cpu = static_cast<Cpu_Tensor_Impl &>(output);
         output_cpu.reshape(n, n);
 
         std::vector<float> aug(n * 2 * n, 0.0F);
-        for (std::size_t i = 0; i < n; ++i)
+        for (size_t i = 0; i < n; ++i)
         {
-            for (std::size_t j = 0; j < n; ++j)
+            for (size_t j = 0; j < n; ++j)
             {
                 aug[i * (2 * n) + j] = a_data[i * n + j];
             }
             aug[i * (2 * n) + (n + i)] = 1.0F;
         }
 
-        for (std::size_t i = 0; i < n; ++i)
+        for (size_t i = 0; i < n; ++i)
         {
-            std::size_t pivot_row = i;
+            size_t pivot_row = i;
             float max_val = std::abs(aug[i * (2 * n) + i]);
-            for (std::size_t k = i + 1; k < n; ++k)
+            for (size_t k = i + 1; k < n; ++k)
             {
                 float val = std::abs(aug[k * (2 * n) + i]);
                 if (val > max_val)
@@ -636,24 +636,24 @@ public:
 
             if (pivot_row != i)
             {
-                for (std::size_t j = 0; j < 2 * n; ++j)
+                for (size_t j = 0; j < 2 * n; ++j)
                 {
                     std::swap(aug[i * (2 * n) + j], aug[pivot_row * (2 * n) + j]);
                 }
             }
 
             float pivot = aug[i * (2 * n) + i];
-            for (std::size_t j = 0; j < 2 * n; ++j)
+            for (size_t j = 0; j < 2 * n; ++j)
             {
                 aug[i * (2 * n) + j] /= pivot;
             }
 
-            for (std::size_t k = 0; k < n; ++k)
+            for (size_t k = 0; k < n; ++k)
             {
                 if (k != i)
                 {
                     float factor = aug[k * (2 * n) + i];
-                    for (std::size_t j = 0; j < 2 * n; ++j)
+                    for (size_t j = 0; j < 2 * n; ++j)
                     {
                         aug[k * (2 * n) + j] -= factor * aug[i * (2 * n) + j];
                     }
@@ -661,9 +661,9 @@ public:
             }
         }
 
-        for (std::size_t i = 0; i < n; ++i)
+        for (size_t i = 0; i < n; ++i)
         {
-            for (std::size_t j = 0; j < n; ++j)
+            for (size_t j = 0; j < n; ++j)
             {
                 (*output_cpu.storage_buffer)[i * n + j] = aug[i * (2 * n) + (n + j)];
             }
@@ -691,7 +691,7 @@ public:
             return;
         }
 
-        for (std::size_t i = 0; i < total_elements; ++i)
+        for (size_t i = 0; i < total_elements; ++i)
         {
             (*output_cpu.storage_buffer)[i] = a_data[i] / norm;
         }
@@ -707,7 +707,7 @@ public:
         auto &output_cpu = static_cast<Cpu_Tensor_Impl &>(output);
         output_cpu.reshape(shape);
 
-        for (std::size_t i = 0; i < total_elements; ++i)
+        for (size_t i = 0; i < total_elements; ++i)
         {
             (*output_cpu.storage_buffer)[i] = std::max(0.0F, a_data[i]);
         }
@@ -725,7 +725,7 @@ public:
         auto &in_grad_cpu = static_cast<Cpu_Tensor_Impl &>(input_gradient);
         in_grad_cpu.reshape(shape);
 
-        for (std::size_t i = 0; i < total_elements; ++i)
+        for (size_t i = 0; i < total_elements; ++i)
         {
             (*in_grad_cpu.storage_buffer)[i] = (a_data[i] > 0.0F) ? grad_data[i] : 0.0F;
         }
@@ -743,7 +743,7 @@ public:
         constexpr float ALPHA = 0.7978845608F;
         constexpr float BETA = 0.044715F;
 
-        for (std::size_t i = 0; i < total_elements; ++i)
+        for (size_t i = 0; i < total_elements; ++i)
         {
             float x = a_data[i];
             float tanh_in = std::tanh(ALPHA * (x + BETA * x * x * x));
@@ -766,7 +766,7 @@ public:
         constexpr float ALPHA = 0.7978845608F;
         constexpr float BETA = 0.044715F;
 
-        for (std::size_t i = 0; i < total_elements; ++i)
+        for (size_t i = 0; i < total_elements; ++i)
         {
             float x = a_data[i];
             float x2 = x * x;
@@ -785,25 +785,25 @@ public:
     {
         const auto &a_data = getData();
         auto &output_cpu = static_cast<Cpu_Tensor_Impl &>(output);
-        std::size_t rows_count = getRows();
-        std::size_t cols_count = getColumns();
+        size_t rows_count = getRows();
+        size_t cols_count = getColumns();
         output_cpu.reshape(rows_count, cols_count);
 
-        for (std::size_t r = 0; r < rows_count; ++r)
+        for (size_t r = 0; r < rows_count; ++r)
         {
             float max_val = a_data[r * cols_count];
-            for (std::size_t c = 1; c < cols_count; ++c)
+            for (size_t c = 1; c < cols_count; ++c)
             {
                 max_val = std::max(max_val, a_data[r * cols_count + c]);
             }
             float sum_exp = 0.0F;
-            for (std::size_t c = 0; c < cols_count; ++c)
+            for (size_t c = 0; c < cols_count; ++c)
             {
                 float exp_val = std::exp(a_data[r * cols_count + c] - max_val);
                 (*output_cpu.storage_buffer)[r * cols_count + c] = exp_val;
                 sum_exp += exp_val;
             }
-            for (std::size_t c = 0; c < cols_count; ++c)
+            for (size_t c = 0; c < cols_count; ++c)
             {
                 (*output_cpu.storage_buffer)[r * cols_count + c] /= sum_exp;
             }
@@ -819,16 +819,16 @@ public:
         const auto &a_data = getData();
         const auto &grad_data = output_gradient.getData();
         auto &in_grad_cpu = static_cast<Cpu_Tensor_Impl &>(input_gradient);
-        std::size_t rows_count = getRows();
-        std::size_t cols_count = getColumns();
+        size_t rows_count = getRows();
+        size_t cols_count = getColumns();
         in_grad_cpu.reshape(rows_count, cols_count);
 
-        for (std::size_t r = 0; r < rows_count; ++r)
+        for (size_t r = 0; r < rows_count; ++r)
         {
-            for (std::size_t i = 0; i < cols_count; ++i)
+            for (size_t i = 0; i < cols_count; ++i)
             {
                 float acc = 0.0F;
-                for (std::size_t j = 0; j < cols_count; ++j)
+                for (size_t j = 0; j < cols_count; ++j)
                 {
                     float delta = (i == j) ? 1.0F : 0.0F;
                     float jac = a_data[r * cols_count + i] * (delta - a_data[r * cols_count + j]);
@@ -848,7 +848,7 @@ public:
         validateSameDimensions(gradient);
         const auto &grad_data = gradient.getData();
 
-        for (std::size_t i = 0; i < total_elements; ++i)
+        for (size_t i = 0; i < total_elements; ++i)
         {
             float g = grad_data[i] * inv_scale;
             if (std::isnan(g) || std::isinf(g)) continue;
@@ -871,7 +871,7 @@ public:
                     float beta1,
                     float beta2,
                     float epsilon,
-                    std::size_t timestep,
+                    size_t timestep,
                     float max_gradient = 1.0F,
                     float inv_scale = 1.0F) override
     {
@@ -886,7 +886,7 @@ public:
         float bc1 = 1.0F - std::pow(beta1, static_cast<float>(timestep));
         float bc2 = 1.0F - std::pow(beta2, static_cast<float>(timestep));
 
-        for (std::size_t i = 0; i < total_elements; ++i)
+        for (size_t i = 0; i < total_elements; ++i)
         {
             float raw_g = grad_data[i] * inv_scale;
             if (std::isnan(raw_g) || std::isinf(raw_g)) continue;
@@ -911,15 +911,15 @@ public:
         const auto &b_data = biases.getData();
         auto &output_cpu = static_cast<Cpu_Tensor_Impl &>(output);
 
-        std::size_t rank_a = shape.getRank();
-        std::size_t m_dim = (rank_a >= 2) ? shape[rank_a - 2] : getRows();
-        std::size_t k_dim = (rank_a >= 2) ? shape[rank_a - 1] : getColumns();
-        std::size_t b_dim = (rank_a >= 3) ? (total_elements / (m_dim * k_dim)) : 1;
+        size_t rank_a = shape.getRank();
+        size_t m_dim = (rank_a >= 2) ? shape[rank_a - 2] : getRows();
+        size_t k_dim = (rank_a >= 2) ? shape[rank_a - 1] : getColumns();
+        size_t b_dim = (rank_a >= 3) ? (total_elements / (m_dim * k_dim)) : 1;
 
-        std::size_t rank_w = weights.getShape().getRank();
-        std::size_t k_w = (rank_w >= 2) ? weights.getShape()[rank_w - 2] : weights.getRows();
-        std::size_t n_dim = (rank_w >= 2) ? weights.getShape()[rank_w - 1] : weights.getColumns();
-        std::size_t b_w = (rank_w >= 3) ? (weights.getTotalElements() / (k_w * n_dim)) : 1;
+        size_t rank_w = weights.getShape().getRank();
+        size_t k_w = (rank_w >= 2) ? weights.getShape()[rank_w - 2] : weights.getRows();
+        size_t n_dim = (rank_w >= 2) ? weights.getShape()[rank_w - 1] : weights.getColumns();
+        size_t b_w = (rank_w >= 3) ? (weights.getTotalElements() / (k_w * n_dim)) : 1;
 
         if (k_dim != k_w)
         {
@@ -943,7 +943,7 @@ public:
         }
         else if (rank_a >= 4)
         {
-            std::vector<std::size_t> dims(shape.getDimensions().begin(), shape.getDimensions().end());
+            std::vector<size_t> dims(shape.getDimensions().begin(), shape.getDimensions().end());
             dims[rank_a - 2] = m_dim;
             dims[rank_a - 1] = n_dim;
             out_shape = Shape(dims);
@@ -955,18 +955,18 @@ public:
 
         output_cpu.reshape(out_shape);
 
-        std::size_t b_total_elems = biases.getTotalElements();
+        size_t b_total_elems = biases.getTotalElements();
 
-        for (std::size_t b = 0; b < b_dim; ++b)
+        for (size_t b = 0; b < b_dim; ++b)
         {
-            std::size_t a_batch_offset = b * m_dim * k_dim;
-            std::size_t w_batch_offset = broadcast_w ? 0 : (b * k_dim * n_dim);
-            std::size_t c_batch_offset = b * m_dim * n_dim;
-            std::size_t b_batch_offset = (b_total_elems >= b_dim * m_dim * n_dim) ? (b * m_dim * n_dim) : 0;
+            size_t a_batch_offset = b * m_dim * k_dim;
+            size_t w_batch_offset = broadcast_w ? 0 : (b * k_dim * n_dim);
+            size_t c_batch_offset = b * m_dim * n_dim;
+            size_t b_batch_offset = (b_total_elems >= b_dim * m_dim * n_dim) ? (b * m_dim * n_dim) : 0;
 
-            for (std::size_t i = 0; i < m_dim; ++i)
+            for (size_t i = 0; i < m_dim; ++i)
             {
-                for (std::size_t j = 0; j < n_dim; ++j)
+                for (size_t j = 0; j < n_dim; ++j)
                 {
                     float bias_val = 0.0F;
                     if (b_total_elems == n_dim || biases.getRows() == 1)
@@ -984,10 +984,10 @@ public:
                     (*output_cpu.storage_buffer)[c_batch_offset + i * n_dim + j] = bias_val;
                 }
 
-                for (std::size_t k = 0; k < k_dim; ++k)
+                for (size_t k = 0; k < k_dim; ++k)
                 {
                     float in_val = a_data[a_batch_offset + i * k_dim + k];
-                    for (std::size_t j = 0; j < n_dim; ++j)
+                    for (size_t j = 0; j < n_dim; ++j)
                     {
                         (*output_cpu.storage_buffer)[c_batch_offset + i * n_dim + j] += in_val * w_data[w_batch_offset + k * n_dim + j];
                     }
@@ -1023,7 +1023,7 @@ public:
             }
             std::vector<float16_t> fp16_data(total_elements);
             convertFp32ToFp16(host_data.data(), fp16_data.data(), total_elements);
-            iterateCoordinates([this, &fp16_data](std::size_t in_idx, std::size_t dst_idx)
+            iterateCoordinates([this, &fp16_data](size_t in_idx, size_t dst_idx)
                                { (*storage_buffer_fp16)[dst_idx] = fp16_data[in_idx]; });
             return;
         }
@@ -1039,18 +1039,18 @@ public:
             return;
         }
 
-        iterateCoordinates([this, &host_data](std::size_t in_idx, std::size_t dst_idx)
+        iterateCoordinates([this, &host_data](size_t in_idx, size_t dst_idx)
                            { (*storage_buffer)[dst_idx] = host_data[in_idx]; });
     }
 
     void conv2d(const Tensor_Impl &weights, const Tensor_Impl &biases, Tensor_Impl &output,
-                std::uint32_t input_height, std::uint32_t input_width, std::uint32_t input_channels,
-                std::uint32_t output_channels, std::uint32_t kernel_size,
-                std::uint32_t stride, std::uint32_t padding) const override
+                uint32_t input_height, uint32_t input_width, uint32_t input_channels,
+                uint32_t output_channels, uint32_t kernel_size,
+                uint32_t stride, uint32_t padding) const override
     {
-        std::uint32_t batch_size = static_cast<std::uint32_t>(getRows());
-        std::uint32_t out_h = (input_height + 2 * padding - kernel_size) / stride + 1;
-        std::uint32_t out_w = (input_width + 2 * padding - kernel_size) / stride + 1;
+        uint32_t batch_size = static_cast<uint32_t>(getRows());
+        uint32_t out_h = (input_height + 2 * padding - kernel_size) / stride + 1;
+        uint32_t out_w = (input_width + 2 * padding - kernel_size) / stride + 1;
 
         const auto &in_data = getData();
         const auto &w_data = weights.getData();
@@ -1058,27 +1058,27 @@ public:
         auto &output_cpu = static_cast<Cpu_Tensor_Impl &>(output);
         output_cpu.reshape(batch_size, out_h * out_w * output_channels);
 
-        for (std::uint32_t n = 0; n < batch_size; ++n)
+        for (uint32_t n = 0; n < batch_size; ++n)
         {
-            for (std::uint32_t oh = 0; oh < out_h; ++oh)
+            for (uint32_t oh = 0; oh < out_h; ++oh)
             {
-                for (std::uint32_t ow = 0; ow < out_w; ++ow)
+                for (uint32_t ow = 0; ow < out_w; ++ow)
                 {
-                    for (std::uint32_t oc = 0; oc < output_channels; ++oc)
+                    for (uint32_t oc = 0; oc < output_channels; ++oc)
                     {
                         float sum = b_data[oc];
-                        for (std::uint32_t ky = 0; ky < kernel_size; ++ky)
+                        for (uint32_t ky = 0; ky < kernel_size; ++ky)
                         {
-                            for (std::uint32_t kx = 0; kx < kernel_size; ++kx)
+                            for (uint32_t kx = 0; kx < kernel_size; ++kx)
                             {
                                 int ih = static_cast<int>(oh * stride + ky) - static_cast<int>(padding);
                                 int iw = static_cast<int>(ow * stride + kx) - static_cast<int>(padding);
                                 if (ih >= 0 && ih < static_cast<int>(input_height) && iw >= 0 && iw < static_cast<int>(input_width))
                                 {
-                                    for (std::uint32_t ic = 0; ic < input_channels; ++ic)
+                                    for (uint32_t ic = 0; ic < input_channels; ++ic)
                                     {
-                                        std::size_t in_idx = n * input_height * input_width * input_channels + ih * input_width * input_channels + iw * input_channels + ic;
-                                        std::size_t w_idx = ky * kernel_size * input_channels * output_channels + kx * input_channels * output_channels + ic * output_channels + oc;
+                                        size_t in_idx = n * input_height * input_width * input_channels + ih * input_width * input_channels + iw * input_channels + ic;
+                                        size_t w_idx = ky * kernel_size * input_channels * output_channels + kx * input_channels * output_channels + ic * output_channels + oc;
                                         sum += in_data[in_idx] * w_data[w_idx];
                                     }
                                 }
@@ -1096,41 +1096,41 @@ public:
     }
 
     void conv2dBackwardInput(const Tensor_Impl &weights, Tensor_Impl &input_gradient,
-                             std::uint32_t input_height, std::uint32_t input_width, std::uint32_t input_channels,
-                             std::uint32_t output_height, std::uint32_t output_width, std::uint32_t output_channels,
-                             std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const override
+                             uint32_t input_height, uint32_t input_width, uint32_t input_channels,
+                             uint32_t output_height, uint32_t output_width, uint32_t output_channels,
+                             uint32_t kernel_size, uint32_t stride, uint32_t padding) const override
     {
-        std::uint32_t batch_size = static_cast<std::uint32_t>(getRows());
+        uint32_t batch_size = static_cast<uint32_t>(getRows());
         const auto &out_grad_data = getData();
         const auto &w_data = weights.getData();
         auto &in_grad_cpu = static_cast<Cpu_Tensor_Impl &>(input_gradient);
         in_grad_cpu.reshape(batch_size, input_height * input_width * input_channels);
 
-        for (std::uint32_t n = 0; n < batch_size; ++n)
+        for (uint32_t n = 0; n < batch_size; ++n)
         {
-            for (std::uint32_t ih = 0; ih < input_height; ++ih)
+            for (uint32_t ih = 0; ih < input_height; ++ih)
             {
-                for (std::uint32_t iw = 0; iw < input_width; ++iw)
+                for (uint32_t iw = 0; iw < input_width; ++iw)
                 {
-                    for (std::uint32_t ic = 0; ic < input_channels; ++ic)
+                    for (uint32_t ic = 0; ic < input_channels; ++ic)
                     {
                         float sum = 0.0F;
-                        for (std::uint32_t ky = 0; ky < kernel_size; ++ky)
+                        for (uint32_t ky = 0; ky < kernel_size; ++ky)
                         {
-                            for (std::uint32_t kx = 0; kx < kernel_size; ++kx)
+                            for (uint32_t kx = 0; kx < kernel_size; ++kx)
                             {
                                 int oh_calc = static_cast<int>(ih + padding - ky);
                                 int ow_calc = static_cast<int>(iw + padding - kx);
                                 if (oh_calc >= 0 && oh_calc % static_cast<int>(stride) == 0 && ow_calc >= 0 && ow_calc % static_cast<int>(stride) == 0)
                                 {
-                                    std::uint32_t oh = static_cast<std::uint32_t>(oh_calc) / stride;
-                                    std::uint32_t ow = static_cast<std::uint32_t>(ow_calc) / stride;
+                                    uint32_t oh = static_cast<uint32_t>(oh_calc) / stride;
+                                    uint32_t ow = static_cast<uint32_t>(ow_calc) / stride;
                                     if (oh < output_height && ow < output_width)
                                     {
-                                        for (std::uint32_t oc = 0; oc < output_channels; ++oc)
+                                        for (uint32_t oc = 0; oc < output_channels; ++oc)
                                         {
-                                            std::size_t out_grad_idx = n * output_height * output_width * output_channels + oh * output_width * output_channels + ow * output_channels + oc;
-                                            std::size_t w_idx = ky * kernel_size * input_channels * output_channels + kx * input_channels * output_channels + ic * output_channels + oc;
+                                            size_t out_grad_idx = n * output_height * output_width * output_channels + oh * output_width * output_channels + ow * output_channels + oc;
+                                            size_t w_idx = ky * kernel_size * input_channels * output_channels + kx * input_channels * output_channels + ic * output_channels + oc;
                                             sum += out_grad_data[out_grad_idx] * w_data[w_idx];
                                         }
                                     }
@@ -1145,12 +1145,12 @@ public:
     }
 
     void conv2dBackwardWeight(const Tensor_Impl &output_gradient, Tensor_Impl &weight_gradient, Tensor_Impl &bias_gradient,
-                              std::uint32_t input_height, std::uint32_t input_width, std::uint32_t input_channels,
-                              std::uint32_t output_height, std::uint32_t output_width, std::uint32_t output_channels,
-                              std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding,
+                              uint32_t input_height, uint32_t input_width, uint32_t input_channels,
+                              uint32_t output_height, uint32_t output_width, uint32_t output_channels,
+                              uint32_t kernel_size, uint32_t stride, uint32_t padding,
                               Tensor_Impl * /*im2col_scratch*/ = nullptr) const override
     {
-        std::uint32_t batch_size = static_cast<std::uint32_t>(getRows());
+        uint32_t batch_size = static_cast<uint32_t>(getRows());
         const auto &in_data = getData();
         const auto &out_grad_data = output_gradient.getData();
         auto &w_grad_cpu = static_cast<Cpu_Tensor_Impl &>(weight_gradient);
@@ -1161,22 +1161,22 @@ public:
         std::fill(w_grad_cpu.storage_buffer->begin(), w_grad_cpu.storage_buffer->end(), 0.0F);
         std::fill(b_grad_cpu.storage_buffer->begin(), b_grad_cpu.storage_buffer->end(), 0.0F);
 
-        for (std::uint32_t oc = 0; oc < output_channels; ++oc)
+        for (uint32_t oc = 0; oc < output_channels; ++oc)
         {
-            for (std::uint32_t ic = 0; ic < input_channels; ++ic)
+            for (uint32_t ic = 0; ic < input_channels; ++ic)
             {
-                for (std::uint32_t ky = 0; ky < kernel_size; ++ky)
+                for (uint32_t ky = 0; ky < kernel_size; ++ky)
                 {
-                    for (std::uint32_t kx = 0; kx < kernel_size; ++kx)
+                    for (uint32_t kx = 0; kx < kernel_size; ++kx)
                     {
                         float w_sum = 0.0F;
-                        for (std::uint32_t n = 0; n < batch_size; ++n)
+                        for (uint32_t n = 0; n < batch_size; ++n)
                         {
-                            for (std::uint32_t oh = 0; oh < output_height; ++oh)
+                            for (uint32_t oh = 0; oh < output_height; ++oh)
                             {
-                                for (std::uint32_t ow = 0; ow < output_width; ++ow)
+                                for (uint32_t ow = 0; ow < output_width; ++ow)
                                 {
-                                    std::size_t out_grad_idx = n * output_height * output_width * output_channels + oh * output_width * output_channels + ow * output_channels + oc;
+                                    size_t out_grad_idx = n * output_height * output_width * output_channels + oh * output_width * output_channels + ow * output_channels + oc;
                                     float grad_val = out_grad_data[out_grad_idx];
                                     if (ic == 0 && ky == 0 && kx == 0)
                                     {
@@ -1186,13 +1186,13 @@ public:
                                     int iw = static_cast<int>(ow * stride + kx) - static_cast<int>(padding);
                                     if (ih >= 0 && ih < static_cast<int>(input_height) && iw >= 0 && iw < static_cast<int>(input_width))
                                     {
-                                        std::size_t in_idx = n * input_height * input_width * input_channels + ih * input_width * input_channels + iw * input_channels + ic;
+                                        size_t in_idx = n * input_height * input_width * input_channels + ih * input_width * input_channels + iw * input_channels + ic;
                                         w_sum += in_data[in_idx] * grad_val;
                                     }
                                 }
                             }
                         }
-                        std::size_t w_idx = ky * kernel_size * input_channels * output_channels + kx * input_channels * output_channels + ic * output_channels + oc;
+                        size_t w_idx = ky * kernel_size * input_channels * output_channels + kx * input_channels * output_channels + ic * output_channels + oc;
                         (*w_grad_cpu.storage_buffer)[w_idx] = w_sum;
                     }
                 }
@@ -1201,39 +1201,39 @@ public:
     }
 
     void maxpool2d(Tensor_Impl &output, Tensor_Impl &output_mask,
-                   std::uint32_t input_height, std::uint32_t input_width, std::uint32_t channels,
-                   std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const override
+                   uint32_t input_height, uint32_t input_width, uint32_t channels,
+                   uint32_t kernel_size, uint32_t stride, uint32_t padding) const override
     {
         auto &res_cpu = static_cast<Cpu_Tensor_Impl &>(output);
         auto &mask_cpu = static_cast<Cpu_Tensor_Impl &>(output_mask);
 
-        std::uint32_t batch_size = static_cast<std::uint32_t>(getRows());
-        std::uint32_t out_h = (input_height + 2 * padding - kernel_size) / stride + 1;
-        std::uint32_t out_w = (input_width + 2 * padding - kernel_size) / stride + 1;
+        uint32_t batch_size = static_cast<uint32_t>(getRows());
+        uint32_t out_h = (input_height + 2 * padding - kernel_size) / stride + 1;
+        uint32_t out_w = (input_width + 2 * padding - kernel_size) / stride + 1;
 
         const auto &in_data = getData();
         res_cpu.reshape(batch_size, out_h * out_w * channels);
         mask_cpu.reshape(batch_size, out_h * out_w * channels);
 
-        for (std::uint32_t n = 0; n < batch_size; ++n)
+        for (uint32_t n = 0; n < batch_size; ++n)
         {
-            for (std::uint32_t oh = 0; oh < out_h; ++oh)
+            for (uint32_t oh = 0; oh < out_h; ++oh)
             {
-                for (std::uint32_t ow = 0; ow < out_w; ++ow)
+                for (uint32_t ow = 0; ow < out_w; ++ow)
                 {
-                    for (std::uint32_t c = 0; c < channels; ++c)
+                    for (uint32_t c = 0; c < channels; ++c)
                     {
                         float max_val = -3.402823466e+38F;
                         float max_idx = 0.0F;
-                        for (std::uint32_t ky = 0; ky < kernel_size; ++ky)
+                        for (uint32_t ky = 0; ky < kernel_size; ++ky)
                         {
-                            for (std::uint32_t kx = 0; kx < kernel_size; ++kx)
+                            for (uint32_t kx = 0; kx < kernel_size; ++kx)
                             {
                                 int ih = static_cast<int>(oh * stride + ky) - static_cast<int>(padding);
                                 int iw = static_cast<int>(ow * stride + kx) - static_cast<int>(padding);
                                 if (ih >= 0 && ih < static_cast<int>(input_height) && iw >= 0 && iw < static_cast<int>(input_width))
                                 {
-                                    std::size_t in_idx = n * input_height * input_width * channels + ih * input_width * channels + iw * channels + c;
+                                    size_t in_idx = n * input_height * input_width * channels + ih * input_width * channels + iw * channels + c;
                                     float val = in_data[in_idx];
                                     if (val > max_val)
                                     {
@@ -1243,7 +1243,7 @@ public:
                                 }
                             }
                         }
-                        std::size_t out_idx = n * out_h * out_w * channels + oh * out_w * channels + ow * channels + c;
+                        size_t out_idx = n * out_h * out_w * channels + oh * out_w * channels + ow * channels + c;
                         (*res_cpu.storage_buffer)[out_idx] = max_val;
                         (*mask_cpu.storage_buffer)[out_idx] = max_idx;
                     }
@@ -1253,42 +1253,42 @@ public:
     }
 
     void maxpool2dBackward(const Tensor_Impl &mask, Tensor_Impl &input_gradient,
-                           std::uint32_t input_height, std::uint32_t input_width, std::uint32_t channels,
-                           std::uint32_t output_height, std::uint32_t output_width,
-                           std::uint32_t kernel_size, std::uint32_t stride, std::uint32_t padding) const override
+                           uint32_t input_height, uint32_t input_width, uint32_t channels,
+                           uint32_t output_height, uint32_t output_width,
+                           uint32_t kernel_size, uint32_t stride, uint32_t padding) const override
     {
         const auto &mask_data = mask.getData();
         const auto &out_grad_data = getData();
         auto &in_grad_cpu = static_cast<Cpu_Tensor_Impl &>(input_gradient);
 
-        std::uint32_t batch_size = static_cast<std::uint32_t>(getRows());
+        uint32_t batch_size = static_cast<uint32_t>(getRows());
         in_grad_cpu.reshape(batch_size, input_height * input_width * channels);
         std::fill(in_grad_cpu.storage_buffer->begin(), in_grad_cpu.storage_buffer->end(), 0.0F);
 
-        for (std::uint32_t n = 0; n < batch_size; ++n)
+        for (uint32_t n = 0; n < batch_size; ++n)
         {
-            for (std::uint32_t ih = 0; ih < input_height; ++ih)
+            for (uint32_t ih = 0; ih < input_height; ++ih)
             {
-                for (std::uint32_t iw = 0; iw < input_width; ++iw)
+                for (uint32_t iw = 0; iw < input_width; ++iw)
                 {
-                    for (std::uint32_t c = 0; c < channels; ++c)
+                    for (uint32_t c = 0; c < channels; ++c)
                     {
-                        std::size_t in_idx = n * input_height * input_width * channels + ih * input_width * channels + iw * channels + c;
+                        size_t in_idx = n * input_height * input_width * channels + ih * input_width * channels + iw * channels + c;
                         float acc_grad = 0.0F;
-                        for (std::uint32_t ky = 0; ky < kernel_size; ++ky)
+                        for (uint32_t ky = 0; ky < kernel_size; ++ky)
                         {
-                            for (std::uint32_t kx = 0; kx < kernel_size; ++kx)
+                            for (uint32_t kx = 0; kx < kernel_size; ++kx)
                             {
                                 int oh_calc = static_cast<int>(ih + padding - ky);
                                 int ow_calc = static_cast<int>(iw + padding - kx);
                                 if (oh_calc >= 0 && oh_calc % static_cast<int>(stride) == 0 && ow_calc >= 0 && ow_calc % static_cast<int>(stride) == 0)
                                 {
-                                    std::uint32_t oh = static_cast<std::uint32_t>(oh_calc) / stride;
-                                    std::uint32_t ow = static_cast<std::uint32_t>(ow_calc) / stride;
+                                    uint32_t oh = static_cast<uint32_t>(oh_calc) / stride;
+                                    uint32_t ow = static_cast<uint32_t>(ow_calc) / stride;
                                     if (oh < output_height && ow < output_width)
                                     {
-                                        std::size_t out_idx = n * output_height * output_width * channels + oh * output_width * channels + ow * channels + c;
-                                        if (static_cast<std::size_t>(mask_data[out_idx]) == in_idx)
+                                        size_t out_idx = n * output_height * output_width * channels + oh * output_width * channels + ow * channels + c;
+                                        if (static_cast<size_t>(mask_data[out_idx]) == in_idx)
                                         {
                                             acc_grad += out_grad_data[out_idx];
                                         }
@@ -1303,22 +1303,22 @@ public:
         }
     }
 
-    void globalAvgPool2d(Tensor_Impl &output, std::uint32_t input_height, std::uint32_t input_width, std::uint32_t channels) const override
+    void globalAvgPool2d(Tensor_Impl &output, uint32_t input_height, uint32_t input_width, uint32_t channels) const override
     {
-        std::uint32_t batch_size = static_cast<std::uint32_t>(getRows());
+        uint32_t batch_size = static_cast<uint32_t>(getRows());
         const auto &in_data = getData();
         auto &output_cpu = static_cast<Cpu_Tensor_Impl &>(output);
         output_cpu.reshape(batch_size, channels);
         float area = static_cast<float>(input_height * input_width);
 
-        for (std::uint32_t n = 0; n < batch_size; ++n)
+        for (uint32_t n = 0; n < batch_size; ++n)
         {
-            for (std::uint32_t c = 0; c < channels; ++c)
+            for (uint32_t c = 0; c < channels; ++c)
             {
                 float sum = 0.0F;
-                for (std::uint32_t h = 0; h < input_height; ++h)
+                for (uint32_t h = 0; h < input_height; ++h)
                 {
-                    for (std::uint32_t w = 0; w < input_width; ++w)
+                    for (uint32_t w = 0; w < input_width; ++w)
                     {
                         sum += in_data[n * input_height * input_width * channels + h * input_width * channels + w * channels + c];
                     }
@@ -1328,22 +1328,22 @@ public:
         }
     }
 
-    void globalAvgPool2dBackward(Tensor_Impl &input_gradient, std::uint32_t input_height, std::uint32_t input_width, std::uint32_t channels) const override
+    void globalAvgPool2dBackward(Tensor_Impl &input_gradient, uint32_t input_height, uint32_t input_width, uint32_t channels) const override
     {
-        std::uint32_t batch_size = static_cast<std::uint32_t>(getRows());
+        uint32_t batch_size = static_cast<uint32_t>(getRows());
         const auto &out_grad_data = getData();
         auto &in_grad_cpu = static_cast<Cpu_Tensor_Impl &>(input_gradient);
         in_grad_cpu.reshape(batch_size, input_height * input_width * channels);
         float area = static_cast<float>(input_height * input_width);
 
-        for (std::uint32_t n = 0; n < batch_size; ++n)
+        for (uint32_t n = 0; n < batch_size; ++n)
         {
-            for (std::uint32_t c = 0; c < channels; ++c)
+            for (uint32_t c = 0; c < channels; ++c)
             {
                 float scaled = out_grad_data[n * channels + c] / area;
-                for (std::uint32_t h = 0; h < input_height; ++h)
+                for (uint32_t h = 0; h < input_height; ++h)
                 {
-                    for (std::uint32_t w = 0; w < input_width; ++w)
+                    for (uint32_t w = 0; w < input_width; ++w)
                     {
                         (*in_grad_cpu.storage_buffer)[n * input_height * input_width * channels + h * input_width * channels + w * channels + c] = scaled;
                     }
@@ -1358,8 +1358,8 @@ public:
                           Tensor_Impl &normalized_input, Tensor_Impl &output,
                           float epsilon, float momentum, bool is_training) const override
     {
-        std::size_t b_count = getRows();
-        std::size_t f_dim = getColumns();
+        size_t b_count = getRows();
+        size_t f_dim = getColumns();
         const auto &in_data = getData();
         const auto &gamma_data = gamma.getData();
         const auto &beta_data = beta.getData();
@@ -1381,37 +1381,37 @@ public:
             std::fill(bm_cpu.storage_buffer->begin(), bm_cpu.storage_buffer->end(), 0.0F);
             std::fill(bv_cpu.storage_buffer->begin(), bv_cpu.storage_buffer->end(), 0.0F);
 
-            for (std::size_t i = 0; i < b_count; ++i)
+            for (size_t i = 0; i < b_count; ++i)
             {
-                for (std::size_t j = 0; j < f_dim; ++j)
+                for (size_t j = 0; j < f_dim; ++j)
                 {
                     (*bm_cpu.storage_buffer)[j] += in_data[i * f_dim + j];
                 }
             }
             float inv_b = 1.0F / static_cast<float>(b_count);
-            for (std::size_t j = 0; j < f_dim; ++j)
+            for (size_t j = 0; j < f_dim; ++j)
             {
                 (*bm_cpu.storage_buffer)[j] *= inv_b;
             }
 
-            for (std::size_t i = 0; i < b_count; ++i)
+            for (size_t i = 0; i < b_count; ++i)
             {
-                for (std::size_t j = 0; j < f_dim; ++j)
+                for (size_t j = 0; j < f_dim; ++j)
                 {
                     float diff = in_data[i * f_dim + j] - (*bm_cpu.storage_buffer)[j];
                     (*bv_cpu.storage_buffer)[j] += diff * diff;
                 }
             }
-            for (std::size_t j = 0; j < f_dim; ++j)
+            for (size_t j = 0; j < f_dim; ++j)
             {
                 (*bv_cpu.storage_buffer)[j] *= inv_b;
                 (*rm_cpu.storage_buffer)[j] = (1.0F - momentum) * (*rm_cpu.storage_buffer)[j] + momentum * (*bm_cpu.storage_buffer)[j];
                 (*rv_cpu.storage_buffer)[j] = (1.0F - momentum) * (*rv_cpu.storage_buffer)[j] + momentum * (*bv_cpu.storage_buffer)[j];
             }
 
-            for (std::size_t i = 0; i < b_count; ++i)
+            for (size_t i = 0; i < b_count; ++i)
             {
-                for (std::size_t j = 0; j < f_dim; ++j)
+                for (size_t j = 0; j < f_dim; ++j)
                 {
                     float norm_val = (in_data[i * f_dim + j] - (*bm_cpu.storage_buffer)[j]) / std::sqrt((*bv_cpu.storage_buffer)[j] + epsilon);
                     (*norm_in_cpu.storage_buffer)[i * f_dim + j] = norm_val;
@@ -1424,9 +1424,9 @@ public:
             const auto &rm_data = running_mean.getData();
             const auto &rv_data = running_variance.getData();
 
-            for (std::size_t i = 0; i < b_count; ++i)
+            for (size_t i = 0; i < b_count; ++i)
             {
-                for (std::size_t j = 0; j < f_dim; ++j)
+                for (size_t j = 0; j < f_dim; ++j)
                 {
                     float norm_val = (in_data[i * f_dim + j] - rm_data[j]) / std::sqrt(rv_data[j] + epsilon);
                     (*norm_in_cpu.storage_buffer)[i * f_dim + j] = norm_val;
@@ -1439,8 +1439,8 @@ public:
     void batchNormBackward(const Tensor_Impl &output_gradient, const Tensor_Impl &gamma, const Tensor_Impl &batch_variance, const Tensor_Impl &normalized_input,
                            Tensor_Impl &gamma_gradient, Tensor_Impl &beta_gradient, Tensor_Impl &input_gradient, float epsilon) const override
     {
-        std::size_t b_count = getRows();
-        std::size_t f_dim = getColumns();
+        size_t b_count = getRows();
+        size_t f_dim = getColumns();
 
         const auto &out_grad_data = output_gradient.getData();
         const auto &gamma_data = gamma.getData();
@@ -1458,11 +1458,11 @@ public:
         std::fill(g_grad_cpu.storage_buffer->begin(), g_grad_cpu.storage_buffer->end(), 0.0F);
         std::fill(b_grad_cpu.storage_buffer->begin(), b_grad_cpu.storage_buffer->end(), 0.0F);
 
-        for (std::size_t i = 0; i < b_count; ++i)
+        for (size_t i = 0; i < b_count; ++i)
         {
-            for (std::size_t j = 0; j < f_dim; ++j)
+            for (size_t j = 0; j < f_dim; ++j)
             {
-                std::size_t idx = i * f_dim + j;
+                size_t idx = i * f_dim + j;
                 float go = out_grad_data[idx];
                 (*g_grad_cpu.storage_buffer)[j] += go * norm_in_data[idx];
                 (*b_grad_cpu.storage_buffer)[j] += go;
@@ -1470,14 +1470,14 @@ public:
         }
 
         float inv_b = 1.0F / static_cast<float>(b_count);
-        for (std::size_t j = 0; j < f_dim; ++j)
+        for (size_t j = 0; j < f_dim; ++j)
         {
             float inv_std = 1.0F / std::sqrt(bv_data[j] + epsilon);
             float coeff = gamma_data[j] * inv_std * inv_b;
 
-            for (std::size_t i = 0; i < b_count; ++i)
+            for (size_t i = 0; i < b_count; ++i)
             {
-                std::size_t idx = i * f_dim + j;
+                size_t idx = i * f_dim + j;
                 (*in_grad_cpu.storage_buffer)[idx] = coeff * (static_cast<float>(b_count) * out_grad_data[idx] - (*b_grad_cpu.storage_buffer)[j] - norm_in_data[idx] * (*g_grad_cpu.storage_buffer)[j]);
             }
         }
@@ -1494,17 +1494,17 @@ public:
         const auto &out_grad_data = getData();
         auto &in_grad_cpu = static_cast<Cpu_Tensor_Impl &>(input_gradient);
 
-        std::size_t b_size = getRows();
-        std::size_t out_dim = getColumns();
-        std::size_t in_dim = weights.getRows();
+        size_t b_size = getRows();
+        size_t out_dim = getColumns();
+        size_t in_dim = weights.getRows();
         in_grad_cpu.reshape(b_size, in_dim);
 
-        for (std::size_t i = 0; i < b_size; ++i)
+        for (size_t i = 0; i < b_size; ++i)
         {
-            for (std::size_t j = 0; j < in_dim; ++j)
+            for (size_t j = 0; j < in_dim; ++j)
             {
                 float sum = 0.0F;
-                for (std::size_t k = 0; k < out_dim; ++k)
+                for (size_t k = 0; k < out_dim; ++k)
                 {
                     sum += out_grad_data[i * out_dim + k] * w_data[j * out_dim + k];
                 }
@@ -1520,22 +1520,22 @@ public:
         auto &w_grad_cpu = static_cast<Cpu_Tensor_Impl &>(weight_gradient);
         auto &b_grad_cpu = static_cast<Cpu_Tensor_Impl &>(bias_gradient);
 
-        std::size_t b_size = getRows();
-        std::size_t in_dim = getColumns();
-        std::size_t out_dim = output_gradient.getColumns();
+        size_t b_size = getRows();
+        size_t in_dim = getColumns();
+        size_t out_dim = output_gradient.getColumns();
 
         w_grad_cpu.reshape(in_dim, out_dim);
         b_grad_cpu.reshape(1, out_dim);
         std::fill(w_grad_cpu.storage_buffer->begin(), w_grad_cpu.storage_buffer->end(), 0.0F);
         std::fill(b_grad_cpu.storage_buffer->begin(), b_grad_cpu.storage_buffer->end(), 0.0F);
 
-        for (std::size_t i = 0; i < b_size; ++i)
+        for (size_t i = 0; i < b_size; ++i)
         {
-            for (std::size_t j = 0; j < out_dim; ++j)
+            for (size_t j = 0; j < out_dim; ++j)
             {
                 float grad_val = out_grad_data[i * out_dim + j];
                 (*b_grad_cpu.storage_buffer)[j] += grad_val;
-                for (std::size_t k = 0; k < in_dim; ++k)
+                for (size_t k = 0; k < in_dim; ++k)
                 {
                     (*w_grad_cpu.storage_buffer)[k * out_dim + j] += in_data[i * in_dim + k] * grad_val;
                 }
@@ -1547,7 +1547,7 @@ public:
                             Tensor_Impl &running_mean, Tensor_Impl &running_variance,
                             Tensor_Impl &batch_mean, Tensor_Impl &batch_variance,
                             Tensor_Impl &normalized_input, Tensor_Impl &output,
-                            std::uint32_t input_height, std::uint32_t input_width, std::uint32_t input_channels,
+                            uint32_t input_height, uint32_t input_width, uint32_t input_channels,
                             float epsilon, float momentum, bool is_training) const override
     {
         const auto &in_data = getData();
@@ -1560,9 +1560,9 @@ public:
         auto &norm_in_cpu = static_cast<Cpu_Tensor_Impl &>(normalized_input);
         auto &out_cpu = static_cast<Cpu_Tensor_Impl &>(output);
 
-        std::size_t b_size = getRows();
-        std::size_t total_feat = input_height * input_width * input_channels;
-        std::uint32_t sp_count = static_cast<std::uint32_t>(b_size * input_height * input_width);
+        size_t b_size = getRows();
+        size_t total_feat = input_height * input_width * input_channels;
+        uint32_t sp_count = static_cast<uint32_t>(b_size * input_height * input_width);
 
         out_cpu.reshape(b_size, total_feat);
         norm_in_cpu.reshape(b_size, total_feat);
@@ -1574,38 +1574,38 @@ public:
             std::fill(bm_cpu.storage_buffer->begin(), bm_cpu.storage_buffer->end(), 0.0F);
             std::fill(bv_cpu.storage_buffer->begin(), bv_cpu.storage_buffer->end(), 0.0F);
 
-            for (std::size_t i = 0; i < sp_count; ++i)
+            for (size_t i = 0; i < sp_count; ++i)
             {
-                for (std::uint32_t c = 0; c < input_channels; ++c)
+                for (uint32_t c = 0; c < input_channels; ++c)
                 {
                     (*bm_cpu.storage_buffer)[c] += in_data[i * input_channels + c];
                 }
             }
             float inv_sp = 1.0F / static_cast<float>(sp_count);
-            for (std::uint32_t c = 0; c < input_channels; ++c)
+            for (uint32_t c = 0; c < input_channels; ++c)
             {
                 (*bm_cpu.storage_buffer)[c] *= inv_sp;
             }
 
-            for (std::size_t i = 0; i < sp_count; ++i)
+            for (size_t i = 0; i < sp_count; ++i)
             {
-                for (std::uint32_t c = 0; c < input_channels; ++c)
+                for (uint32_t c = 0; c < input_channels; ++c)
                 {
                     float diff = in_data[i * input_channels + c] - (*bm_cpu.storage_buffer)[c];
                     (*bv_cpu.storage_buffer)[c] += diff * diff;
                 }
             }
-            for (std::uint32_t c = 0; c < input_channels; ++c)
+            for (uint32_t c = 0; c < input_channels; ++c)
             {
                 (*bv_cpu.storage_buffer)[c] *= inv_sp;
                 (*rm_cpu.storage_buffer)[c] = (1.0F - momentum) * (*rm_cpu.storage_buffer)[c] + momentum * (*bm_cpu.storage_buffer)[c];
                 (*rv_cpu.storage_buffer)[c] = (1.0F - momentum) * (*rv_cpu.storage_buffer)[c] + momentum * (*bv_cpu.storage_buffer)[c];
             }
-            for (std::size_t i = 0; i < sp_count; ++i)
+            for (size_t i = 0; i < sp_count; ++i)
             {
-                for (std::uint32_t c = 0; c < input_channels; ++c)
+                for (uint32_t c = 0; c < input_channels; ++c)
                 {
-                    std::size_t idx = i * input_channels + c;
+                    size_t idx = i * input_channels + c;
                     float norm_val = (in_data[idx] - (*bm_cpu.storage_buffer)[c]) / std::sqrt((*bv_cpu.storage_buffer)[c] + epsilon);
                     (*norm_in_cpu.storage_buffer)[idx] = norm_val;
                     (*out_cpu.storage_buffer)[idx] = gamma_data[c] * norm_val + beta_data[c];
@@ -1617,11 +1617,11 @@ public:
             const auto &rm_data = running_mean.getData();
             const auto &rv_data = running_variance.getData();
 
-            for (std::size_t i = 0; i < sp_count; ++i)
+            for (size_t i = 0; i < sp_count; ++i)
             {
-                for (std::uint32_t c = 0; c < input_channels; ++c)
+                for (uint32_t c = 0; c < input_channels; ++c)
                 {
-                    std::size_t idx = i * input_channels + c;
+                    size_t idx = i * input_channels + c;
                     float norm_val = (in_data[idx] - rm_data[c]) / std::sqrt(rv_data[c] + epsilon);
                     (*norm_in_cpu.storage_buffer)[idx] = norm_val;
                     (*out_cpu.storage_buffer)[idx] = gamma_data[c] * norm_val + beta_data[c];
@@ -1632,7 +1632,7 @@ public:
 
     void batchNorm2dBackward(const Tensor_Impl &gamma, const Tensor_Impl &batch_variance, const Tensor_Impl &normalized_input,
                              Tensor_Impl &gamma_gradient, Tensor_Impl &beta_gradient, Tensor_Impl &input_gradient,
-                             std::uint32_t input_height, std::uint32_t input_width, std::uint32_t input_channels, float epsilon) const override
+                             uint32_t input_height, uint32_t input_width, uint32_t input_channels, float epsilon) const override
     {
         const auto &out_grad_data = getData();
         const auto &gamma_data = gamma.getData();
@@ -1642,9 +1642,9 @@ public:
         auto &b_grad_cpu = static_cast<Cpu_Tensor_Impl &>(beta_gradient);
         auto &in_grad_cpu = static_cast<Cpu_Tensor_Impl &>(input_gradient);
 
-        std::size_t b_size = getRows();
-        std::size_t total_feat = input_height * input_width * input_channels;
-        std::uint32_t sp_count = static_cast<std::uint32_t>(b_size * input_height * input_width);
+        size_t b_size = getRows();
+        size_t total_feat = input_height * input_width * input_channels;
+        uint32_t sp_count = static_cast<uint32_t>(b_size * input_height * input_width);
 
         in_grad_cpu.reshape(b_size, total_feat);
         g_grad_cpu.reshape(1, input_channels);
@@ -1652,11 +1652,11 @@ public:
         std::fill(g_grad_cpu.storage_buffer->begin(), g_grad_cpu.storage_buffer->end(), 0.0F);
         std::fill(b_grad_cpu.storage_buffer->begin(), b_grad_cpu.storage_buffer->end(), 0.0F);
 
-        for (std::size_t i = 0; i < sp_count; ++i)
+        for (size_t i = 0; i < sp_count; ++i)
         {
-            for (std::uint32_t c = 0; c < input_channels; ++c)
+            for (uint32_t c = 0; c < input_channels; ++c)
             {
-                std::size_t idx = i * input_channels + c;
+                size_t idx = i * input_channels + c;
                 float go = out_grad_data[idx];
                 (*g_grad_cpu.storage_buffer)[c] += go * norm_in_data[idx];
                 (*b_grad_cpu.storage_buffer)[c] += go;
@@ -1664,14 +1664,14 @@ public:
         }
 
         float inv_sp = 1.0F / static_cast<float>(sp_count);
-        for (std::uint32_t c = 0; c < input_channels; ++c)
+        for (uint32_t c = 0; c < input_channels; ++c)
         {
             float inv_std = 1.0F / std::sqrt(bv_data[c] + epsilon);
             float coeff = gamma_data[c] * inv_std * inv_sp;
 
-            for (std::size_t i = 0; i < sp_count; ++i)
+            for (size_t i = 0; i < sp_count; ++i)
             {
-                std::size_t idx = i * input_channels + c;
+                size_t idx = i * input_channels + c;
                 (*in_grad_cpu.storage_buffer)[idx] = coeff * (static_cast<float>(sp_count) * out_grad_data[idx] - (*b_grad_cpu.storage_buffer)[c] - norm_in_data[idx] * (*g_grad_cpu.storage_buffer)[c]);
             }
         }
@@ -1686,7 +1686,7 @@ public:
         output_cpu.reshape(1, 1);
 
         float loss = 0.0F;
-        for (std::size_t i = 0; i < total_elements; ++i)
+        for (size_t i = 0; i < total_elements; ++i)
         {
             float p = std::clamp(a_data[i], epsilon, 1.0F - epsilon);
             loss += -t_data[i] * std::log(p);
@@ -1703,7 +1703,7 @@ public:
         output_cpu.reshape(1, 1);
 
         float loss = 0.0F;
-        for (std::size_t i = 0; i < total_elements; ++i)
+        for (size_t i = 0; i < total_elements; ++i)
         {
             float diff = a_data[i] - t_data[i];
             loss += diff * diff;
@@ -1720,7 +1720,7 @@ public:
         output_cpu.reshape(1, 1);
 
         float loss = 0.0F;
-        for (std::size_t i = 0; i < total_elements; ++i)
+        for (size_t i = 0; i < total_elements; ++i)
         {
             loss += std::abs(a_data[i] - t_data[i]);
         }
@@ -1736,7 +1736,7 @@ public:
         output_cpu.reshape(1, 1);
 
         float loss = 0.0F;
-        for (std::size_t i = 0; i < total_elements; ++i)
+        for (size_t i = 0; i < total_elements; ++i)
         {
             float p = std::clamp(a_data[i], epsilon, 1.0F - epsilon);
             float y = t_data[i];
@@ -1754,7 +1754,7 @@ public:
         output_cpu.reshape(1, 1);
 
         float loss = 0.0F;
-        for (std::size_t i = 0; i < total_elements; ++i)
+        for (size_t i = 0; i < total_elements; ++i)
         {
             float diff = std::abs(a_data[i] - t_data[i]);
             loss += (diff <= delta) ? 0.5F * diff * diff : delta * (diff - 0.5F * delta);
@@ -1776,12 +1776,12 @@ public:
             throw std::invalid_argument("Row count mismatch in concatenateCollumns");
         }
 
-        std::size_t cols_a = getColumns();
-        std::size_t cols_b = other.getColumns();
-        std::size_t tot_cols = cols_a + cols_b;
+        size_t cols_a = getColumns();
+        size_t cols_b = other.getColumns();
+        size_t tot_cols = cols_a + cols_b;
         output_cpu.reshape(getRows(), tot_cols);
 
-        for (std::size_t r = 0; r < getRows(); ++r)
+        for (size_t r = 0; r < getRows(); ++r)
         {
             std::copy_n(a_data.data() + r * cols_a, cols_a, output_cpu.storage_buffer->data() + r * tot_cols);
             std::copy_n(b_data.data() + r * cols_b, cols_b, output_cpu.storage_buffer->data() + r * tot_cols + cols_a);
@@ -1802,14 +1802,14 @@ public:
             throw std::invalid_argument("Column count mismatch in concatenateRows");
         }
 
-        std::size_t tot_rows = getRows() + other.getRows();
+        size_t tot_rows = getRows() + other.getRows();
         output_cpu.reshape(tot_rows, getColumns());
 
         std::copy(a_data.begin(), a_data.end(), output_cpu.storage_buffer->begin());
         std::copy(b_data.begin(), b_data.end(), output_cpu.storage_buffer->begin() + a_data.size());
     }
 
-    void splitCollumns(std::size_t split_index, Tensor_Impl &result_left, Tensor_Impl &result_right) const override
+    void splitCollumns(size_t split_index, Tensor_Impl &result_left, Tensor_Impl &result_right) const override
     {
         if (split_index == 0 || split_index >= getColumns())
         {
@@ -1819,20 +1819,20 @@ public:
         const auto &a_data = getData();
         auto &left_cpu = static_cast<Cpu_Tensor_Impl &>(result_left);
         auto &right_cpu = static_cast<Cpu_Tensor_Impl &>(result_right);
-        std::size_t cols_left = split_index;
-        std::size_t cols_right = getColumns() - split_index;
+        size_t cols_left = split_index;
+        size_t cols_right = getColumns() - split_index;
 
         left_cpu.reshape(getRows(), cols_left);
         right_cpu.reshape(getRows(), cols_right);
 
-        for (std::size_t r = 0; r < getRows(); ++r)
+        for (size_t r = 0; r < getRows(); ++r)
         {
             std::copy_n(a_data.data() + r * getColumns(), cols_left, left_cpu.storage_buffer->data() + r * cols_left);
             std::copy_n(a_data.data() + r * getColumns() + cols_left, cols_right, right_cpu.storage_buffer->data() + r * cols_right);
         }
     }
 
-    void splitRows(std::size_t split_index, Tensor_Impl &result_up, Tensor_Impl &result_down) const override
+    void splitRows(size_t split_index, Tensor_Impl &result_up, Tensor_Impl &result_down) const override
     {
         if (split_index == 0 || split_index >= getRows())
         {
@@ -1842,13 +1842,13 @@ public:
         const auto &a_data = getData();
         auto &up_cpu = static_cast<Cpu_Tensor_Impl &>(result_up);
         auto &down_cpu = static_cast<Cpu_Tensor_Impl &>(result_down);
-        std::size_t rows_up = split_index;
-        std::size_t rows_down = getRows() - split_index;
+        size_t rows_up = split_index;
+        size_t rows_down = getRows() - split_index;
 
         up_cpu.reshape(rows_up, getColumns());
         down_cpu.reshape(rows_down, getColumns());
 
-        std::size_t up_elems = rows_up * getColumns();
+        size_t up_elems = rows_up * getColumns();
         std::copy_n(a_data.data(), up_elems, up_cpu.storage_buffer->data());
         std::copy_n(a_data.data() + up_elems, rows_down * getColumns(), down_cpu.storage_buffer->data());
     }
@@ -1867,7 +1867,7 @@ public:
                 }
                 else
                 {
-                    iterateCoordinates([this](std::size_t out_idx, std::size_t src_idx)
+                    iterateCoordinates([this](size_t out_idx, size_t src_idx)
                                        { materialized_cache[out_idx] = static_cast<float>((*storage_buffer_fp16)[src_idx]); });
                 }
             }
@@ -1886,7 +1886,7 @@ public:
         materialized_cache.resize(total_elements);
         if (storage_buffer)
         {
-            iterateCoordinates([this](std::size_t out_idx, std::size_t src_idx)
+            iterateCoordinates([this](size_t out_idx, size_t src_idx)
                                { materialized_cache[out_idx] = (*storage_buffer)[src_idx]; });
         }
         return materialized_cache;

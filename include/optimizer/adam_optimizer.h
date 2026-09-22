@@ -22,7 +22,7 @@ private:
         Matrix first_moment_matrix;
         Matrix second_moment_matrix;
 
-        Parameter_State(std::size_t _rows, std::size_t _columns, Execution_Target _execution_target)
+        Parameter_State(size_t _rows, size_t _columns, Execution_Target _execution_target)
             : first_moment_matrix(_rows, _columns, std::vector<float>(_rows * _columns, 0.0f), _execution_target),
               second_moment_matrix(_rows, _columns, std::vector<float>(_rows * _columns, 0.0f), _execution_target)
         {
@@ -46,7 +46,7 @@ private:
     float beta2 = 0.999f;
     float epsilon = 1e-8f;
     float max_gradient = 1.0f;
-    std::size_t timestep = 0;
+    size_t timestep = 0;
     ILearning_Rate *learning_rate_scheduler = nullptr;
 
     std::unordered_map<Matrix *, Parameter_State> parameter_states;
@@ -134,7 +134,7 @@ public:
 
         if (parameter_states.empty() && !loaded_states.empty())
         {
-            for (std::size_t i = 0; i < _parameter_gradient_pairs.size() && i < loaded_states.size(); ++i)
+            for (size_t i = 0; i < _parameter_gradient_pairs.size() && i < loaded_states.size(); ++i)
             {
                 Matrix *parameter = _parameter_gradient_pairs[i].first;
                 if (parameter)
@@ -228,7 +228,7 @@ public:
                            0,
                            Log_Feature::MODEL_SERIALIZATION);
 
-        std::uint64_t timestep_value = static_cast<std::uint64_t>(timestep);
+        uint64_t timestep_value = static_cast<uint64_t>(timestep);
         _output_file_stream.write(reinterpret_cast<const char *>(&timestep_value), sizeof(timestep_value));
         _output_file_stream.write(reinterpret_cast<const char *>(&learning_rate), sizeof(learning_rate));
         _output_file_stream.write(reinterpret_cast<const char *>(&beta1), sizeof(beta1));
@@ -236,7 +236,7 @@ public:
         _output_file_stream.write(reinterpret_cast<const char *>(&epsilon), sizeof(epsilon));
         _output_file_stream.write(reinterpret_cast<const char *>(&max_gradient), sizeof(max_gradient));
 
-        std::uint32_t state_count = static_cast<std::uint32_t>(parameter_order.size());
+        uint32_t state_count = static_cast<uint32_t>(parameter_order.size());
         _output_file_stream.write(reinterpret_cast<const char *>(&state_count), sizeof(state_count));
 
         for (Matrix *parameter : parameter_order)
@@ -264,9 +264,9 @@ public:
 
         reset();
 
-        std::uint64_t timestep_value = 0;
+        uint64_t timestep_value = 0;
         _input_file_stream.read(reinterpret_cast<char *>(&timestep_value), sizeof(timestep_value));
-        timestep = static_cast<std::size_t>(timestep_value);
+        timestep = static_cast<size_t>(timestep_value);
 
         _input_file_stream.read(reinterpret_cast<char *>(&learning_rate), sizeof(learning_rate));
         _input_file_stream.read(reinterpret_cast<char *>(&beta1), sizeof(beta1));
@@ -274,7 +274,7 @@ public:
         _input_file_stream.read(reinterpret_cast<char *>(&epsilon), sizeof(epsilon));
         _input_file_stream.read(reinterpret_cast<char *>(&max_gradient), sizeof(max_gradient));
 
-        std::uint32_t state_count = 0;
+        uint32_t state_count = 0;
         _input_file_stream.read(reinterpret_cast<char *>(&state_count), sizeof(state_count));
 
         Logger::logMessage(Input_Format{"Adam_Optimizer::loadCheckpoint: Loaded timestep={}, learning_rate={}, beta1={}, beta2={}, epsilon={}, max_gradient={}, state_count={}",
@@ -291,7 +291,7 @@ public:
                            Log_Feature::MODEL_SERIALIZATION);
 
         loaded_states.reserve(state_count);
-        for (std::uint32_t i = 0; i < state_count; ++i)
+        for (uint32_t i = 0; i < state_count; ++i)
         {
             Matrix first_moment = Matrix::loadMatrix(_input_file_stream, _execution_target);
             Matrix second_moment = Matrix::loadMatrix(_input_file_stream, _execution_target);
@@ -303,7 +303,7 @@ public:
     const std::vector<Parameter_State> &getLoadedStates() const noexcept { return loaded_states; }
     const std::vector<Matrix *> &getParameterOrder() const noexcept { return parameter_order; }
     ILearning_Rate *getLearningRateScheduler() const noexcept { return learning_rate_scheduler; }
-    std::size_t getTimestep() const noexcept { return timestep; }
+    size_t getTimestep() const noexcept { return timestep; }
     Optimizer_Type getType() const noexcept override { return Optimizer_Type::ADAM_OPTIMIZER; }
     float getLearningRate() const noexcept override { return learning_rate; }
     float getMaxGradient() const noexcept { return max_gradient; }
@@ -315,7 +315,7 @@ public:
     void setLoadedStates(const std::vector<Parameter_State> &_loaded_states) { loaded_states = _loaded_states; }
     void setParameterOrder(const std::vector<Matrix *> &_parameter_order) { parameter_order = _parameter_order; }
     void setLearningRateScheduler(ILearning_Rate *_learning_rate_scheduler) noexcept { learning_rate_scheduler = _learning_rate_scheduler; }
-    void setTimestep(std::size_t _timestep) noexcept { timestep = _timestep; }
+    void setTimestep(size_t _timestep) noexcept { timestep = _timestep; }
     void setLearningRate(float _learning_rate) override
     {
         if (_learning_rate <= 0.0f)

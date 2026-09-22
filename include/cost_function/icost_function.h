@@ -6,7 +6,7 @@
 #include "helper/logger.h"
 #include "math/tensor.h"
 
-enum class Cost_Type : std::uint32_t
+enum class Cost_Type : uint32_t
 {
     MSE = 0,
     MAE,

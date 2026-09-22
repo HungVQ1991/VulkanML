@@ -75,7 +75,7 @@ public:
             loss_matrix.setExecutionTarget(_prediction_matrix.getExecutionTarget());
         }
 
-        std::size_t total_elements = _prediction_matrix.getRows() * _prediction_matrix.getColumns();
+        size_t total_elements = _prediction_matrix.getRows() * _prediction_matrix.getColumns();
         _prediction_matrix.huberLoss(_target_matrix, loss_matrix, delta);
         return loss_matrix.getScalar() / static_cast<float>(total_elements);
     }
@@ -121,11 +121,11 @@ public:
 
         std::vector<float> prediction_data = _prediction_matrix.getData();
         std::vector<float> target_data = _target_matrix.getData();
-        std::size_t total_elements = prediction_data.size();
+        size_t total_elements = prediction_data.size();
         std::vector<float> gradient_data(total_elements);
         float inverse_total_elements = 1.0f / static_cast<float>(total_elements);
 
-        for (std::size_t i = 0; i < total_elements; ++i)
+        for (size_t i = 0; i < total_elements; ++i)
         {
             float difference = prediction_data[i] - target_data[i];
             float abs_diff = std::abs(difference);

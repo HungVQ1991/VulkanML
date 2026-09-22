@@ -22,12 +22,12 @@
 
 #include "helper/vulkan_ml.h"
 
-constexpr std::size_t INPUT_DIMENSION = 784;
-constexpr std::size_t OUTPUT_DIMENSION = 10;
-constexpr std::size_t BATCH_SIZE = 8;
-constexpr std::size_t TOTAL_EPOCHS = 10;
+constexpr size_t INPUT_DIMENSION = 784;
+constexpr size_t OUTPUT_DIMENSION = 10;
+constexpr size_t BATCH_SIZE = 8;
+constexpr size_t TOTAL_EPOCHS = 10;
 
-std::uint32_t swapByteOrder(std::uint32_t _value)
+uint32_t swapByteOrder(uint32_t _value)
 {
     return (_value << 24) | ((_value << 8) & 0x00FF0000) | ((_value >> 8) & 0x0000FF00) | (_value >> 24);
 }
@@ -45,11 +45,11 @@ void augmentMnistImage(const float *_source_pointer, float *_destination_pointer
         for (int x = 0; x < 28; ++x)
         {
             int original_x = x + crop_x - 2;
-            std::size_t destination_index = y * 28 + x;
+            size_t destination_index = y * 28 + x;
 
             if (original_y >= 0 && original_y < 28 && original_x >= 0 && original_x < 28)
             {
-                std::size_t source_index = original_y * 28 + original_x;
+                size_t source_index = original_y * 28 + original_x;
                 _destination_pointer[destination_index] = _source_pointer[source_index];
             }
             else
@@ -60,7 +60,7 @@ void augmentMnistImage(const float *_source_pointer, float *_destination_pointer
     }
 }
 
-void loadMnistImages(const std::string &_file_path, std::vector<float> &_images_data, std::uint32_t &_images_count)
+void loadMnistImages(const std::string &_file_path, std::vector<float> &_images_data, uint32_t &_images_count)
 {
     std::ifstream input_file_stream(_file_path, std::ios::binary);
     if (!input_file_stream.is_open())
@@ -73,9 +73,9 @@ void loadMnistImages(const std::string &_file_path, std::vector<float> &_images_
         throw std::runtime_error("Cannot open MNIST images file");
     }
 
-    std::uint32_t magic_number = 0;
-    std::uint32_t rows_count = 0;
-    std::uint32_t columns_count = 0;
+    uint32_t magic_number = 0;
+    uint32_t rows_count = 0;
+    uint32_t columns_count = 0;
 
     input_file_stream.read(reinterpret_cast<char *>(&magic_number), sizeof(magic_number));
     input_file_stream.read(reinterpret_cast<char *>(&_images_count), sizeof(_images_count));
@@ -97,18 +97,18 @@ void loadMnistImages(const std::string &_file_path, std::vector<float> &_images_
     rows_count = swapByteOrder(rows_count);
     columns_count = swapByteOrder(columns_count);
 
-    std::size_t total_pixels = static_cast<std::size_t>(_images_count) * rows_count * columns_count;
+    size_t total_pixels = static_cast<size_t>(_images_count) * rows_count * columns_count;
     std::vector<std::uint8_t> raw_pixels(total_pixels);
     input_file_stream.read(reinterpret_cast<char *>(raw_pixels.data()), total_pixels);
 
     _images_data.resize(total_pixels);
-    for (std::size_t i = 0; i < total_pixels; ++i)
+    for (size_t i = 0; i < total_pixels; ++i)
     {
         _images_data[i] = static_cast<float>(raw_pixels[i]) / 255.0f;
     }
 }
 
-void loadMnistLabels(const std::string &_file_path, std::vector<float> &_labels_data, std::uint32_t _images_count)
+void loadMnistLabels(const std::string &_file_path, std::vector<float> &_labels_data, uint32_t _images_count)
 {
     std::ifstream input_file_stream(_file_path, std::ios::binary);
     if (!input_file_stream.is_open())
@@ -121,8 +121,8 @@ void loadMnistLabels(const std::string &_file_path, std::vector<float> &_labels_
         throw std::runtime_error("Cannot open MNIST labels file");
     }
 
-    std::uint32_t magic_number = 0;
-    std::uint32_t items_count = 0;
+    uint32_t magic_number = 0;
+    uint32_t items_count = 0;
 
     input_file_stream.read(reinterpret_cast<char *>(&magic_number), sizeof(magic_number));
     input_file_stream.read(reinterpret_cast<char *>(&items_count), sizeof(items_count));
@@ -152,8 +152,8 @@ void loadMnistLabels(const std::string &_file_path, std::vector<float> &_labels_
     std::vector<std::uint8_t> raw_labels(items_count);
     input_file_stream.read(reinterpret_cast<char *>(raw_labels.data()), items_count);
 
-    _labels_data.assign(static_cast<std::size_t>(_images_count) * OUTPUT_DIMENSION, 0.0f);
-    for (std::size_t i = 0; i < _images_count; ++i)
+    _labels_data.assign(static_cast<size_t>(_images_count) * OUTPUT_DIMENSION, 0.0f);
+    for (size_t i = 0; i < _images_count; ++i)
     {
         std::uint8_t label_value = raw_labels[i];
         if (label_value < OUTPUT_DIMENSION)
@@ -168,18 +168,18 @@ class Mnist_Data_Pipeline : public Async_Data_Pipeline
 private:
     const std::vector<float> &images_data;
     const std::vector<float> &labels_data;
-    std::uint32_t images_count = 0;
-    std::size_t batch_size = 0;
+    uint32_t images_count = 0;
+    size_t batch_size = 0;
     std::mt19937 random_engine{std::random_device{}()};
     bool is_augmentation_enabled = false;
 
-    void prepareBatchHost(std::size_t _batch_step, std::vector<float> &_output_inputs, std::vector<float> &_output_targets) override
+    void prepareBatchHost(size_t _batch_step, std::vector<float> &_output_inputs, std::vector<float> &_output_targets) override
     {
-        std::size_t batches_count = images_count / batch_size;
-        std::size_t batch_index = _batch_step % batches_count;
+        size_t batches_count = images_count / batch_size;
+        size_t batch_index = _batch_step % batches_count;
 
-        std::size_t offset_x = batch_index * batch_size * INPUT_DIMENSION;
-        std::size_t offset_y = batch_index * batch_size * OUTPUT_DIMENSION;
+        size_t offset_x = batch_index * batch_size * INPUT_DIMENSION;
+        size_t offset_y = batch_index * batch_size * OUTPUT_DIMENSION;
 
         if (_output_inputs.size() != batch_size * INPUT_DIMENSION)
         {
@@ -192,7 +192,7 @@ private:
 
         if (is_augmentation_enabled)
         {
-            for (std::size_t i = 0; i < batch_size; ++i)
+            for (size_t i = 0; i < batch_size; ++i)
             {
                 augmentMnistImage(images_data.data() + offset_x + i * INPUT_DIMENSION,
                                   _output_inputs.data() + i * INPUT_DIMENSION,
@@ -214,8 +214,8 @@ private:
 public:
     Mnist_Data_Pipeline(const std::vector<float> &_images_data,
                         const std::vector<float> &_labels_data,
-                        std::uint32_t _images_count,
-                        std::size_t _batch_size,
+                        uint32_t _images_count,
+                        size_t _batch_size,
                         VkDevice _device = VK_NULL_HANDLE,
                         bool _is_augmentation_enabled = false)
         : Async_Data_Pipeline(_device),
@@ -227,7 +227,7 @@ public:
     {
     }
 
-     std::size_t getBatchSize() const override
+     size_t getBatchSize() const override
     {
         return batch_size;
     }
@@ -236,11 +236,11 @@ public:
 double runBenchmark(Execution_Target _execution_target,
                     const std::vector<float> &_images_data,
                     const std::vector<float> &_labels_data,
-                    std::uint32_t _images_count,
+                    uint32_t _images_count,
                     Neural_Network &_neural_network,
                     std::string save_file_filepath)
 {
-    std::size_t steps_per_epoch = _images_count / BATCH_SIZE;
+    size_t steps_per_epoch = _images_count / BATCH_SIZE;
     _neural_network.getLearningRate().setMaxEpoch(static_cast<int>(TOTAL_EPOCHS * steps_per_epoch));
     _neural_network.setStepLearningRatePerBatch(true);
 
@@ -267,7 +267,7 @@ double runBenchmark(Execution_Target _execution_target,
 void evaluateModel(Neural_Network &_neural_network,
                    const std::vector<float> &_test_images_data,
                    const std::vector<float> &_test_labels_data,
-                   std::uint32_t _test_images_count,
+                   uint32_t _test_images_count,
                    Execution_Target _execution_target)
 {
     Logger::logMessage("Evaluating model on test dataset...",
@@ -277,19 +277,19 @@ void evaluateModel(Neural_Network &_neural_network,
                        Log_Feature::TRAINING);
     _neural_network.setTrainingMode(false);
 
-    std::size_t correct_count = 0;
-    std::array<std::array<std::size_t, OUTPUT_DIMENSION>, OUTPUT_DIMENSION> confusion_matrix{};
+    size_t correct_count = 0;
+    std::array<std::array<size_t, OUTPUT_DIMENSION>, OUTPUT_DIMENSION> confusion_matrix{};
 
-    std::size_t test_batch_size = BATCH_SIZE;
-    std::size_t batches_count = (_test_images_count + test_batch_size - 1) / test_batch_size;
+    size_t test_batch_size = BATCH_SIZE;
+    size_t batches_count = (_test_images_count + test_batch_size - 1) / test_batch_size;
 
     Matrix input_matrix(test_batch_size, INPUT_DIMENSION, _execution_target);
     std::vector<float> host_batch_inputs(test_batch_size * INPUT_DIMENSION);
     std::vector<float> host_batch_targets(test_batch_size * OUTPUT_DIMENSION);
 
-    for (std::size_t b = 0; b < batches_count; ++b)
+    for (size_t b = 0; b < batches_count; ++b)
     {
-        std::size_t current_batch_size = std::min(test_batch_size, static_cast<std::size_t>(_test_images_count) - b * test_batch_size);
+        size_t current_batch_size = std::min(test_batch_size, static_cast<size_t>(_test_images_count) - b * test_batch_size);
 
         if (current_batch_size != test_batch_size)
         {
@@ -317,11 +317,11 @@ void evaluateModel(Neural_Network &_neural_network,
 
         std::vector<float> prediction_data = prediction_matrix.getData();
 
-        for (std::size_t i = 0; i < current_batch_size; ++i)
+        for (size_t i = 0; i < current_batch_size; ++i)
         {
-            std::size_t predicted_label = 0;
+            size_t predicted_label = 0;
             float max_prediction_value = prediction_data[i * OUTPUT_DIMENSION];
-            for (std::size_t c = 1; c < OUTPUT_DIMENSION; ++c)
+            for (size_t c = 1; c < OUTPUT_DIMENSION; ++c)
             {
                 float value = prediction_data[i * OUTPUT_DIMENSION + c];
                 if (value > max_prediction_value)
@@ -331,9 +331,9 @@ void evaluateModel(Neural_Network &_neural_network,
                 }
             }
 
-            std::size_t ground_truth_label = 0;
+            size_t ground_truth_label = 0;
             float max_ground_truth_value = host_batch_targets[i * OUTPUT_DIMENSION];
-            for (std::size_t c = 1; c < OUTPUT_DIMENSION; ++c)
+            for (size_t c = 1; c < OUTPUT_DIMENSION; ++c)
             {
                 float value = host_batch_targets[i * OUTPUT_DIMENSION + c];
                 if (value > max_ground_truth_value)
@@ -352,7 +352,7 @@ void evaluateModel(Neural_Network &_neural_network,
         }
     }
 
-    std::size_t wrong_count = _test_images_count - correct_count;
+    size_t wrong_count = _test_images_count - correct_count;
     double accuracy_percentage = (static_cast<double>(correct_count) / _test_images_count) * 100.0;
     double error_rate_percentage = (static_cast<double>(wrong_count) / _test_images_count) * 100.0;
 
@@ -364,14 +364,14 @@ void evaluateModel(Neural_Network &_neural_network,
     evaluation_report += std::format("Error     : {:.2f}%\n\n", error_rate_percentage);
 
     evaluation_report += "Confusion Matrix:\n[";
-    for (std::size_t r = 0; r < OUTPUT_DIMENSION; ++r)
+    for (size_t r = 0; r < OUTPUT_DIMENSION; ++r)
     {
         if (r > 0)
         {
             evaluation_report += " ";
         }
         evaluation_report += "[";
-        for (std::size_t c = 0; c < OUTPUT_DIMENSION; ++c)
+        for (size_t c = 0; c < OUTPUT_DIMENSION; ++c)
         {
             evaluation_report += std::format("{:4d}{}", confusion_matrix[r][c], (c == OUTPUT_DIMENSION - 1 ? "" : " "));
         }
@@ -392,14 +392,14 @@ int main()
 
     std::vector<float> train_images_data;
     std::vector<float> train_labels_data;
-    std::uint32_t train_images_count = 0;
+    uint32_t train_images_count = 0;
 
     loadMnistImages("data/train-images.idx3-ubyte", train_images_data, train_images_count);
     loadMnistLabels("data/train-labels.idx1-ubyte", train_labels_data, train_images_count);
 
     std::vector<float> test_images_data;
     std::vector<float> test_labels_data;
-    std::uint32_t test_images_count = 0;
+    uint32_t test_images_count = 0;
 
     loadMnistImages("data/t10k-images.idx3-ubyte", test_images_data, test_images_count);
     loadMnistLabels("data/t10k-labels.idx1-ubyte", test_labels_data, test_images_count);
