@@ -88,7 +88,7 @@
   },
   "SGD_UPDATE": {
     "op_class": "STANDALONE",
-    "input_count": 2,
+    "input_count": 3,
     "output_count": 0,
     "supports_cooperative_matrix": false,
     "index_expr": "global_id",
@@ -96,7 +96,7 @@
   },
   "ADAM_UPDATE": {
     "op_class": "STANDALONE",
-    "input_count": 4,
+    "input_count": 5,
     "output_count": 0,
     "supports_cooperative_matrix": false,
     "index_expr": "global_id",
@@ -521,6 +521,12 @@
     "supports_cooperative_matrix": false
   },
   "CONV2D_IM2COL_TRANSPOSED_FP16": {
+    "op_class": "STANDALONE",
+    "input_count": 1,
+    "output_count": 1,
+    "supports_cooperative_matrix": false
+  },
+  "CONV2D_IM2COL_FP16": {
     "op_class": "STANDALONE",
     "input_count": 1,
     "output_count": 1,

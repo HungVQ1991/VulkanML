@@ -30,6 +30,8 @@ namespace gpu
         Data_Type data_type = Data_Type::FLOAT32;
         uint32_t used_frame_index = 0;
         uint64_t vector_id = 0;
+        void *host_mapped_pointer = nullptr;
+        bool is_host_mapped = false;
 
         void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage_flags, VkMemoryPropertyFlags memory_properties)
         {
@@ -244,7 +246,8 @@ namespace gpu
         vector(vector &&other) noexcept
             : context(other.context), buffer(other.buffer), allocation(other.allocation),
               buffer_size_in_bytes(other.buffer_size_in_bytes), element_count(other.element_count),
-              data_type(other.data_type), used_frame_index(other.used_frame_index), vector_id(other.vector_id)
+              data_type(other.data_type), used_frame_index(other.used_frame_index), vector_id(other.vector_id),
+              host_mapped_pointer(other.host_mapped_pointer), is_host_mapped(other.is_host_mapped)
         {
             other.buffer = VK_NULL_HANDLE;
             other.allocation = Memory_Allocation{};
@@ -253,6 +256,8 @@ namespace gpu
             other.data_type = Data_Type::FLOAT32;
             other.used_frame_index = 0;
             other.vector_id = 0;
+            other.host_mapped_pointer = nullptr;
+            other.is_host_mapped = false;
         }
 
         vector &operator=(vector &&other) noexcept
@@ -268,6 +273,8 @@ namespace gpu
                 data_type = other.data_type;
                 used_frame_index = other.used_frame_index;
                 vector_id = other.vector_id;
+                host_mapped_pointer = other.host_mapped_pointer;
+                is_host_mapped = other.is_host_mapped;
 
                 other.buffer = VK_NULL_HANDLE;
                 other.allocation = Memory_Allocation{};
@@ -276,6 +283,8 @@ namespace gpu
                 other.data_type = Data_Type::FLOAT32;
                 other.used_frame_index = 0;
                 other.vector_id = 0;
+                other.host_mapped_pointer = nullptr;
+                other.is_host_mapped = false;
             }
             return *this;
         }
@@ -338,6 +347,13 @@ namespace gpu
                                    0,
                                    Log_Feature::MEMORY_ALLOCATION);
 
+                if (is_host_mapped && host_mapped_pointer != nullptr)
+                {
+                    vkUnmapMemory(context.getDevice(), allocation.memory);
+                    host_mapped_pointer = nullptr;
+                    is_host_mapped = false;
+                }
+
                 context.deferDestruction(used_frame_index, buffer, allocation);
 
                 buffer = VK_NULL_HANDLE;
@@ -345,6 +361,50 @@ namespace gpu
                 buffer_size_in_bytes = 0;
             }
         }
+
+        void allocateHostVisible(size_t _byte_size)
+        {
+            freeMemory();
+            if (_byte_size == 0)
+            {
+                return;
+            }
+
+            if (vector_id == 0)
+            {
+                vector_id = ++global_vector_counter;
+            }
+
+            buffer_size_in_bytes = _byte_size;
+            element_count = _byte_size / sizeof(float);
+            data_type = Data_Type::FLOAT32;
+            used_frame_index = context.getCurrentFrame();
+
+            createBuffer(buffer_size_in_bytes,
+                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+            VkResult map_result = vkMapMemory(context.getDevice(), allocation.memory, allocation.offset, buffer_size_in_bytes, 0, &host_mapped_pointer);
+            if (map_result != VK_SUCCESS)
+            {
+                Logger::logMessage("gpu::vector::allocateHostVisible: Failed to map host memory",
+                                   Log_Level::LOG_ERROR, true, 0, Log_Feature::MEMORY_ALLOCATION);
+                throw std::runtime_error("Failed to map host visible memory");
+            }
+            is_host_mapped = true;
+        }
+
+        void writeHostDirect(const void *_source_pointer, size_t _size_in_bytes)
+        {
+            if (host_mapped_pointer && _source_pointer && _size_in_bytes <= buffer_size_in_bytes)
+            {
+                std::memcpy(host_mapped_pointer, _source_pointer, _size_in_bytes);
+            }
+        }
+
+        void *getHostMappedPointer() noexcept { return host_mapped_pointer; }
+        const void *getHostMappedPointer() const noexcept { return host_mapped_pointer; }
+        bool isHostMapped() const noexcept { return is_host_mapped; }
 
         void uploadRawData(const void *source_pointer, size_t size_in_bytes)
         {

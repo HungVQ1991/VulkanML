@@ -1046,7 +1046,8 @@ public:
     void conv2d(const Tensor_Impl &weights, const Tensor_Impl &biases, Tensor_Impl &output,
                 uint32_t input_height, uint32_t input_width, uint32_t input_channels,
                 uint32_t output_channels, uint32_t kernel_size,
-                uint32_t stride, uint32_t padding) const override
+                uint32_t stride, uint32_t padding,
+                Tensor_Impl *scratch = nullptr) const override
     {
         uint32_t batch_size = static_cast<uint32_t>(getRows());
         uint32_t out_h = (input_height + 2 * padding - kernel_size) / stride + 1;

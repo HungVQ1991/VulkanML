@@ -125,13 +125,26 @@ public:
         step(_parameter_gradient_pairs, 1.0f);
     }
 
-    void step(const std::vector<std::pair<Matrix *, Matrix *>> &_parameter_gradient_pairs, float _grad_scale) override
+    void stepDynamicParams(float _grad_scale = 1.0f) override
     {
         if (learning_rate_scheduler != nullptr)
         {
             learning_rate = learning_rate_scheduler->getCurrentRate();
         }
 
+        ++timestep;
+        float inv_scale = (_grad_scale > 0.0f) ? (1.0f / _grad_scale) : 1.0f;
+        size_t effective_t = std::max<size_t>(timestep, 1);
+        float bc1 = std::max(1.0F - std::pow(beta1, static_cast<float>(effective_t)), 1e-8F);
+        float bc2 = std::max(1.0F - std::pow(beta2, static_cast<float>(effective_t)), 1e-8F);
+
+        Execution_Engine &engine = Execution_Engine::getInstance();
+        uint32_t current_frame = engine.getContext().getCurrentFrame();
+        engine.updateDynamicOptimizerParams(learning_rate, 1.0F / bc1, 1.0F / std::sqrt(bc2), inv_scale, current_frame);
+    }
+
+    void step(const std::vector<std::pair<Matrix *, Matrix *>> &_parameter_gradient_pairs, float _grad_scale) override
+    {
         if (parameter_states.empty() && !loaded_states.empty())
         {
             for (size_t i = 0; i < _parameter_gradient_pairs.size() && i < loaded_states.size(); ++i)
@@ -159,7 +172,7 @@ public:
             loaded_states.clear();
         }
 
-        ++timestep;
+        stepDynamicParams(_grad_scale);
         float inv_scale = (_grad_scale > 0.0f) ? (1.0f / _grad_scale) : 1.0f;
 
         for (const auto &[parameter, gradient] : _parameter_gradient_pairs)

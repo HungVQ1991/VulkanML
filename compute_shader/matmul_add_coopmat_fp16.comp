@@ -26,6 +26,7 @@ layout(push_constant) uniform Push_Constants {
 
 shared float16_t smem_x[TILE_M * TILE_K];
 shared float16_t smem_w[TILE_K * TILE_N];
+shared float smem_acc[TILE_M * TILE_N];
 
 void main() {
     uint batch = gl_WorkGroupID.z;
@@ -42,12 +43,50 @@ void main() {
     uint w_batch_offset = (dims.broadcast_w == 1) ? 0 : (batch * dims.columns_x * dims.columns_weights);
     uint y_batch_offset = batch * dims.rows_x * dims.columns_weights;
 
-    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc;
-    acc = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
-
     bool is_m_aligned = (tile_row + TILE_M <= dims.rows_x);
     bool is_n_aligned = (tile_col + TILE_N <= dims.columns_weights);
 
+    // Step 1: Pre-populate accumulator with bias values in FP32
+    for (uint i = 0; i < 8; ++i) {
+        uint idx = lane_id * 8 + i;
+        uint lr = idx / TILE_N;
+        uint lc = idx % TILE_N;
+        uint gr = tile_row + lr;
+        uint gc = tile_col + lc;
+        float b_val = 0.0;
+        if (gr < dims.rows_x && gc < dims.columns_weights) {
+            uint b_offset = (dims.broadcast_b == 1) ? gc : ((dims.broadcast_b == 2) ? (gr * dims.columns_weights + gc) : (y_batch_offset + gr * dims.columns_weights + gc));
+            b_val = float(data_b[b_offset]);
+        }
+        smem_acc[idx] = b_val;
+    }
+    barrier();
+
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc;
+    coopMatLoad(acc, smem_acc, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+
+    // Step 2: One-time padding zero initialization if dimensions are unaligned
+    if (!is_m_aligned) {
+        for (uint i = 0; i < 8; ++i) {
+            uint idx = lane_id * 8 + i;
+            uint lr = idx / TILE_K;
+            if (tile_row + lr >= dims.rows_x) {
+                smem_x[idx] = float16_t(0.0);
+            }
+        }
+    }
+    if (!is_n_aligned) {
+        for (uint i = 0; i < 8; ++i) {
+            uint idx = lane_id * 8 + i;
+            uint lc = idx % TILE_N;
+            if (tile_col + lc >= dims.columns_weights) {
+                smem_w[idx] = float16_t(0.0);
+            }
+        }
+    }
+    barrier();
+
+    // Step 3: Main K accumulation loop
     for (uint k = 0; k < dims.columns_x; k += TILE_K) {
         bool is_k_aligned = (k + TILE_K <= dims.columns_x);
 
@@ -55,13 +94,12 @@ void main() {
         if (is_m_aligned && is_k_aligned) {
             coopMatLoad(matX, data_x, x_batch_offset + tile_row * dims.columns_x + k, dims.columns_x, gl_CooperativeMatrixLayoutRowMajor);
         } else {
-            for (uint i = 0; i < 8; ++i) {
-                uint idx = lane_id * 8 + i;
+            uint valid_rows = min(uint(TILE_M), (dims.rows_x > tile_row) ? (dims.rows_x - tile_row) : 0u);
+            uint valid_elems = valid_rows * TILE_K;
+            for (uint idx = lane_id; idx < valid_elems; idx += 32) {
                 uint lr = idx / TILE_K;
                 uint lc = idx % TILE_K;
-                uint gr = tile_row + lr;
-                uint gk = k + lc;
-                smem_x[idx] = (gr < dims.rows_x && gk < dims.columns_x) ? data_x[x_batch_offset + gr * dims.columns_x + gk] : float16_t(0.0);
+                smem_x[idx] = (is_k_aligned || k + lc < dims.columns_x) ? data_x[x_batch_offset + (tile_row + lr) * dims.columns_x + (k + lc)] : float16_t(0.0);
             }
             barrier();
             coopMatLoad(matX, smem_x, 0, TILE_K, gl_CooperativeMatrixLayoutRowMajor);
@@ -88,21 +126,25 @@ void main() {
         acc = coopMatMulAdd(matX, matW, acc);
     }
 
+    // Step 4: Epilogue - Direct store to global memory if aligned, or fallback store through shared memory
     coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> res;
     res = coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(acc);
 
-    coopMatStore(res, smem_x, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
-    barrier();
+    if (is_m_aligned && is_n_aligned) {
+        coopMatStore(res, data_y, y_batch_offset + tile_row * dims.columns_weights + tile_col, dims.columns_weights, gl_CooperativeMatrixLayoutRowMajor);
+    } else {
+        coopMatStore(res, smem_x, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+        barrier();
 
-    for (uint i = 0; i < 8; ++i) {
-        uint idx = lane_id * 8 + i;
-        uint lr = idx / TILE_N;
-        uint lc = idx % TILE_N;
-        uint gr = tile_row + lr;
-        uint gc = tile_col + lc;
-        if (gr < dims.rows_x && gc < dims.columns_weights) {
-            uint b_offset = (dims.broadcast_b == 1) ? gc : ((dims.broadcast_b == 2) ? (gr * dims.columns_weights + gc) : (y_batch_offset + gr * dims.columns_weights + gc));
-            data_y[y_batch_offset + gr * dims.columns_weights + gc] = float16_t(float(smem_x[idx]) + float(data_b[b_offset]));
+        for (uint i = 0; i < 8; ++i) {
+            uint idx = lane_id * 8 + i;
+            uint lr = idx / TILE_N;
+            uint lc = idx % TILE_N;
+            uint gr = tile_row + lr;
+            uint gc = tile_col + lc;
+            if (gr < dims.rows_x && gc < dims.columns_weights) {
+                data_y[y_batch_offset + gr * dims.columns_weights + gc] = smem_x[idx];
+            }
         }
     }
 }

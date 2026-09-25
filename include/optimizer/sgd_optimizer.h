@@ -56,12 +56,21 @@ public:
         step(_parameter_gradient_pairs, 1.0f);
     }
 
-    void step(const std::vector<std::pair<Matrix *, Matrix *>> &_parameter_gradient_pairs, float _grad_scale) override
+    void stepDynamicParams(float _grad_scale = 1.0f) override
     {
         if (learning_rate_scheduler != nullptr)
         {
             learning_rate = learning_rate_scheduler->getCurrentRate();
         }
+        float inv_scale = (_grad_scale > 0.0f) ? (1.0f / _grad_scale) : 1.0f;
+        Execution_Engine &engine = Execution_Engine::getInstance();
+        uint32_t current_frame = engine.getContext().getCurrentFrame();
+        engine.updateDynamicOptimizerParams(learning_rate, 1.0f, 1.0f, inv_scale, current_frame);
+    }
+
+    void step(const std::vector<std::pair<Matrix *, Matrix *>> &_parameter_gradient_pairs, float _grad_scale) override
+    {
+        stepDynamicParams(_grad_scale);
 
         Logger::logMessage(Input_Format{"Sgd_Optimizer::step: learning_rate={}, pairs_count={}",
                                         learning_rate,

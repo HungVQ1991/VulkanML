@@ -37,6 +37,32 @@ private:
     bool is_gradient_accumulation_enabled = false;
     bool is_mixed_precision_enabled = false;
     bool is_step_lr_per_batch = false;
+    bool is_training_mode = true;
+    VkBuffer static_baked_input_buffers[MAX_FRAMES_IN_FLIGHT]{VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkBuffer static_baked_target_buffers[MAX_FRAMES_IN_FLIGHT]{VK_NULL_HANDLE, VK_NULL_HANDLE};
+
+    static VkBuffer extractBufferHandle(const Tensor &_tensor) noexcept
+    {
+        auto storage_handle = _tensor.getStorage();
+        if (std::holds_alternative<std::shared_ptr<gpu::vector>>(storage_handle))
+        {
+            const auto &gpu_vec = std::get<std::shared_ptr<gpu::vector>>(storage_handle);
+            if (gpu_vec)
+            {
+                return gpu_vec->getBuffer();
+            }
+        }
+        return VK_NULL_HANDLE;
+    }
+
+    void invalidateStaticBufferBindings() noexcept
+    {
+        for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        {
+            static_baked_input_buffers[i] = VK_NULL_HANDLE;
+            static_baked_target_buffers[i] = VK_NULL_HANDLE;
+        }
+    }
 
 public:
     explicit Neural_Network(Execution_Target _execution_target = Execution_Target::CPU)
@@ -79,6 +105,7 @@ public:
                            0,
                            Log_Feature::LAYER_INSPECTION);
         layers.push_back(std::move(_layer));
+        invalidateStaticBufferBindings();
     }
 
     template <std::derived_from<ILayer> Layer_Type_T, typename... Args>
@@ -286,6 +313,38 @@ public:
             _target_tensor.setExecutionTarget(execution_target);
         }
 
+        uint32_t current_frame = (execution_target == Execution_Target::VULKAN_GPU) ? engine.getContext().getCurrentFrame() : 0;
+        VkBuffer current_in_buf = (execution_target == Execution_Target::VULKAN_GPU) ? extractBufferHandle(_input_tensor) : VK_NULL_HANDLE;
+        VkBuffer current_tgt_buf = (execution_target == Execution_Target::VULKAN_GPU) ? extractBufferHandle(_target_tensor) : VK_NULL_HANDLE;
+
+        bool can_fast_replay = is_training_mode &&
+                               engine.isStaticGraphEnabled() &&
+                               execution_target == Execution_Target::VULKAN_GPU &&
+                               engine.getGraphExecutor().isStaticBaked(current_frame) &&
+                               current_in_buf != VK_NULL_HANDLE &&
+                               current_tgt_buf != VK_NULL_HANDLE &&
+                               static_baked_input_buffers[current_frame] == current_in_buf &&
+                               static_baked_target_buffers[current_frame] == current_tgt_buf;
+
+        if (can_fast_replay)
+        {
+            IOptimizer &optimizer = training_context.getOptimizer();
+            if (is_mixed_precision_enabled)
+            {
+                optimizer.stepDynamicParams(loss_scaler.getScaleFactor());
+                loss_scaler.step(false);
+            }
+            else
+            {
+                optimizer.stepDynamicParams(1.0f);
+            }
+
+            invalidateLayerWeightCaches();
+
+            engine.executeStaticReplay(_fence);
+            return;
+        }
+
         forward(_input_tensor);
         backward(_target_tensor);
 
@@ -320,9 +379,16 @@ public:
             optimizer.step(getParametersAndGradients());
         }
 
+        invalidateLayerWeightCaches();
+
         if (execution_target == Execution_Target::VULKAN_GPU)
         {
             engine.executeGraph(_fence);
+            if (engine.isStaticGraphEnabled() && engine.getGraphExecutor().isStaticBaked(current_frame))
+            {
+                static_baked_input_buffers[current_frame] = current_in_buf;
+                static_baked_target_buffers[current_frame] = current_tgt_buf;
+            }
         }
     }
 
@@ -780,6 +846,7 @@ public:
 
     void setTrainingMode(bool _is_training_mode)
     {
+        is_training_mode = _is_training_mode;
         Logger::logMessage(Input_Format{"Neural_Network::setTrainingMode: Setting training mode to {}",
                                         _is_training_mode ? "true" : "false"},
                            Log_Level::LOG_DEBUG,
@@ -789,7 +856,9 @@ public:
         for (auto &layer : layers)
         {
             layer->setTrainingMode(_is_training_mode);
+            layer->invalidateWeightCache();
         }
+        invalidateStaticBufferBindings();
         if (execution_target == Execution_Target::VULKAN_GPU)
         {
             Execution_Engine::getInstance().invalidateStaticGraph();
@@ -818,6 +887,12 @@ public:
         for (auto &layer : layers)
         {
             layer->setMixedPrecision(_enable);
+            layer->invalidateWeightCache();
+        }
+        invalidateStaticBufferBindings();
+        if (execution_target == Execution_Target::VULKAN_GPU)
+        {
+            Execution_Engine::getInstance().invalidateStaticGraph();
         }
         Logger::logMessage(Input_Format{"Neural_Network::setMixedPrecision: Mixed precision {} across {} layers. Target = {}, LossScaler: scale={:.1f}, max_scale={:.1f}",
                                         _enable ? "ENABLED" : "DISABLED", layers.size(),
@@ -827,6 +902,13 @@ public:
                            true,
                            0,
                            Log_Feature::FP16_METRICS | Log_Feature::LAYER_INSPECTION);
+    }
+    void invalidateLayerWeightCaches() noexcept
+    {
+        for (auto &layer : layers)
+        {
+            layer->invalidateWeightCache();
+        }
     }
     void setMixedPrecisionEnabled(bool _enable) noexcept { setMixedPrecision(_enable); }
     void enableMixedPrecision(bool _enable = true) noexcept { setMixedPrecision(_enable); }
@@ -838,5 +920,9 @@ public:
     void enableStaticGraph(bool _enable = true) noexcept { Execution_Engine::getInstance().setStaticGraphEnabled(_enable); }
     void setStaticGraphEnabled(bool _enable) noexcept { Execution_Engine::getInstance().setStaticGraphEnabled(_enable); }
     bool isStaticGraphEnabled() const noexcept { return Execution_Engine::getInstance().isStaticGraphEnabled(); }
-    void invalidateStaticGraph() noexcept { Execution_Engine::getInstance().invalidateStaticGraph(); }
+    void invalidateStaticGraph() noexcept
+    {
+        invalidateStaticBufferBindings();
+        Execution_Engine::getInstance().invalidateStaticGraph();
+    }
 };

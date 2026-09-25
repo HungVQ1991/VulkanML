@@ -197,4 +197,5 @@ public:
     virtual void setTrainingMode(bool _is_training) {}
     virtual void setMixedPrecision(bool _enable) noexcept { is_mixed_precision_enabled = _enable; }
     virtual bool isMixedPrecisionEnabled() const noexcept { return is_mixed_precision_enabled; }
+    virtual void invalidateWeightCache() noexcept {}
 };

@@ -631,24 +631,24 @@ int main(int argc, char* argv[])
     Neural_Network network(execution_target);
     // network.enableMixedPrecision();
 
-    network.addLayer<Conv2d_Layer>(32, 32, 1, 16, 3, 1, 1, execution_target);
-    network.addLayer<Batch_Norm_2d_Layer>(32, 32, 16, 1e-5f, 0.1f, execution_target);
-    network.addLayer<Gelu_Layer>(execution_target);
-    network.addLayer<Max_Pool_2d_Layer>(32, 32, 16, 2, 2, 0, execution_target);
+    network.addLayer<Conv2d_Layer>(32, 32, 1, 16, 3, 1, 1);
+    network.addLayer<Batch_Norm_2d_Layer>(32, 32, 16, 1e-5f, 0.1f);
+    network.addLayer<Gelu_Layer>();
+    network.addLayer<Max_Pool_2d_Layer>(32, 32, 16, 2, 2, 0);
 
-    network.addLayer<Conv2d_Layer>(16, 16, 16, 32, 3, 1, 1, execution_target);
-    network.addLayer<Batch_Norm_2d_Layer>(16, 16, 32, 1e-5f, 0.1f, execution_target);
-    network.addLayer<Gelu_Layer>(execution_target);
-    network.addLayer<Max_Pool_2d_Layer>(16, 16, 32, 2, 2, 0, execution_target);
-    network.addLayer<Max_Pool_2d_Layer>(8, 8, 32, 2, 2, 0, execution_target);
+    network.addLayer<Conv2d_Layer>(16, 16, 16, 32, 3, 1, 1);
+    network.addLayer<Batch_Norm_2d_Layer>(16, 16, 32, 1e-5f, 0.1f);
+    network.addLayer<Gelu_Layer>();
+    network.addLayer<Max_Pool_2d_Layer>(16, 16, 32, 2, 2, 0);
+    network.addLayer<Max_Pool_2d_Layer>(8, 8, 32, 2, 2, 0);
 
-    network.addLayer<Linear_Layer>(512, 64, execution_target);
-    network.addLayer<Batch_Norm_Layer>(64, 1e-5f, 0.1f, execution_target);
-    network.addLayer<Gelu_Layer>(execution_target);
-    network.addLayer<Linear_Layer>(64, 6, execution_target);
-    network.addLayer<Softmax_Layer>(true, execution_target);
+    network.addLayer<Linear_Layer>(512, 64);
+    network.addLayer<Batch_Norm_Layer>(64, 1e-5f, 0.1f);
+    network.addLayer<Gelu_Layer>();
+    network.addLayer<Linear_Layer>(64, 6);
+    network.addLayer<Softmax_Layer>(true);
 
-    network.setCostFunction<Cce_Cost>(1e-7f, execution_target);
+    network.setCostFunction<Cce_Cost>(1e-7f);
     network.setLearningRate<Cosine_Annealing>(learning_rate, 1e-5f, static_cast<int>(total_epochs));
     network.setOptimizer<Adam_Optimizer>(network.getLearningRate(), 0.9f, 0.999f, 1e-8f, 1.0f);
 

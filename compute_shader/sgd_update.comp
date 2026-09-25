@@ -2,27 +2,35 @@
 
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
-layout(set = 0, binding = 0) buffer WeightsBuffer {
+layout(std430, set = 0, binding = 0) restrict buffer WeightsBuffer {
     float weights[];
 };
 
-layout(set = 0, binding = 1) buffer GradsBuffer {
+layout(std430, set = 0, binding = 1) readonly restrict buffer GradsBuffer {
     float grads[];
 };
 
+layout(std430, set = 0, binding = 2) readonly restrict buffer DynamicParams {
+    float learning_rate;
+    float pad0;
+    float pad1;
+    float inv_scale;
+} dyn;
+
 layout(push_constant) uniform PushConstants {
     uint total_elements;
-    float learning_rate;
     float max_gradient;
 } params;
 
 void main() {
     uint idx = gl_GlobalInvocationID.x;
     if (idx < params.total_elements) {
-        float g = grads[idx];
+        float g = grads[idx] * dyn.inv_scale;
+        if (isnan(g) || isinf(g)) return;
+
         if (params.max_gradient > 0.0f) {
             g = clamp(g, -params.max_gradient, params.max_gradient);
         }
-        weights[idx] -= params.learning_rate * g;
+        weights[idx] -= dyn.learning_rate * g;
     }
 }

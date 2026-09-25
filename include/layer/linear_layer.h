@@ -40,6 +40,7 @@ private:
     float initialization_gain = 2.0f;
     size_t output_dimension = 0;
     bool is_forward_completed = false;
+    bool is_weights_fp16_dirty = true;
     Execution_Target execution_target = Execution_Target::CPU;
 
 public:
@@ -145,8 +146,12 @@ public:
                 input_tensor_fp16 = input_tensor;
             }
 
-            weights.to(Data_Type::FLOAT16, weights_fp16);
-            biases.to(Data_Type::FLOAT16, biases_fp16);
+            if (is_weights_fp16_dirty || weights_fp16.isEmpty() || biases_fp16.isEmpty())
+            {
+                weights.to(Data_Type::FLOAT16, weights_fp16);
+                biases.to(Data_Type::FLOAT16, biases_fp16);
+                is_weights_fp16_dirty = false;
+            }
 
             input_tensor_fp16.linearForward(weights_fp16, biases_fp16, output_tensor_fp16);
             output_tensor = output_tensor_fp16;
@@ -263,6 +268,17 @@ public:
         return cloned;
     }
 
+    void invalidateWeightCache() noexcept override
+    {
+        is_weights_fp16_dirty = true;
+    }
+
+    void setMixedPrecision(bool _enable) noexcept override
+    {
+        ILayer::setMixedPrecision(_enable);
+        is_weights_fp16_dirty = true;
+    }
+
     void resetGradient() override
     {
         is_forward_completed = false;
@@ -295,6 +311,7 @@ public:
         biases = Tensor::loadTensor(_input_file_stream, execution_target);
         input_dimension = weights.getRows();
         output_dimension = weights.getColumns();
+        is_weights_fp16_dirty = true;
     }
 
     void saveCheckpoint(std::ofstream &_output_file_stream) const override
@@ -313,6 +330,7 @@ public:
         biases_gradient_tensor = Tensor::loadTensor(_input_file_stream, execution_target);
         input_dimension = weights.getRows();
         output_dimension = weights.getColumns();
+        is_weights_fp16_dirty = true;
     }
 
     std::function<float(std::mt19937&)> getPopulationParameterInitializer(size_t param_index) const override
@@ -376,6 +394,7 @@ public:
                 throw std::invalid_argument("Linear_Layer::setPopulationParameter: Weight size mismatch");
             }
             weights = Tensor(input_dimension, output_dimension, std::move(flat_data), execution_target);
+            is_weights_fp16_dirty = true;
         }
         else if (param_index == 1)
         {
@@ -384,6 +403,7 @@ public:
                 throw std::invalid_argument("Linear_Layer::setPopulationParameter: Bias size mismatch");
             }
             biases = Tensor(1, output_dimension, std::move(flat_data), execution_target);
+            is_weights_fp16_dirty = true;
         }
         else
         {
@@ -402,6 +422,7 @@ public:
             throw std::invalid_argument("Dimension size of weight must match");
         }
         weights = _new_weights;
+        is_weights_fp16_dirty = true;
     }
     void setBiases(const Tensor &_new_biases)
     {
@@ -415,6 +436,7 @@ public:
             throw std::invalid_argument("Dimension size of bias must match");
         }
         biases = _new_biases;
+        is_weights_fp16_dirty = true;
     }
     void setWeightsGradient(const Tensor &_tensor) { weights_gradient_tensor = _tensor; }
     void setBiasesGradient(const Tensor &_tensor) { biases_gradient_tensor = _tensor; }

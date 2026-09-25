@@ -18,22 +18,28 @@ layout(std430, set = 0, binding = 3) restrict buffer VBuffer {
     float v_vec[];
 };
 
+layout(std430, set = 0, binding = 4) readonly restrict buffer DynamicParams {
+    float lr;
+    float inv_correction1;
+    float inv_sqrt_correction2;
+    float inv_scale;
+} dyn;
+
 layout(push_constant) uniform PushConstants {
     uint total_size;
-    float lr;
     float beta1;
     float beta2;
     float eps;
     float max_grad;
-    float inv_correction1;
-    float inv_sqrt_correction2;
 } pc;
 
 void main() {
     uint idx = gl_GlobalInvocationID.x;
     if (idx >= pc.total_size) return;
 
-    float g = grads[idx];
+    float g = grads[idx] * dyn.inv_scale;
+    if (isnan(g) || isinf(g)) return;
+
     if (pc.max_grad > 0.0) {
         g = clamp(g, -pc.max_grad, pc.max_grad);
     }
@@ -44,8 +50,8 @@ void main() {
     m_vec[idx] = m_val;
     v_vec[idx] = v_val;
 
-    float m_hat = m_val * pc.inv_correction1;
-    float v_hat_sqrt = sqrt(v_val) * pc.inv_sqrt_correction2;
+    float m_hat = m_val * dyn.inv_correction1;
+    float v_hat_sqrt = sqrt(v_val) * dyn.inv_sqrt_correction2;
 
-    params[idx] -= pc.lr * m_hat / (v_hat_sqrt + pc.eps);
+    params[idx] -= dyn.lr * m_hat / (v_hat_sqrt + pc.eps);
 }

@@ -11,6 +11,7 @@
 #include <vulkan/vulkan.h>
 
 #include "compute_graph.h"
+#include "gpu_vector.h"
 #include "graph_executor.h"
 #include "graph_optimizer.h"
 #include "helper/logger.h"
@@ -29,7 +30,6 @@ private:
     std::unique_ptr<Pipeline_Cache_Manager> pipeline_cache_manager;
     std::unique_ptr<Shader_Dictionary> shader_dictionary;
     std::string shader_folder_path = "compute_shader";
-
     Compute_Graph current_graph;
     std::unique_ptr<Graph_Executor> graph_executor;
 
@@ -311,6 +311,23 @@ public:
         graph_executor->resetFrameState(next_frame_index);
     }
 
+    void executeStaticReplay(VkFence _external_fence = VK_NULL_HANDLE)
+    {
+        uint32_t current_frame_index = context->getCurrentFrame();
+        graph_executor->executeStaticGraphReplay(current_graph, context->getTransferTasks(), current_frame_index, _external_fence);
+
+        context->resetStagingOffset(current_frame_index);
+        context->clearTransferTasks();
+        current_graph.clear();
+
+        context->advanceFrame();
+
+        uint32_t next_frame_index = context->getCurrentFrame();
+        context->prepareFrame();
+        context->cleanGarbage(next_frame_index);
+        graph_executor->resetFrameState(next_frame_index);
+    }
+
     void waitIdle() const
     {
         Logger::logMessage("Execution_Engine::waitIdle: Waiting for device idle",
@@ -360,6 +377,27 @@ public:
     bool isCooperativeMatrixSupported() const noexcept { return context && context->isCooperativeMatrixSupported(); }
     bool isCooperativeMatrixEnabled() const noexcept { return is_coop; }
     bool isGraphCacheEnabled() const noexcept { return is_graph_cache_enabled; }
+
+    struct Adam_Dynamic_Params
+    {
+        float learning_rate = 0.001f;
+        float inv_bc1 = 1.0f;
+        float inv_sqrt_bc2 = 1.0f;
+        float inv_scale = 1.0f;
+    };
+
+    void updateDynamicOptimizerParams(float _lr, float _inv_bc1, float _inv_sqrt_bc2, float _inv_scale, uint32_t _frame_index)
+    {
+        if (graph_executor)
+        {
+            graph_executor->updateDynamicOptimizerParams(_lr, _inv_bc1, _inv_sqrt_bc2, _inv_scale, _frame_index);
+        }
+    }
+
+    std::shared_ptr<gpu::vector> getDynamicOptimizerBuffer(uint32_t _frame_index) const noexcept
+    {
+        return graph_executor ? graph_executor->getDynamicOptimizerBuffer(_frame_index) : nullptr;
+    }
 
     void setShaderFolderPath(const std::string &_path) { shader_folder_path = _path; }
     void setCooperativeMatrixEnabled(bool _enable)

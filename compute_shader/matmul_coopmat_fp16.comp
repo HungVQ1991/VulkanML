@@ -46,6 +46,27 @@ void main() {
     bool is_m_aligned = (tile_row + TILE_M <= dims.rows_a);
     bool is_n_aligned = (tile_col + TILE_N <= dims.cols_b);
 
+    // One-time padding zero initialization if dimensions are unaligned
+    if (!is_m_aligned) {
+        for (uint i = 0; i < 8; ++i) {
+            uint idx = lane_id * 8 + i;
+            uint lr = idx / TILE_K;
+            if (tile_row + lr >= dims.rows_a) {
+                smem_a[idx] = float16_t(0.0);
+            }
+        }
+    }
+    if (!is_n_aligned) {
+        for (uint i = 0; i < 8; ++i) {
+            uint idx = lane_id * 8 + i;
+            uint lc = idx % TILE_N;
+            if (tile_col + lc >= dims.cols_b) {
+                smem_b[idx] = float16_t(0.0);
+            }
+        }
+    }
+    barrier();
+
     for (uint k = 0; k < dims.cols_a; k += TILE_K) {
         bool is_k_aligned = (k + TILE_K <= dims.cols_a);
 
@@ -53,13 +74,12 @@ void main() {
         if (is_m_aligned && is_k_aligned) {
             coopMatLoad(matA, data_a, a_batch_offset + tile_row * dims.cols_a + k, dims.cols_a, gl_CooperativeMatrixLayoutRowMajor);
         } else {
-            for (uint i = 0; i < 8; ++i) {
-                uint idx = lane_id * 8 + i;
+            uint valid_rows = min(uint(TILE_M), (dims.rows_a > tile_row) ? (dims.rows_a - tile_row) : 0u);
+            uint valid_elems = valid_rows * TILE_K;
+            for (uint idx = lane_id; idx < valid_elems; idx += 32) {
                 uint lr = idx / TILE_K;
                 uint lc = idx % TILE_K;
-                uint gr = tile_row + lr;
-                uint gk = k + lc;
-                smem_a[idx] = (gr < dims.rows_a && gk < dims.cols_a) ? data_a[a_batch_offset + gr * dims.cols_a + gk] : float16_t(0.0);
+                smem_a[idx] = (is_k_aligned || k + lc < dims.cols_a) ? data_a[a_batch_offset + (tile_row + lr) * dims.cols_a + (k + lc)] : float16_t(0.0);
             }
             barrier();
             coopMatLoad(matA, smem_a, 0, TILE_K, gl_CooperativeMatrixLayoutRowMajor);

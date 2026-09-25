@@ -28,6 +28,10 @@ public:
         (void)_grad_scale;
         step(_parameter_gradient_pairs);
     }
+    virtual void stepDynamicParams(float _grad_scale = 1.0f)
+    {
+        (void)_grad_scale;
+    }
     virtual void reset() {}
     virtual void saveCheckpoint(std::ofstream &_output_file_stream) const = 0;
     virtual void loadCheckpoint(std::ifstream &_input_file_stream, Execution_Target _execution_target = Execution_Target::CPU) = 0;

@@ -25,7 +25,7 @@
 constexpr size_t INPUT_DIMENSION = 784;
 constexpr size_t OUTPUT_DIMENSION = 10;
 constexpr size_t BATCH_SIZE = 8;
-constexpr size_t TOTAL_EPOCHS = 10;
+constexpr size_t TOTAL_EPOCHS = 1;
 
 uint32_t swapByteOrder(uint32_t _value)
 {
@@ -411,9 +411,10 @@ int main()
     Execution_Target execution_target = Execution_Target::VULKAN_GPU;
     Neural_Network neural_network(execution_target);
     neural_network.setTrainingMode(true);
+
     neural_network.enableMixedPrecision();
-    neural_network.enableStaticGraph();
-    neural_network.enableCooperationMatrix();
+    // neural_network.enableStaticGraph();
+    // neural_network.enableCooperationMatrix();
 
     neural_network.setLearningRate<Cosine_Annealing>(0.001f, 1e-5f, static_cast<int>(TOTAL_EPOCHS));
     neural_network.setOptimizer<Adam_Optimizer>(neural_network.getLearningRate(), 0.9f, 0.999f, 1e-8f, 1.0f);

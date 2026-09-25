@@ -712,15 +712,18 @@ public:
         auto contig_grad = grad_gpu.ensureContiguousSelf();
         const auto *effective_grad = contig_grad ? contig_grad.get() : &grad_gpu;
 
+        Execution_Engine &engine = Execution_Engine::getInstance();
+        uint32_t current_frame = engine.getContext().getCurrentFrame();
+        engine.updateDynamicOptimizerParams(learning_rate, 1.0f, 1.0f, inv_scale, current_frame);
+
         struct Sgd_Constants
         {
             uint32_t total_elements;
-            float learning_rate;
             float max_gradient;
-            float inv_scale;
-        } constants{static_cast<uint32_t>(total_elements), learning_rate, max_gradient, inv_scale};
+        } constants{static_cast<uint32_t>(total_elements), max_gradient};
 
-        pushToGraph(Compute_Pipeline::SGD_UPDATE, {storage, effective_grad->storage}, constants, (total_elements + 255) / 256);
+        auto dyn_buf = engine.getDynamicOptimizerBuffer(current_frame);
+        pushToGraph(Compute_Pipeline::SGD_UPDATE, {storage, effective_grad->storage, dyn_buf}, constants, (total_elements + 255) / 256);
     }
 
     void adamUpdate(const Tensor_Impl &gradient,
@@ -749,21 +752,21 @@ public:
         float bc1 = std::max(1.0F - std::pow(beta1, static_cast<float>(effective_t)), 1e-8F);
         float bc2 = std::max(1.0F - std::pow(beta2, static_cast<float>(effective_t)), 1e-8F);
 
+        Execution_Engine &engine = Execution_Engine::getInstance();
+        uint32_t current_frame = engine.getContext().getCurrentFrame();
+        engine.updateDynamicOptimizerParams(learning_rate, 1.0F / bc1, 1.0F / std::sqrt(bc2), inv_scale, current_frame);
+
         struct Adam_Constants
         {
             uint32_t total_elements;
-            float learning_rate;
             float beta1;
             float beta2;
             float epsilon;
             float max_gradient;
-            float inv_bc1;
-            float inv_sqrt_bc2;
-            float inv_scale;
-        } constants{static_cast<uint32_t>(total_elements), learning_rate, beta1, beta2, epsilon, max_gradient,
-                    1.0F / bc1, 1.0F / std::sqrt(bc2), inv_scale};
+        } constants{static_cast<uint32_t>(total_elements), beta1, beta2, epsilon, max_gradient};
 
-        pushToGraph(Compute_Pipeline::ADAM_UPDATE, {storage, effective_grad->storage, m_gpu.storage, v_gpu.storage}, constants, (total_elements + 255) / 256);
+        auto dyn_buf = engine.getDynamicOptimizerBuffer(current_frame);
+        pushToGraph(Compute_Pipeline::ADAM_UPDATE, {storage, effective_grad->storage, m_gpu.storage, v_gpu.storage, dyn_buf}, constants, (total_elements + 255) / 256);
     }
 
     void matmulAdd(const Tensor_Impl &weights, const Tensor_Impl &biases, Tensor_Impl &output) const override
@@ -908,7 +911,8 @@ public:
     void conv2d(const Tensor_Impl &weights, const Tensor_Impl &biases, Tensor_Impl &output,
                 uint32_t input_height, uint32_t input_width, uint32_t input_channels,
                 uint32_t output_channels, uint32_t kernel_size,
-                uint32_t stride, uint32_t padding) const override
+                uint32_t stride, uint32_t padding,
+                Tensor_Impl *scratch = nullptr) const override
     {
         auto contig_self = ensureContiguousSelf();
         const auto *effective_self = contig_self ? contig_self.get() : this;
@@ -932,7 +936,10 @@ public:
         {
             output_gpu.setDataType(Data_Type::FLOAT16);
         }
-        output_gpu.reshape(batch_size, out_h * out_w * output_channels);
+
+        uint32_t M = batch_size * out_h * out_w;
+        uint32_t K = kernel_size * kernel_size * input_channels;
+        uint32_t N = output_channels;
 
         struct Conv2d_Constants
         {
@@ -947,6 +954,57 @@ public:
             uint32_t stride;
             uint32_t padding;
         } constants{batch_size, input_height, input_width, input_channels, out_h, out_w, output_channels, kernel_size, stride, padding};
+
+        if (is_fp16 && Execution_Engine::getInstance().isCooperativeMatrixEnabled())
+        {
+            Gpu_Tensor_Impl *effective_scratch = nullptr;
+            std::shared_ptr<Gpu_Tensor_Impl> local_scratch;
+            if (scratch != nullptr)
+            {
+                effective_scratch = &castToGpu(*scratch);
+                effective_scratch->setDataType(Data_Type::FLOAT16);
+                effective_scratch->reshape(M, K);
+            }
+            else
+            {
+                local_scratch = std::make_shared<Gpu_Tensor_Impl>(Shape{M, K}, Data_Type::FLOAT16);
+                effective_scratch = local_scratch.get();
+            }
+
+            // 1. Unroll input patches directly into [M, K]
+            pushToGraph(Compute_Pipeline::CONV2D_IM2COL_FP16,
+                        {effective_self->storage, effective_scratch->storage},
+                        constants,
+                        (M + 15) / 16, (K + 15) / 16, 1);
+
+            // 2. GEMM with Cooperative Matrix: [M, K] * [K, N] + [1, N] -> [M, N]
+            output_gpu.reshape(M, N);
+            struct Matmul_Add_Constants
+            {
+                uint32_t batch_count;
+                uint32_t rows_x;
+                uint32_t columns_x;
+                uint32_t columns_weights;
+                uint32_t broadcast_w;
+                uint32_t broadcast_b;
+            } matmul_constants{
+                .batch_count = 1,
+                .rows_x = M,
+                .columns_x = K,
+                .columns_weights = N,
+                .broadcast_w = 0,
+                .broadcast_b = 1};
+
+            pushToGraph(Compute_Pipeline::MATMUL_ADD_COOPMAT_FP16,
+                        {effective_scratch->storage, effective_w->storage, effective_b->storage, output_gpu.storage},
+                        matmul_constants,
+                        (N + 15) / 16, (M + 15) / 16, 1);
+
+            output_gpu.reshape(batch_size, out_h * out_w * output_channels);
+            return;
+        }
+
+        output_gpu.reshape(batch_size, out_h * out_w * output_channels);
 
         Compute_Pipeline pipeline = is_fp16 ? Compute_Pipeline::CONV2D_FORWARD_PASS_FP16 : Compute_Pipeline::CONV2D_FORWARD_PASS;
         pushToGraph(pipeline, {effective_self->storage, effective_w->storage, effective_b->storage, output_gpu.storage}, constants,

@@ -48,6 +48,7 @@ private:
     Tensor output_gradient_tensor_fp16;
     Tensor im2col_scratch;
     Tensor im2col_scratch_fp16;
+    bool is_weights_fp16_dirty = true;
 
     void initializeWeights()
     {
@@ -135,10 +136,14 @@ public:
                 input_tensor_fp16 = input_tensor;
             }
 
-            weights.to(Data_Type::FLOAT16, weights_fp16);
-            biases.to(Data_Type::FLOAT16, biases_fp16);
+            if (is_weights_fp16_dirty || weights_fp16.isEmpty() || biases_fp16.isEmpty())
+            {
+                weights.to(Data_Type::FLOAT16, weights_fp16);
+                biases.to(Data_Type::FLOAT16, biases_fp16);
+                is_weights_fp16_dirty = false;
+            }
 
-            input_tensor_fp16.conv2d(weights_fp16, biases_fp16, output_tensor_fp16, input_height, input_width, input_channels, output_channels, kernel_size, stride, padding);
+            input_tensor_fp16.conv2d(weights_fp16, biases_fp16, output_tensor_fp16, input_height, input_width, input_channels, output_channels, kernel_size, stride, padding, &im2col_scratch_fp16);
 
             output_tensor = output_tensor_fp16;
         }
@@ -273,6 +278,17 @@ public:
         return cloned;
     }
 
+    void invalidateWeightCache() noexcept override
+    {
+        is_weights_fp16_dirty = true;
+    }
+
+    void setMixedPrecision(bool _enable) noexcept override
+    {
+        ILayer::setMixedPrecision(_enable);
+        is_weights_fp16_dirty = true;
+    }
+
     void saveConfiguration(std::ofstream &_output_file_stream) const override
     {
         _output_file_stream.write(reinterpret_cast<const char *>(&input_height), sizeof(input_height));
@@ -294,6 +310,7 @@ public:
     {
         weights = Tensor::loadTensor(_input_file_stream, execution_target);
         biases = Tensor::loadTensor(_input_file_stream, execution_target);
+        is_weights_fp16_dirty = true;
     }
 
     void saveCheckpoint(std::ofstream &_output_file_stream) const override
@@ -310,6 +327,7 @@ public:
         biases = Tensor::loadTensor(_input_file_stream, execution_target);
         weights_gradient_tensor = Tensor::loadTensor(_input_file_stream, execution_target);
         biases_gradient_tensor = Tensor::loadTensor(_input_file_stream, execution_target);
+        is_weights_fp16_dirty = true;
     }
 
     std::function<float(std::mt19937&)> getPopulationParameterInitializer(size_t param_index) const override
@@ -384,6 +402,7 @@ public:
                 throw std::invalid_argument("Conv2d_Layer::setPopulationParameter: Weight size mismatch");
             }
             weights = Tensor(1, weight_count, std::move(flat_data), execution_target);
+            is_weights_fp16_dirty = true;
         }
         else if (param_index == 1)
         {
@@ -392,6 +411,7 @@ public:
                 throw std::invalid_argument("Conv2d_Layer::setPopulationParameter: Bias size mismatch");
             }
             biases = Tensor(1, output_channels, std::move(flat_data), execution_target);
+            is_weights_fp16_dirty = true;
         }
         else
         {
@@ -401,8 +421,16 @@ public:
     void setWeightsGradient(const Tensor &_tensor) { weights_gradient_tensor = _tensor; }
     void setBiasesGradient(const Tensor &_tensor) { biases_gradient_tensor = _tensor; }
     void setInputGradient(const Tensor &_tensor) { input_gradient_tensor = _tensor; }
-    void setWeights(const Tensor &_new_weights) { weights = _new_weights; }
-    void setBiases(const Tensor &_new_biases) { biases = _new_biases; }
+    void setWeights(const Tensor &_new_weights)
+    {
+        weights = _new_weights;
+        is_weights_fp16_dirty = true;
+    }
+    void setBiases(const Tensor &_new_biases)
+    {
+        biases = _new_biases;
+        is_weights_fp16_dirty = true;
+    }
     void setInput(const Tensor &_tensor) { input_tensor = _tensor; }
     void setOutput(const Tensor &_tensor) { output_tensor = _tensor; }
     void setExecutionTarget(Execution_Target _new_execution_target) override

@@ -67,25 +67,10 @@ private:
 
     std::vector<Persistent_Descriptor_Entry> persistent_descriptor_caches[MAX_FRAMES_IN_FLIGHT];
     std::vector<std::vector<Persistent_Descriptor_Entry>> fallback_descriptor_caches[MAX_FRAMES_IN_FLIGHT];
+    std::array<std::shared_ptr<gpu::vector>, MAX_FRAMES_IN_FLIGHT> dynamic_optimizer_buffers;
 
     static bool isDynamicNode(const Compute_Node &_node) noexcept
     {
-        if (_node.pipeline_id == Compute_Pipeline::ADAM_UPDATE ||
-            _node.pipeline_id == Compute_Pipeline::SGD_UPDATE)
-        {
-            return true;
-        }
-        if (_node.is_fused)
-        {
-            for (const auto &op : _node.fused_operations)
-            {
-                if (op.pipeline_id == Compute_Pipeline::ADAM_UPDATE ||
-                    op.pipeline_id == Compute_Pipeline::SGD_UPDATE)
-                {
-                    return true;
-                }
-            }
-        }
         return false;
     }
 
@@ -542,6 +527,12 @@ private:
             }
         }
 
+        for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        {
+            dynamic_optimizer_buffers[i] = std::make_shared<gpu::vector>(context);
+            dynamic_optimizer_buffers[i]->allocateHostVisible(256);
+        }
+
         shared_descriptor_buffer_informations.reserve(32);
         shared_write_descriptor_sets.reserve(32);
         shared_fused_buffers.reserve(32);
@@ -695,6 +686,32 @@ public:
         vkFreeCommandBuffers(device, context.getCommandPool(), MAX_FRAMES_IN_FLIGHT, transfer_command_buffers);
         vkFreeCommandBuffers(device, context.getCommandPool(), MAX_FRAMES_IN_FLIGHT, static_command_buffers);
         vkFreeCommandBuffers(device, context.getCommandPool(), MAX_FRAMES_IN_FLIGHT, epilogue_command_buffers);
+        for (auto &buf : dynamic_optimizer_buffers)
+        {
+            buf.reset();
+        }
+    }
+
+    struct Adam_Dynamic_Params
+    {
+        float learning_rate = 0.001f;
+        float inv_bc1 = 1.0f;
+        float inv_sqrt_bc2 = 1.0f;
+        float inv_scale = 1.0f;
+    };
+
+    void updateDynamicOptimizerParams(float _lr, float _inv_bc1, float _inv_sqrt_bc2, float _inv_scale, uint32_t _frame_index)
+    {
+        if (_frame_index < MAX_FRAMES_IN_FLIGHT && dynamic_optimizer_buffers[_frame_index])
+        {
+            Adam_Dynamic_Params params{_lr, _inv_bc1, _inv_sqrt_bc2, _inv_scale};
+            dynamic_optimizer_buffers[_frame_index]->writeHostDirect(&params, sizeof(params));
+        }
+    }
+
+    std::shared_ptr<gpu::vector> getDynamicOptimizerBuffer(uint32_t _frame_index) const noexcept
+    {
+        return (_frame_index < MAX_FRAMES_IN_FLIGHT) ? dynamic_optimizer_buffers[_frame_index] : nullptr;
     }
 
     void getExternalBufferIndices(const Compute_Node &_node, std::vector<uint32_t> &_output_indices) const
@@ -1297,7 +1314,8 @@ public:
                             const std::vector<Compute_Node> &_nodes,
                             size_t _start_index,
                             size_t _end_index,
-                            uint32_t _frame_index)
+                            uint32_t _frame_index,
+                            size_t _cache_index_offset = 0)
     {
         if (_start_index >= _end_index || _start_index >= _nodes.size())
         {
@@ -1307,13 +1325,15 @@ public:
         size_t end_idx = std::min(_end_index, _nodes.size());
         VkDevice device = context.getDevice();
 
-        if (persistent_descriptor_caches[_frame_index].size() < end_idx)
+        size_t required_cache_size = end_idx + _cache_index_offset;
+        if (persistent_descriptor_caches[_frame_index].size() < required_cache_size)
         {
-            persistent_descriptor_caches[_frame_index].resize(end_idx);
+            persistent_descriptor_caches[_frame_index].resize(required_cache_size);
         }
 
         for (size_t i = _start_index; i < end_idx; ++i)
         {
+            size_t cache_idx = i + _cache_index_offset;
             const Compute_Node &node = _nodes[i];
 
             for (const auto &vector_ptr : node.buffers)
@@ -1359,7 +1379,7 @@ public:
                             }
                         }
 
-                        auto &entry = persistent_descriptor_caches[_frame_index][i];
+                        auto &entry = persistent_descriptor_caches[_frame_index][cache_idx];
                         if (entry.descriptor_set == VK_NULL_HANDLE)
                         {
                             VkDescriptorSetLayout layout = network.getDescriptorSetLayout();
@@ -1420,11 +1440,11 @@ public:
             {
                 if (node.is_fused && node.fused_operations.size() > 1)
                 {
-                    executeFallbackNode(_command_buffer, node, i, _frame_index);
+                    executeFallbackNode(_command_buffer, node, cache_idx, _frame_index);
                 }
                 else
                 {
-                    auto &entry = persistent_descriptor_caches[_frame_index][i];
+                    auto &entry = persistent_descriptor_caches[_frame_index][cache_idx];
                     if (entry.descriptor_set == VK_NULL_HANDLE)
                     {
                         VkDescriptorSetLayout layout = network.getDescriptorSetLayout();
@@ -1446,14 +1466,29 @@ public:
                         }
                     }
 
-                    if (!isBuffersMatching(entry, node.buffers))
+                    const auto *effective_buffers = &node.buffers;
+                    std::vector<std::shared_ptr<gpu::vector>> localized_buffers;
+                    if (node.pipeline_id == Compute_Pipeline::ADAM_UPDATE && node.buffers.size() > 4)
                     {
-                        updateDescriptorSet(entry.descriptor_set, node.buffers);
+                        localized_buffers = node.buffers;
+                        localized_buffers[4] = dynamic_optimizer_buffers[_frame_index];
+                        effective_buffers = &localized_buffers;
+                    }
+                    else if (node.pipeline_id == Compute_Pipeline::SGD_UPDATE && node.buffers.size() > 2)
+                    {
+                        localized_buffers = node.buffers;
+                        localized_buffers[2] = dynamic_optimizer_buffers[_frame_index];
+                        effective_buffers = &localized_buffers;
+                    }
+
+                    if (!isBuffersMatching(entry, *effective_buffers))
+                    {
+                        updateDescriptorSet(entry.descriptor_set, *effective_buffers);
                         entry.bound_binding_indices.clear();
-                        entry.bound_buffers.resize(node.buffers.size());
-                        for (size_t j = 0; j < node.buffers.size(); ++j)
+                        entry.bound_buffers.resize(effective_buffers->size());
+                        for (size_t j = 0; j < effective_buffers->size(); ++j)
                         {
-                            entry.bound_buffers[j] = node.buffers[j] ? node.buffers[j]->getBuffer() : VK_NULL_HANDLE;
+                            entry.bound_buffers[j] = (*effective_buffers)[j] ? (*effective_buffers)[j]->getBuffer() : VK_NULL_HANDLE;
                         }
                     }
 
@@ -1686,8 +1721,18 @@ public:
         baked_buffer_handles[_frame_index].clear();
         for (size_t i = 0; i < split_index; ++i)
         {
-            for (const auto &buf : nodes[i].buffers)
+            const auto &n = nodes[i];
+            for (size_t b_idx = 0; b_idx < n.buffers.size(); ++b_idx)
             {
+                auto buf = n.buffers[b_idx];
+                if (n.pipeline_id == Compute_Pipeline::ADAM_UPDATE && b_idx == 4)
+                {
+                    buf = dynamic_optimizer_buffers[_frame_index];
+                }
+                else if (n.pipeline_id == Compute_Pipeline::SGD_UPDATE && b_idx == 2)
+                {
+                    buf = dynamic_optimizer_buffers[_frame_index];
+                }
                 baked_buffer_handles[_frame_index].push_back(buf ? buf->getBuffer() : VK_NULL_HANDLE);
             }
         }
@@ -1721,11 +1766,21 @@ public:
 
         for (size_t i = 0; i < split_index; ++i)
         {
-            for (const auto &buf : nodes[i].buffers)
+            const auto &n = nodes[i];
+            for (size_t b_idx = 0; b_idx < n.buffers.size(); ++b_idx)
             {
                 if (handle_index >= baked.size())
                 {
                     return false;
+                }
+                auto buf = n.buffers[b_idx];
+                if (n.pipeline_id == Compute_Pipeline::ADAM_UPDATE && b_idx == 4)
+                {
+                    buf = dynamic_optimizer_buffers[_frame_index];
+                }
+                else if (n.pipeline_id == Compute_Pipeline::SGD_UPDATE && b_idx == 2)
+                {
+                    buf = dynamic_optimizer_buffers[_frame_index];
                 }
                 VkBuffer current_handle = buf ? buf->getBuffer() : VK_NULL_HANDLE;
                 if (current_handle != baked[handle_index])
@@ -1871,6 +1926,143 @@ public:
             if (vkQueueSubmit(context.getComputeQueue(), 1, &submit_information, primary_fence) != VK_SUCCESS)
             {
                 Logger::logMessage(Input_Format{"Graph_Executor::executeStaticGraph: Failed to submit command buffer for frame {}", _frame_index},
+                                   Log_Level::LOG_ERROR,
+                                   true,
+                                   0,
+                                   Log_Feature::DISPATCH_EXECUTION);
+                throw std::runtime_error("Failed to submit command buffer");
+            }
+
+            if (_external_fence != VK_NULL_HANDLE && _external_fence != context.getFrameFence(_frame_index))
+            {
+                vkQueueSubmit(context.getComputeQueue(), 0, nullptr, context.getFrameFence(_frame_index));
+            }
+        }
+    }
+
+    void executeStaticGraphReplay(const Compute_Graph &_optimizer_graph,
+                                  const std::vector<Buffer_Transfer_Task> &_transfer_tasks,
+                                  uint32_t _frame_index,
+                                  VkFence _external_fence = VK_NULL_HANDLE)
+    {
+        if (_frame_index >= MAX_FRAMES_IN_FLIGHT || !is_static_baked[_frame_index])
+        {
+            return;
+        }
+
+        context.resetFrameFence(_frame_index);
+
+        std::array<VkCommandBuffer, 3> submit_command_buffers{};
+        uint32_t submit_count = 0;
+
+        if (!_transfer_tasks.empty())
+        {
+            VkCommandBuffer transfer_cmd = transfer_command_buffers[_frame_index];
+
+            if (vkResetCommandBuffer(transfer_cmd, 0) != VK_SUCCESS)
+            {
+                throw std::runtime_error("Failed to reset transfer command buffer");
+            }
+
+            VkCommandBufferBeginInfo begin_information{
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                .pNext = nullptr,
+                .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+                .pInheritanceInfo = nullptr};
+
+            if (vkBeginCommandBuffer(transfer_cmd, &begin_information) != VK_SUCCESS)
+            {
+                throw std::runtime_error("Failed to begin transfer command buffer");
+            }
+
+            for (const auto &task : _transfer_tasks)
+            {
+                if (task.size == 0 || task.source_buffer == VK_NULL_HANDLE || task.destination_buffer == VK_NULL_HANDLE)
+                {
+                    continue;
+                }
+
+                VkBufferCopy copy_region{
+                    .srcOffset = task.source_offset,
+                    .dstOffset = task.destination_offset,
+                    .size = task.size};
+
+                vkCmdCopyBuffer(transfer_cmd, task.source_buffer, task.destination_buffer, 1, &copy_region);
+            }
+
+            VkMemoryBarrier transfer_memory_barrier{
+                .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+                .pNext = nullptr,
+                .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                .dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT};
+
+            vkCmdPipelineBarrier(
+                transfer_cmd,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0, 1, &transfer_memory_barrier,
+                0, nullptr,
+                0, nullptr);
+
+            if (vkEndCommandBuffer(transfer_cmd) != VK_SUCCESS)
+            {
+                throw std::runtime_error("Failed to end transfer command buffer");
+            }
+
+            submit_command_buffers[submit_count++] = transfer_cmd;
+        }
+
+        submit_command_buffers[submit_count++] = static_command_buffers[_frame_index];
+
+        const auto &opt_nodes = _optimizer_graph.getNodes();
+        if (!opt_nodes.empty() && static_split_indices[_frame_index] < opt_nodes.size())
+        {
+            VkCommandBuffer epilogue_cmd = epilogue_command_buffers[_frame_index];
+
+            if (vkResetCommandBuffer(epilogue_cmd, 0) != VK_SUCCESS)
+            {
+                throw std::runtime_error("Failed to reset epilogue command buffer");
+            }
+
+            VkCommandBufferBeginInfo begin_information{
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                .pNext = nullptr,
+                .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+                .pInheritanceInfo = nullptr};
+
+            if (vkBeginCommandBuffer(epilogue_cmd, &begin_information) != VK_SUCCESS)
+            {
+                throw std::runtime_error("Failed to begin epilogue command buffer");
+            }
+
+            recordComputeNodes(epilogue_cmd, opt_nodes, 0, opt_nodes.size(), _frame_index, static_split_indices[_frame_index]);
+
+            if (vkEndCommandBuffer(epilogue_cmd) != VK_SUCCESS)
+            {
+                throw std::runtime_error("Failed to end epilogue command buffer");
+            }
+
+            submit_command_buffers[submit_count++] = epilogue_cmd;
+        }
+
+        if (submit_count > 0)
+        {
+            VkSubmitInfo submit_information{
+                .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                .pNext = nullptr,
+                .waitSemaphoreCount = 0,
+                .pWaitSemaphores = nullptr,
+                .pWaitDstStageMask = nullptr,
+                .commandBufferCount = submit_count,
+                .pCommandBuffers = submit_command_buffers.data(),
+                .signalSemaphoreCount = 0,
+                .pSignalSemaphores = nullptr};
+
+            VkFence primary_fence = (_external_fence != VK_NULL_HANDLE) ? _external_fence : context.getFrameFence(_frame_index);
+
+            if (vkQueueSubmit(context.getComputeQueue(), 1, &submit_information, primary_fence) != VK_SUCCESS)
+            {
+                Logger::logMessage(Input_Format{"Graph_Executor::executeStaticGraphReplay: Failed to submit command buffer for frame {}", _frame_index},
                                    Log_Level::LOG_ERROR,
                                    true,
                                    0,

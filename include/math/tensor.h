@@ -279,10 +279,12 @@ public:
     void conv2d(const Tensor &weights, const Tensor &biases, Tensor &output,
                 uint32_t input_height, uint32_t input_width, uint32_t input_channels,
                 uint32_t output_channels, uint32_t kernel_size,
-                uint32_t stride, uint32_t padding) const
+                uint32_t stride, uint32_t padding,
+                Tensor *scratch = nullptr) const
     {
         implementation->conv2d(*weights.implementation, *biases.implementation, *output.implementation,
-                               input_height, input_width, input_channels, output_channels, kernel_size, stride, padding);
+                               input_height, input_width, input_channels, output_channels, kernel_size, stride, padding,
+                               scratch ? scratch->implementation.get() : nullptr);
     }
 
     void conv2dBackwardInput(const Tensor &weights, Tensor &input_gradient,
