@@ -1,0 +1,432 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_KHR_cooperative_matrix : require
+
+#define TILE_M 16
+#define TILE_N 16
+#define TILE_K 16
+#define MAX_D  128
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer QBuffer  { float16_t q_data[]; };
+layout(std430, binding = 1) readonly buffer KBuffer  { float16_t k_data[]; };
+layout(std430, binding = 2) readonly buffer VBuffer  { float16_t v_data[]; };
+layout(std430, binding = 3) readonly buffer OBuffer  { float16_t o_data[]; };
+layout(std430, binding = 4) readonly buffer DOBuffer { float16_t do_data[]; };
+layout(std430, binding = 5) buffer DQBuffer          { float16_t dq_data[]; };
+layout(std430, binding = 6) buffer DKBuffer          { float16_t dk_data[]; };
+layout(std430, binding = 7) buffer DVBuffer          { float16_t dv_data[]; };
+layout(std430, binding = 8) buffer LBuffer           { float l_data[]; };
+
+layout(push_constant) uniform Constants {
+    uint batch_size;  // B * H
+    uint seq_len;     // S
+    uint head_dim;    // D
+    uint is_causal;   // 1 or 0
+    float scale;      // 1.0 / sqrt(head_dim)
+    uint pass_type;   // 0 = dQ pass, 1 = dK & dV pass
+} pcs;
+
+// Shared memory allocations
+shared float16_t smem_a[TILE_M * MAX_D];   // Q_i (16 x D)
+shared float16_t smem_b[TILE_N * MAX_D];   // K_j (16 x D)
+shared float16_t smem_bt[MAX_D * TILE_N];  // K_j^T (D x 16)
+shared float16_t smem_vt[MAX_D * TILE_N];  // V_j^T (D x 16)
+shared float16_t smem_aux[TILE_M * MAX_D]; // dO_i or O_i (16 x D)
+
+shared float     smem_acc1[TILE_M * MAX_D]; // dQ or dK accumulator (FP32)
+shared float     smem_acc2[TILE_N * MAX_D]; // dV accumulator (FP32)
+
+shared float16_t smem_p[TILE_M * TILE_N];
+shared float16_t smem_pt[TILE_N * TILE_M];
+shared float16_t smem_ds[TILE_M * TILE_N];
+shared float16_t smem_dst[TILE_N * TILE_M];
+shared float16_t smem_tile[TILE_M * TILE_N];
+
+shared float     smem_di[TILE_M];
+shared float     smem_m[TILE_M];
+shared float     smem_l[TILE_M];
+
+void main() {
+    uint b = gl_WorkGroupID.z;
+    if (b >= pcs.batch_size) return;
+
+    uint lane_id = gl_LocalInvocationID.x;
+    uint D = pcs.head_dim;
+    uint batch_offset = b * pcs.seq_len * D;
+
+    if (pcs.pass_type == 0) {
+        // =====================================================================
+        // PASS 0: Compute dQ block (TILE_M x D) and write logsumexp L_i
+        // =====================================================================
+        uint q_tile_idx = gl_WorkGroupID.y;
+        uint q_start = q_tile_idx * TILE_M;
+        if (q_start >= pcs.seq_len) return;
+
+        // 1. Initialize dQ accumulator
+        for (uint idx = lane_id; idx < TILE_M * D; idx += 32) {
+            smem_acc1[idx] = 0.0;
+        }
+
+        // 2. Load Q_i block into smem_a
+        for (uint idx = lane_id; idx < TILE_M * D; idx += 32) {
+            uint r = idx / D;
+            uint c = idx % D;
+            uint g_idx = q_start + r;
+            smem_a[idx] = (g_idx < pcs.seq_len) ? q_data[batch_offset + g_idx * D + c] : float16_t(0.0);
+        }
+
+        // 3. Load dO_i block into smem_aux and O_i block into smem_b
+        for (uint idx = lane_id; idx < TILE_M * D; idx += 32) {
+            uint r = idx / D;
+            uint c = idx % D;
+            uint g_idx = q_start + r;
+            smem_aux[idx] = (g_idx < pcs.seq_len) ? do_data[batch_offset + g_idx * D + c] : float16_t(0.0);
+            smem_b[idx]   = (g_idx < pcs.seq_len) ? o_data[batch_offset + g_idx * D + c]  : float16_t(0.0);
+        }
+        barrier();
+
+        // 4. Compute Di = sum_d (dO_id * O_id) for each row r in TILE_M and read LogSumExp L_i directly
+        if (lane_id < TILE_M) {
+            uint r = lane_id;
+            float sum_d = 0.0;
+            for (uint c = 0; c < D; ++c) {
+                sum_d += float(smem_aux[r * D + c]) * float(smem_b[r * D + c]);
+            }
+            smem_di[r] = sum_d;
+
+            uint q_pos = q_start + r;
+            smem_l[r]  = (q_pos < pcs.seq_len) ? l_data[b * pcs.seq_len + q_pos] : -1e20;
+        }
+        barrier();
+
+        // 5. Sweep over all K_j: compute dQ = sum_j (dS_ij * K_j)
+        uint num_k_tiles = (pcs.seq_len + TILE_N - 1) / TILE_N;
+        for (uint k_tile_idx = 0; k_tile_idx < num_k_tiles; ++k_tile_idx) {
+            uint k_start = k_tile_idx * TILE_N;
+            if (pcs.is_causal != 0 && k_start > q_start + (TILE_M - 1)) break;
+
+            // Load K_j into smem_b and transposed into smem_bt
+            for (uint idx = lane_id; idx < TILE_N * D; idx += 32) {
+                uint r = idx / D;
+                uint c = idx % D;
+                uint g_idx = k_start + r;
+                float16_t val = (g_idx < pcs.seq_len) ? k_data[batch_offset + g_idx * D + c] : float16_t(0.0);
+                smem_b[idx] = val;
+                smem_bt[c * TILE_N + r] = val;
+            }
+
+            // Load V_j transposed into smem_vt
+            for (uint idx = lane_id; idx < TILE_N * D; idx += 32) {
+                uint r = idx / D;
+                uint c = idx % D;
+                uint g_idx = k_start + r;
+                float16_t val = (g_idx < pcs.seq_len) ? v_data[batch_offset + g_idx * D + c] : float16_t(0.0);
+                smem_vt[c * TILE_N + r] = val;
+            }
+            barrier();
+
+            // Compute S_ij = (Q_i * K_j^T) (16 x 16)
+            coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc_s;
+            acc_s = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+            for (uint kd = 0; kd < D; kd += TILE_K) {
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> matQ;
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> matKt;
+                coopMatLoad(matQ, smem_a, kd, D, gl_CooperativeMatrixLayoutRowMajor);
+                coopMatLoad(matKt, smem_bt, kd * TILE_N, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+                acc_s = coopMatMulAdd(matQ, matKt, acc_s);
+            }
+            coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> res_s;
+            res_s = coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(acc_s);
+            coopMatStore(res_s, smem_p, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+
+            // Compute dP_ij = dO_i * V_j^T (16 x 16)
+            coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc_dp;
+            acc_dp = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+            for (uint kd = 0; kd < D; kd += TILE_K) {
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> matDO;
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> matVt;
+                coopMatLoad(matDO, smem_aux, kd, D, gl_CooperativeMatrixLayoutRowMajor);
+                coopMatLoad(matVt, smem_vt, kd * TILE_N, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+                acc_dp = coopMatMulAdd(matDO, matVt, acc_dp);
+            }
+            coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> res_dp;
+            res_dp = coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(acc_dp);
+            coopMatStore(res_dp, smem_tile, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+            barrier();
+
+            // Compute dS_ij = P_ij * (dP_ij - Di) * scale
+            for (uint idx = lane_id; idx < TILE_M * TILE_N; idx += 32) {
+                uint r = idx / TILE_N;
+                uint c = idx % TILE_N;
+                uint q_pos = q_start + r;
+                uint k_pos = k_start + c;
+
+                if (q_pos < pcs.seq_len && k_pos < pcs.seq_len && (pcs.is_causal == 0 || q_pos >= k_pos)) {
+                    float s_val = float(smem_p[idx]) * pcs.scale;
+                    float l_val = smem_l[r];
+                    float p_val = (l_val > -1000.0 && s_val <= l_val) ? exp(s_val - l_val) : (s_val > l_val && l_val > -1000.0 ? 1.0 : 0.0);
+                    if (isnan(p_val) || isinf(p_val)) p_val = 0.0;
+                    float dp_val = float(smem_tile[idx]);
+                    if (isnan(dp_val) || isinf(dp_val)) dp_val = 0.0;
+                    float di_val = smem_di[r];
+                    if (isnan(di_val) || isinf(di_val)) di_val = 0.0;
+                    float ds_val = p_val * (dp_val - di_val) * pcs.scale;
+                    if (isnan(ds_val) || isinf(ds_val)) ds_val = 0.0;
+                    smem_ds[idx] = float16_t(clamp(ds_val, -65504.0, 65504.0));
+                } else {
+                    smem_ds[idx] = float16_t(0.0);
+                }
+            }
+            barrier();
+
+            // Accumulate dQ_i += dS_ij * K_j (16 x D)
+            coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> matDS;
+            coopMatLoad(matDS, smem_ds, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+
+            for (uint vd = 0; vd < D; vd += TILE_N) {
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> matK;
+                coopMatLoad(matK, smem_b, vd, D, gl_CooperativeMatrixLayoutRowMajor);
+
+                coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc_dq_tile;
+                acc_dq_tile = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+                acc_dq_tile = coopMatMulAdd(matDS, matK, acc_dq_tile);
+
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> res_dq_tile;
+                res_dq_tile = coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(acc_dq_tile);
+                coopMatStore(res_dq_tile, smem_tile, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+                barrier();
+
+                for (uint idx = lane_id; idx < TILE_M * TILE_N; idx += 32) {
+                    uint r = idx / TILE_N;
+                    uint c = idx % TILE_N;
+                    if (vd + c < D) {
+                        smem_acc1[r * D + (vd + c)] += float(smem_tile[idx]);
+                    }
+                }
+                barrier();
+            }
+        }
+
+        // Store dQ directly to global memory
+        for (uint idx = lane_id; idx < TILE_M * D; idx += 32) {
+            uint r = idx / D;
+            uint c = idx % D;
+            uint g_idx = q_start + r;
+            if (g_idx < pcs.seq_len) {
+                float val = smem_acc1[idx];
+                if (isnan(val) || isinf(val)) val = 0.0;
+                dq_data[batch_offset + g_idx * D + c] = float16_t(clamp(val, -65504.0, 65504.0));
+            }
+        }
+    }
+    else {
+        // =====================================================================
+        // PASS 1: Compute dK and dV block (TILE_N x D) using precomputed L_i
+        // =====================================================================
+        uint k_tile_idx = gl_WorkGroupID.y;
+        uint k_start = k_tile_idx * TILE_N;
+        if (k_start >= pcs.seq_len) return;
+
+        // 1. Initialize dK and dV accumulators
+        for (uint idx = lane_id; idx < TILE_N * D; idx += 32) {
+            smem_acc1[idx] = 0.0; // dK accumulator
+            smem_acc2[idx] = 0.0; // dV accumulator
+        }
+
+        // 2. Load K_j transposed into smem_bt (D x 16)
+        for (uint idx = lane_id; idx < TILE_N * D; idx += 32) {
+            uint r = idx / D;
+            uint c = idx % D;
+            uint g_idx = k_start + r;
+            float16_t val = (g_idx < pcs.seq_len) ? k_data[batch_offset + g_idx * D + c] : float16_t(0.0);
+            smem_bt[c * TILE_N + r] = val;
+        }
+
+        // 3. Load V_j transposed into smem_vt (D x 16)
+        for (uint idx = lane_id; idx < TILE_N * D; idx += 32) {
+            uint r = idx / D;
+            uint c = idx % D;
+            uint g_idx = k_start + r;
+            float16_t val = (g_idx < pcs.seq_len) ? v_data[batch_offset + g_idx * D + c] : float16_t(0.0);
+            smem_vt[c * TILE_N + r] = val;
+        }
+        barrier();
+
+        // 4. Loop over all Q_i blocks
+        uint num_q_tiles = (pcs.seq_len + TILE_M - 1) / TILE_M;
+        for (uint q_tile_idx = 0; q_tile_idx < num_q_tiles; ++q_tile_idx) {
+            uint q_start = q_tile_idx * TILE_M;
+            // In causal attention, Q_i can only attend to K_j if q_end >= k_start
+            if (pcs.is_causal != 0 && q_start + (TILE_M - 1) < k_start) continue;
+
+            // Load Q_i into smem_a (16 x D)
+            for (uint idx = lane_id; idx < TILE_M * D; idx += 32) {
+                uint r = idx / D;
+                uint c = idx % D;
+                uint g_idx = q_start + r;
+                smem_a[idx] = (g_idx < pcs.seq_len) ? q_data[batch_offset + g_idx * D + c] : float16_t(0.0);
+            }
+
+            // Load dO_i into smem_aux (16 x D)
+            for (uint idx = lane_id; idx < TILE_M * D; idx += 32) {
+                uint r = idx / D;
+                uint c = idx % D;
+                uint g_idx = q_start + r;
+                smem_aux[idx] = (g_idx < pcs.seq_len) ? do_data[batch_offset + g_idx * D + c] : float16_t(0.0);
+            }
+            barrier();
+
+            // Compute Di = sum_d (dO_id * O_id) and load L_i for Q_i block
+            if (lane_id < TILE_M) {
+                uint r = lane_id;
+                uint q_pos = q_start + r;
+                float sum_di = 0.0;
+                float l_val = -1e20;
+                if (q_pos < pcs.seq_len) {
+                    for (uint c = 0; c < D; ++c) {
+                        float o_val = float(o_data[batch_offset + q_pos * D + c]);
+                        sum_di += float(smem_aux[r * D + c]) * o_val;
+                    }
+                    l_val = l_data[b * pcs.seq_len + q_pos];
+                }
+                smem_di[r] = sum_di;
+                smem_l[r]  = l_val;
+            }
+            barrier();
+
+            // Compute S_ij = (Q_i * K_j^T) (16 x 16)
+            coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc_s;
+            acc_s = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+            for (uint kd = 0; kd < D; kd += TILE_K) {
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> matQ;
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> matKt;
+                coopMatLoad(matQ, smem_a, kd, D, gl_CooperativeMatrixLayoutRowMajor);
+                coopMatLoad(matKt, smem_bt, kd * TILE_N, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+                acc_s = coopMatMulAdd(matQ, matKt, acc_s);
+            }
+            coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> res_s;
+            res_s = coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(acc_s);
+            coopMatStore(res_s, smem_p, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+
+            // Compute dP_ij = dO_i * V_j^T (16 x 16)
+            coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc_dp;
+            acc_dp = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+            for (uint kd = 0; kd < D; kd += TILE_K) {
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> matDO;
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> matVt;
+                coopMatLoad(matDO, smem_aux, kd, D, gl_CooperativeMatrixLayoutRowMajor);
+                coopMatLoad(matVt, smem_vt, kd * TILE_N, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+                acc_dp = coopMatMulAdd(matDO, matVt, acc_dp);
+            }
+            coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> res_dp;
+            res_dp = coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(acc_dp);
+            coopMatStore(res_dp, smem_tile, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+            barrier();
+
+            // Compute P_ij, Pt_ji, dS_ij and dSt_ji
+            for (uint idx = lane_id; idx < TILE_M * TILE_N; idx += 32) {
+                uint r = idx / TILE_N;
+                uint c = idx % TILE_N;
+                uint q_pos = q_start + r;
+                uint k_pos = k_start + c;
+
+                if (q_pos < pcs.seq_len && k_pos < pcs.seq_len && (pcs.is_causal == 0 || q_pos >= k_pos)) {
+                    float s_val = float(smem_p[idx]) * pcs.scale;
+                    float l_val = smem_l[r];
+                    float p_val = (l_val > -1000.0 && s_val <= l_val) ? exp(s_val - l_val) : (s_val > l_val && l_val > -1000.0 ? 1.0 : 0.0);
+                    if (isnan(p_val) || isinf(p_val)) p_val = 0.0;
+                    float dp_val = float(smem_tile[idx]);
+                    if (isnan(dp_val) || isinf(dp_val)) dp_val = 0.0;
+                    float di_val = smem_di[r];
+                    if (isnan(di_val) || isinf(di_val)) di_val = 0.0;
+                    float ds_val = p_val * (dp_val - di_val) * pcs.scale;
+                    if (isnan(ds_val) || isinf(ds_val)) ds_val = 0.0;
+
+                    smem_p[idx] = float16_t(clamp(p_val, 0.0, 1.0));
+                    smem_pt[c * TILE_M + r] = float16_t(clamp(p_val, 0.0, 1.0)); // Transpose P^T (16 x 16)
+                    smem_ds[idx] = float16_t(clamp(ds_val, -65504.0, 65504.0));
+                    smem_dst[c * TILE_M + r] = float16_t(clamp(ds_val, -65504.0, 65504.0)); // Transpose dS^T (16 x 16)
+                } else {
+                    smem_p[idx] = float16_t(0.0);
+                    smem_pt[c * TILE_M + r] = float16_t(0.0);
+                    smem_ds[idx] = float16_t(0.0);
+                    smem_dst[c * TILE_M + r] = float16_t(0.0);
+                }
+            }
+            barrier();
+
+            // Accumulate dV_j += P_ij^T * dO_i (16 x D)
+            coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> matPt;
+            coopMatLoad(matPt, smem_pt, 0, TILE_M, gl_CooperativeMatrixLayoutRowMajor);
+
+            for (uint vd = 0; vd < D; vd += TILE_N) {
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> matDO;
+                coopMatLoad(matDO, smem_aux, vd, D, gl_CooperativeMatrixLayoutRowMajor);
+
+                coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc_dv_tile;
+                acc_dv_tile = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+                acc_dv_tile = coopMatMulAdd(matPt, matDO, acc_dv_tile);
+
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> res_dv_tile;
+                res_dv_tile = coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(acc_dv_tile);
+                coopMatStore(res_dv_tile, smem_tile, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+                barrier();
+
+                for (uint idx = lane_id; idx < TILE_N * TILE_N; idx += 32) {
+                    uint r = idx / TILE_N;
+                    uint c = idx % TILE_N;
+                    if (vd + c < D) {
+                        smem_acc2[r * D + (vd + c)] += float(smem_tile[idx]);
+                    }
+                }
+                barrier();
+            }
+
+            // Accumulate dK_j += dS_ij^T * Q_i (16 x D)
+            coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> matDSt;
+            coopMatLoad(matDSt, smem_dst, 0, TILE_M, gl_CooperativeMatrixLayoutRowMajor);
+
+            for (uint kd = 0; kd < D; kd += TILE_N) {
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> matQ;
+                coopMatLoad(matQ, smem_a, kd, D, gl_CooperativeMatrixLayoutRowMajor);
+
+                coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc_dk_tile;
+                acc_dk_tile = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+                acc_dk_tile = coopMatMulAdd(matDSt, matQ, acc_dk_tile);
+
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> res_dk_tile;
+                res_dk_tile = coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(acc_dk_tile);
+                coopMatStore(res_dk_tile, smem_tile, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+                barrier();
+
+                for (uint idx = lane_id; idx < TILE_N * TILE_N; idx += 32) {
+                    uint r = idx / TILE_N;
+                    uint c = idx % TILE_N;
+                    if (kd + c < D) {
+                        smem_acc1[r * D + (kd + c)] += float(smem_tile[idx]);
+                    }
+                }
+                barrier();
+            }
+        }
+
+        // Store dK and dV directly to global memory
+        for (uint idx = lane_id; idx < TILE_N * D; idx += 32) {
+            uint r = idx / D;
+            uint c = idx % D;
+            uint g_idx = k_start + r;
+            if (g_idx < pcs.seq_len) {
+                float dk_val = smem_acc1[idx];
+                float dv_val = smem_acc2[idx];
+                if (isnan(dk_val) || isinf(dk_val)) dk_val = 0.0;
+                if (isnan(dv_val) || isinf(dv_val)) dv_val = 0.0;
+                dk_data[batch_offset + g_idx * D + c] = float16_t(clamp(dk_val, -65504.0, 65504.0));
+                dv_data[batch_offset + g_idx * D + c] = float16_t(clamp(dv_val, -65504.0, 65504.0));
+            }
+        }
+    }
+}

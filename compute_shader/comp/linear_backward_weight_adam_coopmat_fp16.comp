@@ -1,0 +1,218 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_KHR_cooperative_matrix : require
+
+#define TILE_M 16
+#define TILE_N 16
+#define TILE_K 16
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+// 1. Activation from forward: [batch_size, in_dim]
+layout(std430, set = 0, binding = 0) readonly buffer InputX {
+    float16_t x_data[];
+};
+
+// 2. Output gradient from downstream: [batch_size, out_dim]
+layout(std430, set = 0, binding = 1) readonly buffer GradY {
+    float16_t dy_data[];
+};
+
+// 3. Master FP32 weights to update in-place: [in_dim, out_dim]
+layout(std430, set = 0, binding = 2) restrict buffer WeightBuffer {
+    float weights[];
+};
+
+// 4. Adam 1st moment vector (mean): [in_dim, out_dim]
+layout(std430, set = 0, binding = 3) restrict buffer MBuffer {
+    float m_vec[];
+};
+
+// 5. Adam 2nd moment vector (uncentered variance): [in_dim, out_dim]
+layout(std430, set = 0, binding = 4) restrict buffer VBuffer {
+    float v_vec[];
+};
+
+// 6. Dynamic optimizer parameters (updated per step)
+layout(std430, set = 0, binding = 5) readonly restrict buffer DynamicParams {
+    float lr;
+    float inv_correction1;
+    float inv_sqrt_correction2;
+    float inv_scale;
+} dyn;
+
+// 7. FP16 weight cache for forward & backward GEMM: [in_dim, out_dim]
+layout(std430, set = 0, binding = 6) writeonly restrict buffer Fp16WeightBuffer {
+    float16_t fp16_weights[];
+};
+
+// 8. Bias gradient: [out_dim]
+layout(std430, set = 0, binding = 7) buffer GradB {
+    float db_data[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint batch_size;    // M (sequence tokens)
+    uint in_dim;        // K (input dimension)
+    uint out_dim;       // N (output dimension)
+    float beta1;        // Adam beta1 (e.g. 0.9)
+    float beta2;        // Adam beta2 (e.g. 0.999)
+    float eps;          // Numerical stability epsilon (e.g. 1e-8)
+    float max_grad;     // Gradient clipping threshold (0 = disabled)
+    float weight_decay; // AdamW decoupled weight decay
+} pc;
+
+shared float16_t smem_a[TILE_M * TILE_K];
+shared float16_t smem_b[TILE_K * TILE_N];
+shared float smem_c[TILE_M * TILE_N];
+
+void main() {
+    uint tile_col = gl_WorkGroupID.x * TILE_N; // along out_dim (N)
+    uint tile_row = gl_WorkGroupID.y * TILE_M; // along in_dim (K)
+
+    if (tile_row >= pc.in_dim || tile_col >= pc.out_dim) return;
+
+    uint lane_id = gl_LocalInvocationID.x;
+
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc;
+    acc = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+
+    float db_accum = 0.0;
+    bool is_k_aligned = (tile_row + TILE_M <= pc.in_dim);
+    bool is_n_aligned = (tile_col + TILE_N <= pc.out_dim);
+
+    // Reduction loop along batch_size (tokens M)
+    for (uint m = 0; m < pc.batch_size; m += TILE_K) {
+        bool is_m_aligned = (m + TILE_K <= pc.batch_size);
+
+        // Load tile of X^T [16 x 16]: X^T(r, c) = X(m + c, tile_row + r)
+        coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> matA;
+        for (uint i = 0; i < 8; ++i) {
+            uint idx = lane_id * 8 + i;
+            uint r = idx / TILE_K;
+            uint c = idx % TILE_K;
+            uint gx_row = m + c;
+            uint gx_col = tile_row + r;
+            smem_a[idx] = (gx_row < pc.batch_size && gx_col < pc.in_dim)
+                ? x_data[gx_row * pc.in_dim + gx_col]
+                : float16_t(0.0);
+        }
+        barrier();
+        coopMatLoad(matA, smem_a, 0, TILE_K, gl_CooperativeMatrixLayoutRowMajor);
+        barrier();
+
+        // Load tile of dY [16 x 16] (Row-major)
+        coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> matB;
+        if (gl_WorkGroupID.y == 0) {
+            for (uint i = 0; i < 8; ++i) {
+                uint idx = lane_id * 8 + i;
+                uint r = idx / TILE_N;
+                uint c = idx % TILE_N;
+                uint gdy_row = m + r;
+                uint gdy_col = tile_col + c;
+                smem_b[idx] = (gdy_row < pc.batch_size && gdy_col < pc.out_dim)
+                    ? dy_data[gdy_row * pc.out_dim + gdy_col]
+                    : float16_t(0.0);
+            }
+            barrier();
+            coopMatLoad(matB, smem_b, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+
+            if (lane_id < 16) {
+                float col_sum = 0.0;
+                for (uint r = 0; r < 16; ++r) {
+                    col_sum += float(smem_b[r * 16 + lane_id]);
+                }
+                db_accum += col_sum;
+            }
+            barrier();
+        } else {
+            if (is_m_aligned && is_n_aligned) {
+                coopMatLoad(matB, dy_data, m * pc.out_dim + tile_col, pc.out_dim, gl_CooperativeMatrixLayoutRowMajor);
+            } else {
+                for (uint i = 0; i < 8; ++i) {
+                    uint idx = lane_id * 8 + i;
+                    uint r = idx / TILE_N;
+                    uint c = idx % TILE_N;
+                    uint gdy_row = m + r;
+                    uint gdy_col = tile_col + c;
+                    smem_b[idx] = (gdy_row < pc.batch_size && gdy_col < pc.out_dim)
+                        ? dy_data[gdy_row * pc.out_dim + gdy_col]
+                        : float16_t(0.0);
+                }
+                barrier();
+                coopMatLoad(matB, smem_b, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+                barrier();
+            }
+        }
+
+        acc = coopMatMulAdd(matA, matB, acc);
+    }
+
+    // Store accumulated dW tile into shared memory LDS
+    coopMatStore(acc, smem_c, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+    barrier();
+
+    // In-place AdamW Update directly on weights and optimizer states
+    // 32 threads in subgroup, each processing 8 elements = 256 elements (16x16 tile)
+    // idx = i * 32 + lane_id ensures coalesced contiguous global memory access across wavefront
+    for (uint i = 0; i < 8; ++i) {
+        uint idx = i * 32 + lane_id;
+        uint lr = idx / TILE_N;
+        uint lc = idx % TILE_N;
+        uint gr = tile_row + lr;
+        uint gc = tile_col + lc;
+
+        if (gr < pc.in_dim && gc < pc.out_dim) {
+            uint g_idx = gr * pc.out_dim + gc;
+
+            // 1. Raw gradient from GEMM
+            float g = smem_c[idx];
+            if (isnan(g) || isinf(g)) g = 0.0;
+
+            // 2. Unscale loss scale
+            g *= dyn.inv_scale;
+
+            // 3. Gradient clipping (if enabled)
+            if (pc.max_grad > 0.0) {
+                g = clamp(g, -pc.max_grad, pc.max_grad);
+            }
+
+            // 4. Update biased 1st and 2nd moment estimates
+            float m_old = m_vec[g_idx];
+            float v_old = v_vec[g_idx];
+            float m_val = fma(pc.beta1, m_old, (1.0 - pc.beta1) * g);
+            float v_val = fma(pc.beta2, v_old, (1.0 - pc.beta2) * (g * g));
+
+            m_vec[g_idx] = m_val;
+            v_vec[g_idx] = v_val;
+
+            // 5. Bias-corrected moment estimates
+            float m_hat = m_val * dyn.inv_correction1;
+            float v_hat_sqrt = sqrt(v_val) * dyn.inv_sqrt_correction2;
+
+            // 6. AdamW weight update (step + weight decay)
+            float step_val = m_hat / (v_hat_sqrt + pc.eps);
+            float p = weights[g_idx];
+            if (pc.weight_decay > 0.0) {
+                p -= dyn.lr * (step_val + pc.weight_decay * p);
+            } else {
+                p -= dyn.lr * step_val;
+            }
+
+            // 7. Write back master FP32 weight & update FP16 weight cache
+            weights[g_idx] = p;
+            fp16_weights[g_idx] = float16_t(clamp(p, -65504.0, 65504.0));
+        }
+    }
+
+    // Write out dB
+    if (gl_WorkGroupID.y == 0 && lane_id < 16) {
+        uint gc = tile_col + lane_id;
+        if (gc < pc.out_dim) {
+            if (isnan(db_accum) || isinf(db_accum)) db_accum = 0.0;
+            db_data[gc] = db_accum;
+        }
+    }
+}

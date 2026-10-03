@@ -1,0 +1,30 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer InMatrix { float data_in[]; };
+layout(std430, binding = 1) writeonly buffer OutY { float data_y[]; };
+
+layout(push_constant) uniform Constants {
+    uint total_elements; // rows * half_dim
+    uint half_dim;       // total_cols / 2
+} pcs;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pcs.total_elements) return;
+
+    uint row = idx / pcs.half_dim;
+    uint col = idx % pcs.half_dim;
+    uint total_cols = pcs.half_dim * 2;
+    uint in_base = row * total_cols + col;
+
+    float a = data_in[in_base];
+    float b = data_in[in_base + pcs.half_dim];
+
+    float sig_a = 1.0 / (1.0 + exp(-clamp(a, -85.0, 85.0)));
+    float silu_a = a * sig_a;
+    float y = silu_a * b;
+
+    data_y[idx] = y;
+}

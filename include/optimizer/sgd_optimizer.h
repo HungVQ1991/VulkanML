@@ -18,146 +18,22 @@ private:
     float max_gradient = 1.0f;
     ILearning_Rate *learning_rate_scheduler = nullptr;
 
-public:
-    explicit Sgd_Optimizer(float _learning_rate = 0.01f, float _max_gradient = 1.0f)
-        : learning_rate(_learning_rate),
-          max_gradient(_max_gradient),
-          learning_rate_scheduler(nullptr)
-    {
-        if (learning_rate <= 0.0f)
-        {
-            Logger::logMessage("Sgd_Optimizer::Sgd_Optimizer: Initial learning rate is non-positive",
-                               Log_Level::LOG_WARNING,
-                               true,
-                               0,
-                               Log_Feature::OPTIMIZER_STEP);
-        }
-    }
+public:    explicit Sgd_Optimizer(float _learning_rate = 0.01f, float _max_gradient = 1.0f);
+    explicit Sgd_Optimizer(ILearning_Rate &_learning_rate_scheduler, float _max_gradient = 1.0f);
 
-    explicit Sgd_Optimizer(ILearning_Rate &_learning_rate_scheduler, float _max_gradient = 1.0f)
-        : learning_rate(_learning_rate_scheduler.getCurrentRate()),
-          max_gradient(_max_gradient),
-          learning_rate_scheduler(&_learning_rate_scheduler)
-    {
-        if (learning_rate <= 0.0f)
-        {
-            Logger::logMessage("Sgd_Optimizer::Sgd_Optimizer: Initial learning rate is non-positive",
-                               Log_Level::LOG_WARNING,
-                               true,
-                               0,
-                               Log_Feature::OPTIMIZER_STEP);
-        }
-    }
 
-    ~Sgd_Optimizer() noexcept override = default;
+    ~Sgd_Optimizer() noexcept override = default;    void step(const std::vector<std::pair<Tensor *, Tensor *>> &_parameter_gradient_pairs) override;
+    void stepDynamicParams(float _grad_scale = 1.0f) override;
+    void step(const std::vector<std::pair<Tensor *, Tensor *>> &_parameter_gradient_pairs, float _grad_scale) override;
+    void reset() override;
+    void saveCheckpoint(std::ofstream &_output_file_stream) const override;
+    void loadCheckpoint(std::ifstream &_input_file_stream, Execution_Target _execution_target = Execution_Target::CPU) override;
 
-    void step(const std::vector<std::pair<Matrix *, Matrix *>> &_parameter_gradient_pairs) override
-    {
-        step(_parameter_gradient_pairs, 1.0f);
-    }
-
-    void stepDynamicParams(float _grad_scale = 1.0f) override
-    {
-        if (learning_rate_scheduler != nullptr)
-        {
-            learning_rate = learning_rate_scheduler->getCurrentRate();
-        }
-        float inv_scale = (_grad_scale > 0.0f) ? (1.0f / _grad_scale) : 1.0f;
-        Execution_Engine &engine = Execution_Engine::getInstance();
-        uint32_t current_frame = engine.getContext().getCurrentFrame();
-        engine.updateDynamicOptimizerParams(learning_rate, 1.0f, 1.0f, inv_scale, current_frame);
-    }
-
-    void step(const std::vector<std::pair<Matrix *, Matrix *>> &_parameter_gradient_pairs, float _grad_scale) override
-    {
-        stepDynamicParams(_grad_scale);
-
-        Logger::logMessage(Input_Format{"Sgd_Optimizer::step: learning_rate={}, pairs_count={}",
-                                        learning_rate,
-                                        _parameter_gradient_pairs.size()},
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::OPTIMIZER_STEP);
-
-        float inv_scale = (_grad_scale > 0.0f) ? (1.0f / _grad_scale) : 1.0f;
-
-        for (const auto &[parameter, gradient] : _parameter_gradient_pairs)
-        {
-            if (parameter && gradient)
-            {
-                parameter->sgdUpdate(*gradient, learning_rate, max_gradient, inv_scale);
-            }
-            else
-            {
-                Logger::logMessage("Sgd_Optimizer::step: Null parameter or gradient pointer encountered",
-                                   Log_Level::LOG_WARNING,
-                                   true,
-                                   0,
-                                   Log_Feature::OPTIMIZER_STEP);
-            }
-        }
-    }
-
-    void reset() override
-    {
-        Logger::logMessage("Sgd_Optimizer::reset: Resetting SGD optimizer",
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::OPTIMIZER_STEP);
-    }
-
-    void saveCheckpoint(std::ofstream &_output_file_stream) const override
-    {
-        if (!_output_file_stream.is_open())
-        {
-            Logger::logMessage("Sgd_Optimizer::saveCheckpoint: Output stream is not open",
-                               Log_Level::LOG_ERROR,
-                               true,
-                               0,
-                               Log_Feature::MODEL_SERIALIZATION);
-            return;
-        }
-
-        Logger::logMessage("Sgd_Optimizer::saveCheckpoint: Saving SGD checkpoint",
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::MODEL_SERIALIZATION);
-
-        _output_file_stream.write(reinterpret_cast<const char *>(&learning_rate), sizeof(learning_rate));
-        _output_file_stream.write(reinterpret_cast<const char *>(&max_gradient), sizeof(max_gradient));
-    }
-
-    void loadCheckpoint(std::ifstream &_input_file_stream, Execution_Target _execution_target = Execution_Target::CPU) override
-    {
-        if (!_input_file_stream.is_open())
-        {
-            Logger::logMessage("Sgd_Optimizer::loadCheckpoint: Input stream is not open",
-                               Log_Level::LOG_ERROR,
-                               true,
-                               0,
-                               Log_Feature::MODEL_SERIALIZATION);
-            return;
-        }
-
-        _input_file_stream.read(reinterpret_cast<char *>(&learning_rate), sizeof(learning_rate));
-        _input_file_stream.read(reinterpret_cast<char *>(&max_gradient), sizeof(max_gradient));
-
-        Logger::logMessage(Input_Format{"Sgd_Optimizer::loadCheckpoint: Loaded learning_rate={}, max_gradient={}",
-                                        learning_rate,
-                                        max_gradient},
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::MODEL_SERIALIZATION);
-    }
 
     ILearning_Rate *getLearningRateScheduler() const noexcept { return learning_rate_scheduler; }
     Optimizer_Type getType() const noexcept override { return Optimizer_Type::SGD_OPTIMIZER; }
     float getLearningRate() const noexcept override { return learning_rate; }
-    float getMaxGradient() const noexcept { return max_gradient; }
+    float getMaxGradient() const noexcept override { return max_gradient; }
 
     void setLearningRateScheduler(ILearning_Rate *_learning_rate_scheduler) noexcept { learning_rate_scheduler = _learning_rate_scheduler; }
     void setLearningRate(float _learning_rate) override
@@ -180,7 +56,4 @@ public:
         learning_rate = _learning_rate;
         learning_rate_scheduler = nullptr;
     }
-    void setMaxGradient(float _max_gradient) noexcept { max_gradient = _max_gradient; }
-};
-
-using SGD_Optimizer = Sgd_Optimizer;
+};;

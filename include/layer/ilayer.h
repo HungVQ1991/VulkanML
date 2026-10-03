@@ -40,6 +40,10 @@ enum class Layer_Type
     RES_NET_BLOCK_2D,
     RES_NET_20,
     PPO_ACTOR_CRITIC,
+    RMSNORM,
+    SWIGLU,
+    EMBEDDING,
+    TRANSFORMER_BLOCK,
     LAYER_TYPE_END
 };
 

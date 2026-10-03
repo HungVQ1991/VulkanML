@@ -1,0 +1,95 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer InputX {
+    float x_data[];
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer GradY {
+    float dy_data[];
+};
+
+layout(std430, set = 0, binding = 2) buffer GradW {
+    float dw_data[];
+};
+
+layout(std430, set = 0, binding = 3) buffer GradB {
+    float db_data[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint batch_size;
+    uint in_dim;
+    uint out_dim;
+    uint accumulate;
+} params;
+
+shared float tile_x[16][17];
+shared float tile_dy[16][17];
+
+void main() {
+    uint col = gl_GlobalInvocationID.x;
+    uint row = gl_GlobalInvocationID.y;
+
+    uint local_col = gl_LocalInvocationID.x;
+    uint local_row = gl_LocalInvocationID.y;
+
+    float dw_sum = 0.0;
+    float db_sum = 0.0;
+
+    uint num_tiles = (params.batch_size + 15) / 16;
+
+    for (uint t = 0; t < num_tiles; ++t) {
+        uint x_row = t * 16 + local_row;
+        uint x_col = gl_WorkGroupID.y * 16 + local_col;
+        if (x_row < params.batch_size && x_col < params.in_dim) {
+            tile_x[local_row][local_col] = x_data[x_row * params.in_dim + x_col];
+        } else {
+            tile_x[local_row][local_col] = 0.0;
+        }
+
+        uint dy_row = t * 16 + local_row;
+        uint dy_col = gl_WorkGroupID.x * 16 + local_col;
+        if (dy_row < params.batch_size && dy_col < params.out_dim) {
+            tile_dy[local_row][local_col] = dy_data[dy_row * params.out_dim + dy_col];
+        } else {
+            tile_dy[local_row][local_col] = 0.0;
+        }
+
+        barrier();
+
+        #pragma unroll
+        for (uint k = 0; k < 16; ++k) {
+            dw_sum = fma(tile_x[k][local_row], tile_dy[k][local_col], dw_sum);
+        }
+
+        if (gl_WorkGroupID.y == 0 && local_row == 0) {
+            #pragma unroll
+            for (uint k = 0; k < 16; ++k) {
+                db_sum += tile_dy[k][local_col];
+            }
+        }
+
+        barrier();
+    }
+
+    if (isnan(dw_sum) || isinf(dw_sum)) dw_sum = 0.0;
+    if (isnan(db_sum) || isinf(db_sum)) db_sum = 0.0;
+
+    if (row < params.in_dim && col < params.out_dim) {
+        if (params.accumulate != 0) {
+            dw_data[row * params.out_dim + col] += dw_sum;
+        } else {
+            dw_data[row * params.out_dim + col] = dw_sum;
+        }
+    }
+
+    if (gl_WorkGroupID.y == 0 && local_row == 0 && col < params.out_dim) {
+        if (params.accumulate != 0) {
+            db_data[col] += db_sum;
+        } else {
+            db_data[col] = db_sum;
+        }
+    }
+}

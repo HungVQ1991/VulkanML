@@ -1,0 +1,65 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer QBuffer { float q_data[]; };
+layout(std430, binding = 1) readonly buffer KBuffer { float k_data[]; };
+layout(std430, binding = 2) readonly buffer VBuffer { float v_data[]; };
+layout(std430, binding = 3) writeonly buffer OutBuffer { float out_data[]; };
+
+layout(push_constant) uniform Constants {
+    uint num_heads;
+    uint head_dim;
+    uint total_seq_len;
+    float scale;
+} pc;
+
+shared float s_reduce[256];
+
+void main() {
+    uint h = gl_WorkGroupID.x;
+    if (h >= pc.num_heads) return;
+
+    uint tid = gl_LocalInvocationID.x;
+    uint d = pc.head_dim;
+    uint T = pc.total_seq_len;
+
+    float q_val = (tid < d) ? q_data[h * d + tid] : 0.0;
+
+    float m = -1e20;
+    float l = 0.0;
+    float o = 0.0;
+
+    for (uint t = 0; t < T; ++t) {
+        float k_val = (tid < d) ? k_data[h * T * d + t * d + tid] : 0.0;
+        s_reduce[tid] = q_val * k_val;
+        barrier();
+
+        // Workgroup parallel reduction for dot product
+        for (uint s = 128; s > 0; s >>= 1) {
+            if (tid < s) {
+                s_reduce[tid] += s_reduce[tid + s];
+            }
+            barrier();
+        }
+
+        float dot_prod = s_reduce[0];
+        barrier();
+
+        float s_t = dot_prod * pc.scale;
+        float v_val = (tid < d) ? v_data[h * T * d + t * d + tid] : 0.0;
+
+        float m_new = max(m, s_t);
+        float alpha = exp(m - m_new);
+        float beta = exp(s_t - m_new);
+
+        l = l * alpha + beta;
+        o = o * alpha + beta * v_val;
+        m = m_new;
+    }
+
+    if (tid < d) {
+        float inv_l = (l > 0.0) ? (1.0 / l) : 0.0;
+        out_data[h * d + tid] = o * inv_l;
+    }
+}

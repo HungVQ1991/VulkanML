@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <format>
@@ -15,6 +17,7 @@
 #include "graph_executor.h"
 #include "graph_optimizer.h"
 #include "helper/logger.h"
+#include "helper/training_profiler.h"
 #include "pipeline_cache_manager.h"
 #include "shader_dictionary.h"
 #include "vulkan_context.h"
@@ -22,343 +25,87 @@
 
 extern bool is_coop;
 
+enum class Execution_Stage
+{
+    NONE = 0,
+    FORWARD,
+    BACKWARD,
+    OPTIMIZER,
+    BACKWARD_OPTIMIZER
+};
+
 class Execution_Engine
 {
+public:
+    struct Loss_Readback_Slot
+    {
+        std::shared_ptr<gpu::vector> buffer;
+        uint32_t valid_tokens = 0;
+        size_t total_tokens = 0;
+        bool has_pending_read = false;
+    };
+
+    struct Adam_Dynamic_Params
+    {
+        float learning_rate = 0.001f;
+        float inv_bc1 = 1.0f;
+        float inv_sqrt_bc2 = 1.0f;
+        float inv_scale = 1.0f;
+    };
+
 private:
+    Execution_Stage current_stage = Execution_Stage::NONE;
+    double last_submit_time_ms = 0.0;
+    double last_fence_wait_ms = 0.0;
     std::unique_ptr<Vulkan_Context> context;
     std::unique_ptr<Vulkan_Network> network;
     std::unique_ptr<Pipeline_Cache_Manager> pipeline_cache_manager;
     std::unique_ptr<Shader_Dictionary> shader_dictionary;
-    std::string shader_folder_path = "compute_shader";
+    std::string shader_folder_path = "compute_shader/spv";
     Compute_Graph current_graph;
     std::unique_ptr<Graph_Executor> graph_executor;
 
     std::unordered_map<size_t, Cached_Graph_Template> cached_graph_templates;
     bool is_graph_cache_enabled = true;
     bool is_static_graph_enabled = false;
+    bool is_fused_gemm_adam_enabled = false;
+    double last_execution_time_ms = 0.0;
+    size_t last_executed_node_count = 0;
+    std::array<Execution_Stage, MAX_FRAMES_IN_FLIGHT> frame_stages{Execution_Stage::NONE, Execution_Stage::NONE};
+    std::array<Loss_Readback_Slot, MAX_FRAMES_IN_FLIGHT> loss_slots;
+    float latest_loss = 0.0f;
+    bool is_async_loss_enabled = false;
 
-    size_t computeGraphSignature(const Compute_Graph &graph) const
-    {
-        const auto &nodes = graph.getNodes();
-        size_t graph_signature_hash = nodes.size();
-        graph_signature_hash ^= static_cast<size_t>(is_coop ? 1 : 0) + 0x9e3779b9 + (graph_signature_hash << 6) + (graph_signature_hash >> 2);
+    void processPendingLossReadback(uint32_t frame_index);
+    size_t computeGraphSignature(const Compute_Graph &graph) const;
+    void precompileTemplatePipelines(Cached_Graph_Template &_template);
 
-        std::unordered_map<VkBuffer, size_t> buffer_to_id;
-        buffer_to_id.reserve(nodes.size() * 2);
-        size_t next_id = 0;
-
-        auto getCanonicalBufferId = [&](const std::shared_ptr<gpu::vector> &buf) -> size_t {
-            if (!buf)
-            {
-                return static_cast<size_t>(-1);
-            }
-            VkBuffer handle = buf->getBuffer();
-            if (handle == VK_NULL_HANDLE)
-            {
-                handle = reinterpret_cast<VkBuffer>(buf.get());
-            }
-            auto [it, inserted] = buffer_to_id.try_emplace(handle, next_id);
-            if (inserted)
-            {
-                ++next_id;
-            }
-            return it->second;
-        };
-
-        for (size_t i = 0; i < nodes.size(); ++i)
-        {
-            graph_signature_hash ^= static_cast<size_t>(nodes[i].pipeline_id) + 0x9e3779b9 + (graph_signature_hash << 6) + (graph_signature_hash >> 2);
-            graph_signature_hash ^= static_cast<size_t>(nodes[i].workgroup_count_x) + 0x9e3779b9 + (graph_signature_hash << 6) + (graph_signature_hash >> 2);
-            graph_signature_hash ^= static_cast<size_t>(nodes[i].workgroup_count_y) + 0x9e3779b9 + (graph_signature_hash << 6) + (graph_signature_hash >> 2);
-            graph_signature_hash ^= static_cast<size_t>(nodes[i].workgroup_count_z) + 0x9e3779b9 + (graph_signature_hash << 6) + (graph_signature_hash >> 2);
-            graph_signature_hash ^= nodes[i].push_constants_data.size() + 0x9e3779b9 + (graph_signature_hash << 6) + (graph_signature_hash >> 2);
-
-            for (const auto &buffer : nodes[i].buffers)
-            {
-                size_t canon_id = getCanonicalBufferId(buffer);
-                graph_signature_hash ^= canon_id + 0x9e3779b9 + (graph_signature_hash << 6) + (graph_signature_hash >> 2);
-            }
-        }
-        return graph_signature_hash;
-    }
-
-    void precompileTemplatePipelines(Cached_Graph_Template &_template)
-    {
-        for (auto &fused_node : _template.fused_nodes)
-        {
-            if (fused_node.is_fused && fused_node.fused_operations.size() > 1)
-            {
-                try
-                {
-                    graph_executor->getExternalBufferIndices(fused_node, fused_node.cached_external_buffer_indices);
-                    fused_node.fused_glsl_code = graph_executor->generateFusedGlsl(fused_node);
-                    fused_node.cached_pipeline = pipeline_cache_manager->getOrCreatePipeline(fused_node.fused_glsl_code);
-                }
-                catch (const std::exception &e)
-                {
-                    Logger::logMessage(Input_Format{"Execution_Engine::precompileTemplatePipelines: Fused pipeline compilation failed: {}. Fallback will be used.", e.what()},
-                                       Log_Level::LOG_WARNING,
-                                       true,
-                                       0,
-                                       Log_Feature::SHADER_GENERATION);
-                    fused_node.cached_pipeline = VK_NULL_HANDLE;
-                }
-            }
-        }
-        for (uint32_t frame_index = 0; frame_index < MAX_FRAMES_IN_FLIGHT; ++frame_index)
-        {
-            _template.instantiated_graphs[frame_index].setNodes(_template.fused_nodes);
-        }
-    }
-
-    Execution_Engine()
-    {
-        Logger::logMessage("Execution_Engine::Execution_Engine: Initializing execution engine",
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::DEVICE_MANAGEMENT | Log_Feature::DISPATCH_EXECUTION);
-
-        context = std::make_unique<Vulkan_Context>();
-        is_coop = context->isCooperativeMatrixEnabled();
-        network = std::make_unique<Vulkan_Network>(*context, shader_folder_path);
-        pipeline_cache_manager = std::make_unique<Pipeline_Cache_Manager>(*context, network->getPipelineLayout());
-        shader_dictionary = std::make_unique<Shader_Dictionary>("compute_shader/shader_dictionary.json");
-        graph_executor = std::make_unique<Graph_Executor>(*context, *network, *pipeline_cache_manager, *shader_dictionary);
-
-        uint32_t initial_frame_index = context->getCurrentFrame();
-        context->prepareFrame();
-        context->cleanGarbage(initial_frame_index);
-        graph_executor->resetFrameState(initial_frame_index);
-
-        context->registerFlushCallback([this](VkFence _fence)
-                                       {
-            if (!current_graph.getNodes().empty() || !context->getTransferTasks().empty())
-            {
-                Logger::logMessage("Execution_Engine::flushCallback: Triggering executeGraph via flush callback",
-                                   Log_Level::LOG_DEBUG,
-                                   true,
-                                   0,
-                                   Log_Feature::DISPATCH_EXECUTION);
-                this->executeGraph(_fence);
-            } });
-    }
+    Execution_Engine();
 
 public:
-    ~Execution_Engine()
-    {
-        Logger::logMessage("Execution_Engine::~Execution_Engine: Destroying execution engine",
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::DEVICE_MANAGEMENT);
-        if (context)
-        {
-            vkDeviceWaitIdle(context->getDevice());
-        }
-    }
+    ~Execution_Engine();
 
     Execution_Engine(const Execution_Engine &) = delete;
     Execution_Engine &operator=(const Execution_Engine &) = delete;
     Execution_Engine(Execution_Engine &&) = delete;
     Execution_Engine &operator=(Execution_Engine &&) = delete;
 
-    static Execution_Engine &getInstance()
-    {
-        static Execution_Engine instance;
-        return instance;
-    }
+    static Execution_Engine &getInstance();
 
+    void setExecutionStage(Execution_Stage stage) noexcept { current_stage = stage; }
+    Execution_Stage getExecutionStage() const noexcept { return current_stage; }
+    double getLastSubmitTimeMs() const noexcept { return last_submit_time_ms; }
+    double getLastFenceWaitMs() const noexcept { return last_fence_wait_ms; }
 
-    void invalidateGraphCache()
-    {
-        cached_graph_templates.clear();
-        if (graph_executor)
-        {
-            graph_executor->invalidate();
-            graph_executor->invalidateStaticGraph();
-        }
-    }
-
-    void invalidateStaticGraph() noexcept
-    {
-        if (graph_executor)
-        {
-            graph_executor->invalidateStaticGraph();
-        }
-    }
-
-    void warmCache(const Compute_Graph &_raw_graph)
-    {
-        if (_raw_graph.getNodes().empty())
-        {
-            return;
-        }
-
-        size_t graph_signature = computeGraphSignature(_raw_graph);
-        auto template_iterator = cached_graph_templates.find(graph_signature);
-        if (template_iterator == cached_graph_templates.end())
-        {
-            auto [inserted_iterator, is_inserted] = cached_graph_templates.emplace(graph_signature, Graph_Optimizer::buildCachedTemplate(_raw_graph));
-            template_iterator = inserted_iterator;
-            precompileTemplatePipelines(template_iterator->second);
-        }
-
-        uint32_t current_frame_index = context->getCurrentFrame();
-        auto &cached_graph = template_iterator->second.instantiated_graphs[current_frame_index];
-        Graph_Optimizer::applyCachedTemplateInPlace(_raw_graph, template_iterator->second, cached_graph);
-        graph_executor->warmupPipelineCache(cached_graph);
-
-        pipeline_cache_manager->savePipelineCache();
-        Logger::logMessage(Input_Format{"Execution_Engine::warmCache: Warmed cache for signature {}", graph_signature},
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::SHADER_GENERATION | Log_Feature::DISPATCH_EXECUTION);
-    }
-
-    void executeGraph(VkFence _external_fence = VK_NULL_HANDLE)
-    {
-        uint32_t current_frame_index = context->getCurrentFrame();
-
-        if (current_graph.getNodes().empty() && context->getTransferTasks().empty())
-        {
-            Logger::logMessage("Execution_Engine::executeGraph: Executing empty compute graph and transfer task queue",
-                               Log_Level::LOG_WARNING,
-                               false,
-                               0,
-                               Log_Feature::DISPATCH_EXECUTION);
-        }
-
-        Logger::logMessage(Input_Format{"Execution_Engine::executeGraph: Executing compute graph for frame {}", current_frame_index},
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::DISPATCH_EXECUTION);
-
-        if (is_static_graph_enabled)
-        {
-            if (is_graph_cache_enabled && !current_graph.getNodes().empty())
-            {
-                size_t graph_signature = computeGraphSignature(current_graph);
-                auto template_iterator = cached_graph_templates.find(graph_signature);
-                if (template_iterator == cached_graph_templates.end())
-                {
-                    auto [inserted_iterator, is_inserted] = cached_graph_templates.emplace(graph_signature, Graph_Optimizer::buildCachedTemplate(current_graph));
-                    template_iterator = inserted_iterator;
-                    precompileTemplatePipelines(template_iterator->second);
-                }
-
-                auto &cached_graph = template_iterator->second.instantiated_graphs[current_frame_index];
-                Graph_Optimizer::applyCachedTemplateInPlace(current_graph, template_iterator->second, cached_graph);
-
-                if (!graph_executor->isStaticBaked(current_frame_index) ||
-                    graph_executor->getStaticGraphSignature(current_frame_index) != graph_signature ||
-                    !graph_executor->isStaticGraphBuffersMatching(cached_graph, current_frame_index))
-                {
-                    graph_executor->bakeStaticGraph(cached_graph, current_frame_index, graph_signature);
-                }
-
-                graph_executor->executeStaticGraph(cached_graph, context->getTransferTasks(), current_frame_index, _external_fence);
-            }
-            else if (!current_graph.getNodes().empty())
-            {
-                Graph_Optimizer::optimize(current_graph);
-                size_t graph_signature = computeGraphSignature(current_graph);
-                if (!graph_executor->isStaticBaked(current_frame_index) ||
-                    graph_executor->getStaticGraphSignature(current_frame_index) != graph_signature ||
-                    !graph_executor->isStaticGraphBuffersMatching(current_graph, current_frame_index))
-                {
-                    graph_executor->bakeStaticGraph(current_graph, current_frame_index, graph_signature);
-                }
-                graph_executor->executeStaticGraph(current_graph, context->getTransferTasks(), current_frame_index, _external_fence);
-            }
-            else
-            {
-                graph_executor->compileAndExecute(current_graph, context->getTransferTasks(), current_frame_index, _external_fence);
-            }
-        }
-        else if (is_graph_cache_enabled && !current_graph.getNodes().empty())
-        {
-            size_t graph_signature = computeGraphSignature(current_graph);
-            auto template_iterator = cached_graph_templates.find(graph_signature);
-            if (template_iterator == cached_graph_templates.end())
-            {
-                auto [inserted_iterator, is_inserted] = cached_graph_templates.emplace(graph_signature, Graph_Optimizer::buildCachedTemplate(current_graph));
-                template_iterator = inserted_iterator;
-                precompileTemplatePipelines(template_iterator->second);
-            }
-
-            auto &cached_graph = template_iterator->second.instantiated_graphs[current_frame_index];
-            Graph_Optimizer::applyCachedTemplateInPlace(current_graph, template_iterator->second, cached_graph);
-            graph_executor->compileAndExecute(cached_graph, context->getTransferTasks(), current_frame_index, _external_fence);
-        }
-        else
-        {
-            Graph_Optimizer::optimize(current_graph);
-            graph_executor->compileAndExecute(current_graph, context->getTransferTasks(), current_frame_index, _external_fence);
-        }
-
-        context->resetStagingOffset(current_frame_index);
-        context->clearTransferTasks();
-        current_graph.clear();
-
-        context->advanceFrame();
-
-        uint32_t next_frame_index = context->getCurrentFrame();
-        context->prepareFrame();
-        context->cleanGarbage(next_frame_index);
-        graph_executor->resetFrameState(next_frame_index);
-    }
-
-    void executeStaticReplay(VkFence _external_fence = VK_NULL_HANDLE)
-    {
-        uint32_t current_frame_index = context->getCurrentFrame();
-        graph_executor->executeStaticGraphReplay(current_graph, context->getTransferTasks(), current_frame_index, _external_fence);
-
-        context->resetStagingOffset(current_frame_index);
-        context->clearTransferTasks();
-        current_graph.clear();
-
-        context->advanceFrame();
-
-        uint32_t next_frame_index = context->getCurrentFrame();
-        context->prepareFrame();
-        context->cleanGarbage(next_frame_index);
-        graph_executor->resetFrameState(next_frame_index);
-    }
-
-    void waitIdle() const
-    {
-        Logger::logMessage("Execution_Engine::waitIdle: Waiting for device idle",
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::DEVICE_MANAGEMENT | Log_Feature::SYNCHRONIZATION);
-        if (context)
-        {
-            vkDeviceWaitIdle(context->getDevice());
-        }
-        else
-        {
-            Logger::logMessage("Execution_Engine::waitIdle: Attempted waitIdle on null Vulkan context",
-                               Log_Level::LOG_ERROR,
-                               true,
-                               0,
-                               Log_Feature::DEVICE_MANAGEMENT);
-            throw std::runtime_error("Attempted waitIdle on null Vulkan context");
-        }
-    }
-
-    void warmupPipelineCache()
-    {
-        graph_executor->warmupPipelineCache(current_graph);
-    }
-
-    void optimize()
-    {
-        Graph_Optimizer::optimize(current_graph);
-    }
+    void invalidateGraphCache();
+    void invalidateStaticGraph() noexcept;
+    void warmCache(const Compute_Graph &_raw_graph);
+    void prepareCurrentFrame(Execution_Stage _stage = Execution_Stage::NONE);
+    void executeGraph(VkFence _external_fence = VK_NULL_HANDLE, Execution_Stage _stage = Execution_Stage::NONE);
+    void executeStaticReplay(VkFence _external_fence = VK_NULL_HANDLE);
+    void waitIdle() const;
+    void warmupPipelineCache();
+    void optimize();
 
     const std::unordered_map<size_t, Cached_Graph_Template> &getCachedGraphTemplates() const noexcept { return cached_graph_templates; }
     const std::string &getShaderFolderPath() const noexcept { return shader_folder_path; }
@@ -378,14 +125,6 @@ public:
     bool isCooperativeMatrixEnabled() const noexcept { return is_coop; }
     bool isGraphCacheEnabled() const noexcept { return is_graph_cache_enabled; }
 
-    struct Adam_Dynamic_Params
-    {
-        float learning_rate = 0.001f;
-        float inv_bc1 = 1.0f;
-        float inv_sqrt_bc2 = 1.0f;
-        float inv_scale = 1.0f;
-    };
-
     void updateDynamicOptimizerParams(float _lr, float _inv_bc1, float _inv_sqrt_bc2, float _inv_scale, uint32_t _frame_index)
     {
         if (graph_executor)
@@ -400,52 +139,26 @@ public:
     }
 
     void setShaderFolderPath(const std::string &_path) { shader_folder_path = _path; }
-    void setCooperativeMatrixEnabled(bool _enable)
-    {
-        if (_enable && (!context || !context->isCooperativeMatrixSupported()))
-        {
-            Logger::logMessage("Execution_Engine::setCooperativeMatrixEnabled: Device does not support Cooperative Matrix",
-                               Log_Level::LOG_WARNING,
-                               true,
-                               0,
-                               Log_Feature::DEVICE_MANAGEMENT);
-            return;
-        }
-
-        if (is_coop == _enable)
-        {
-            return;
-        }
-
-        waitIdle();
-        is_coop = _enable;
-        if (context)
-        {
-            context->setCooperativeMatrixEnabled(_enable);
-        }
-        invalidateGraphCache();
-    }
-    void setGraphCachingEnabled(bool _is_enabled)
-    {
-        is_graph_cache_enabled = _is_enabled;
-        if (!_is_enabled)
-        {
-            cached_graph_templates.clear();
-        }
-    }
+    void setCooperativeMatrixEnabled(bool _enable);
+    void setGraphCachingEnabled(bool _is_enabled);
     void enableGraphCaching(bool _is_enabled) { setGraphCachingEnabled(_is_enabled); }
 
     bool isStaticGraphEnabled() const noexcept { return is_static_graph_enabled; }
-    void setStaticGraphEnabled(bool _enable) noexcept
-    {
-        if (is_static_graph_enabled != _enable)
-        {
-            is_static_graph_enabled = _enable;
-            invalidateStaticGraph();
-        }
-    }
-    void enableStaticGraph(bool _enable = true) noexcept
-    {
-        setStaticGraphEnabled(_enable);
-    }
+    void setStaticGraphEnabled(bool _enable) noexcept;
+    void enableStaticGraph(bool _enable = true) noexcept { setStaticGraphEnabled(_enable); }
+
+    bool isFusedGemmAdamEnabled() const noexcept { return is_fused_gemm_adam_enabled; }
+    void setFusedGemmAdamEnabled(bool _enable) noexcept;
+    void enableFusedGemmAdam(bool _enable = true) noexcept { setFusedGemmAdamEnabled(_enable); }
+
+    double getLastExecutionTimeMs() const noexcept { return last_execution_time_ms; }
+    size_t getLastExecutedNodeCount() const noexcept { return last_executed_node_count; }
+
+    Loss_Readback_Slot& getLossSlot(uint32_t frame_index) { return loss_slots[frame_index % MAX_FRAMES_IN_FLIGHT]; }
+    float getLatestLoss() const noexcept { return latest_loss; }
+    void setLatestLoss(float loss) noexcept { latest_loss = loss; }
+    void setAsyncLossEnabled(bool enable) noexcept { is_async_loss_enabled = enable; }
+    bool isAsyncLossEnabled() const noexcept { return is_async_loss_enabled; }
+
+    float readPendingLoss(uint32_t frame_index);
 };

@@ -13,50 +13,17 @@ class No_Decay : public ILearning_Rate
 private:
     float learning_rate = 0.01f;
 
-public:
-    explicit No_Decay(float _initial_learning_rate = 0.01f)
-        : learning_rate(_initial_learning_rate)
-    {
-        if (learning_rate <= 0.0f)
-        {
-            Logger::logMessage("No_Decay::No_Decay: Initial learning rate must be greater than 0.",
-                               Log_Level::LOG_ERROR,
-                               true,
-                               0,
-                               Log_Feature::LR_SCHEDULER);
-            throw std::invalid_argument("Initial learning rate must be greater than 0.");
-        }
-    }
+public:    explicit No_Decay(float _initial_learning_rate = 0.01f);
 
-    ~No_Decay() noexcept override = default;
 
-    float updateRate() override
-    {
-        Logger::logMessage(Input_Format{"No_Decay::updateRate: current_rate={}", learning_rate},
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::LR_SCHEDULER);
-        return learning_rate;
-    }
+    ~No_Decay() noexcept override = default;    float updateRate() override;
+    void step(float _current_value = 0.0f) override;
+    void saveCheckpoint(std::ofstream &_output_file_stream) const override;
+    void loadCheckpoint(std::ifstream &_input_file_stream) override;
 
-    void step(float _current_value = 0.0f) override
-    {
-    }
-
-    void saveCheckpoint(std::ofstream &_output_file_stream) const override
-    {
-        _output_file_stream.write(reinterpret_cast<const char *>(&learning_rate), sizeof(learning_rate));
-    }
-
-    void loadCheckpoint(std::ifstream &_input_file_stream) override
-    {
-        _input_file_stream.read(reinterpret_cast<char *>(&learning_rate), sizeof(learning_rate));
-    }
 
     float getCurrentRate() const noexcept override { return learning_rate; }
     float getLearningRate() const noexcept override { return learning_rate; }
-    Decay_Mode getType() const noexcept override { return Decay_Mode::NO_DECAY; }
+    Decay_Mode getType() const noexcept override { return Decay_Mode::NO_DECAY; }    void setLearningRate(float _learning_rate) noexcept;
 
-    void setLearningRate(float _learning_rate) noexcept { learning_rate = _learning_rate; }
-};
+};;

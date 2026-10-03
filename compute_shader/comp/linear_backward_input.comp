@@ -1,0 +1,67 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer GradY {
+    float dy_data[];
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer WeightsW {
+    float w_data[];
+};
+
+layout(std430, set = 0, binding = 2) writeonly buffer GradX {
+    float dx_data[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint batch_size;
+    uint in_dim;
+    uint out_dim;
+} params;
+
+shared float tile_dy[16][17];
+shared float tile_w[16][17];
+
+void main() {
+    uint col = gl_GlobalInvocationID.x;
+    uint row = gl_GlobalInvocationID.y;
+
+    uint local_col = gl_LocalInvocationID.x;
+    uint local_row = gl_LocalInvocationID.y;
+
+    float sum = 0.0;
+    uint num_tiles = (params.out_dim + 15) / 16;
+
+    for (uint t = 0; t < num_tiles; ++t) {
+        uint dy_row = gl_WorkGroupID.y * 16 + local_row;
+        uint dy_col = t * 16 + local_col;
+        if (dy_row < params.batch_size && dy_col < params.out_dim) {
+            tile_dy[local_row][local_col] = dy_data[dy_row * params.out_dim + dy_col];
+        } else {
+            tile_dy[local_row][local_col] = 0.0;
+        }
+
+        uint w_row = gl_WorkGroupID.x * 16 + local_row;
+        uint w_col = t * 16 + local_col;
+        if (w_row < params.in_dim && w_col < params.out_dim) {
+            tile_w[local_row][local_col] = w_data[w_row * params.out_dim + w_col];
+        } else {
+            tile_w[local_row][local_col] = 0.0;
+        }
+
+        barrier();
+
+        #pragma unroll
+        for (uint k = 0; k < 16; ++k) {
+            sum = fma(tile_dy[local_row][k], tile_w[local_col][k], sum);
+        }
+
+        barrier();
+    }
+
+    if (row < params.batch_size && col < params.in_dim) {
+        if (isnan(sum) || isinf(sum)) sum = 0.0;
+        dx_data[row * params.in_dim + col] = sum;
+    }
+}

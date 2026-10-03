@@ -25,7 +25,7 @@
 constexpr size_t INPUT_DIMENSION = 784;
 constexpr size_t OUTPUT_DIMENSION = 10;
 constexpr size_t BATCH_SIZE = 8;
-constexpr size_t TOTAL_EPOCHS = 1;
+constexpr size_t TOTAL_EPOCHS = 5;
 
 uint32_t swapByteOrder(uint32_t _value)
 {
@@ -283,7 +283,7 @@ void evaluateModel(Neural_Network &_neural_network,
     size_t test_batch_size = BATCH_SIZE;
     size_t batches_count = (_test_images_count + test_batch_size - 1) / test_batch_size;
 
-    Matrix input_matrix(test_batch_size, INPUT_DIMENSION, _execution_target);
+    Tensor input_matrix(test_batch_size, INPUT_DIMENSION, _execution_target);
     std::vector<float> host_batch_inputs(test_batch_size * INPUT_DIMENSION);
     std::vector<float> host_batch_targets(test_batch_size * OUTPUT_DIMENSION);
 
@@ -295,7 +295,7 @@ void evaluateModel(Neural_Network &_neural_network,
         {
             host_batch_inputs.resize(current_batch_size * INPUT_DIMENSION);
             host_batch_targets.resize(current_batch_size * OUTPUT_DIMENSION);
-            input_matrix = Matrix(current_batch_size, INPUT_DIMENSION, _execution_target);
+            input_matrix = Tensor(current_batch_size, INPUT_DIMENSION, _execution_target);
         }
 
         std::copy(_test_images_data.begin() + b * test_batch_size * INPUT_DIMENSION,
@@ -308,7 +308,7 @@ void evaluateModel(Neural_Network &_neural_network,
 
         input_matrix.uploadData(host_batch_inputs);
 
-        Matrix prediction_matrix = _neural_network.forward(input_matrix);
+        Tensor prediction_matrix = _neural_network.forward(input_matrix);
 
         if (_execution_target == Execution_Target::VULKAN_GPU)
         {
@@ -363,7 +363,7 @@ void evaluateModel(Neural_Network &_neural_network,
     evaluation_report += std::format("Accuracy  : {:.2f}%\n", accuracy_percentage);
     evaluation_report += std::format("Error     : {:.2f}%\n\n", error_rate_percentage);
 
-    evaluation_report += "Confusion Matrix:\n[";
+    evaluation_report += "Confusion Tensor:\n[";
     for (size_t r = 0; r < OUTPUT_DIMENSION; ++r)
     {
         if (r > 0)
@@ -408,34 +408,40 @@ int main()
         .getPipelineCacheManager()
         .initializePipelineCache("temp/pipeline_cache.bin");
 
+    Execution_Engine::getInstance().setCooperativeMatrixEnabled(false);
+
     Execution_Target execution_target = Execution_Target::VULKAN_GPU;
     Neural_Network neural_network(execution_target);
     neural_network.setTrainingMode(true);
+    neural_network.enableCooperationMatrix(false);
 
     neural_network.enableMixedPrecision();
-    // neural_network.enableStaticGraph();
-    // neural_network.enableCooperationMatrix();
+    neural_network.enableStaticGraph();
+    neural_network.enableCooperationMatrix();
 
-    neural_network.setLearningRate<Cosine_Annealing>(0.001f, 1e-5f, static_cast<int>(TOTAL_EPOCHS));
-    neural_network.setOptimizer<Adam_Optimizer>(neural_network.getLearningRate(), 0.9f, 0.999f, 1e-8f, 1.0f);
-    neural_network.setCostFunction<Cce_Cost>();
+    // neural_network.setLearningRate<Cosine_Annealing>(0.001f, 1e-5f, static_cast<int>(TOTAL_EPOCHS));
+    // neural_network.setOptimizer<Adam_Optimizer>(neural_network.getLearningRate(), 0.9f, 0.999f, 1e-8f, 1.0f);
+    // neural_network.setCostFunction<Cce_Cost>();
 
-    neural_network.addLayer<Conv2d_Layer>(28, 28, 1, 16, 3, 1, 1);
-    neural_network.addLayer<Batch_Norm_2d_Layer>(28, 28, 16, 1e-5f, 0.1f);
-    neural_network.addLayer<Gelu_Layer>();
-    neural_network.addLayer<Max_Pool_2d_Layer>(28, 28, 16, 2, 2, 0);
+    // neural_network.addLayer<Conv2d_Layer>(28, 28, 1, 16, 3, 1, 1);
+    // neural_network.addLayer<Batch_Norm_2d_Layer>(28, 28, 16, 1e-5f, 0.1f);
+    // neural_network.addLayer<Gelu_Layer>();
+    // neural_network.addLayer<Max_Pool_2d_Layer>(28, 28, 16, 2, 2, 0);
 
-    neural_network.addLayer<Conv2d_Layer>(14, 14, 16, 32, 3, 1, 1);
-    neural_network.addLayer<Batch_Norm_2d_Layer>(14, 14, 32, 1e-5f, 0.1f);
-    neural_network.addLayer<Gelu_Layer>();
-    neural_network.addLayer<Max_Pool_2d_Layer>(14, 14, 32, 2, 2, 0);
+    // neural_network.addLayer<Conv2d_Layer>(14, 14, 16, 32, 3, 1, 1);
+    // neural_network.addLayer<Batch_Norm_2d_Layer>(14, 14, 32, 1e-5f, 0.1f);
+    // neural_network.addLayer<Gelu_Layer>();
+    // neural_network.addLayer<Max_Pool_2d_Layer>(14, 14, 32, 2, 2, 0);
 
-    neural_network.addLayer<Linear_Layer>(7 * 7 * 32, 128);
-    neural_network.addLayer<Batch_Norm_Layer>(128, 1e-5f, 0.1f);
-    neural_network.addLayer<Gelu_Layer>();
+    // neural_network.addLayer<Linear_Layer>(7 * 7 * 32, 128);
+    // neural_network.addLayer<Batch_Norm_Layer>(128, 1e-5f, 0.1f);
+    // neural_network.addLayer<Gelu_Layer>();
 
-    neural_network.addLayer<Linear_Layer>(128, 10);
-    neural_network.addLayer<Softmax_Layer>(true);
+    // neural_network.addLayer<Linear_Layer>(128, 10);
+    // neural_network.addLayer<Softmax_Layer>(true);
+
+    neural_network.loadTrainingCheckpoint("output/mnist/checkpoint_1.nnck", 2);
+
 
     Logger::logMessage("Starting training benchmark with Data Augmentation...", Log_Level::LOG_INFO, true, 0, Log_Feature::TRAINING);
     double elapsed_duration_ms = runBenchmark(execution_target, train_images_data, train_labels_data, train_images_count, neural_network, "output/mnist/checkpoint_{}");

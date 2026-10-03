@@ -1,0 +1,91 @@
+#version 450
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+#extension GL_KHR_shader_subgroup_basic : enable
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer GradOutBuffer { float grad_out[]; };
+layout(std430, binding = 1) readonly buffer InBuffer { float in_data[]; };
+layout(std430, binding = 2) readonly buffer GammaBuffer { float gamma_data[]; };
+layout(std430, binding = 3) readonly buffer InvRmsBuffer { float inv_rms_data[]; };
+layout(std430, binding = 4) writeonly buffer GradInBuffer { float grad_in[]; };
+layout(std430, binding = 5) buffer GradGammaBuffer { float grad_gamma[]; };
+
+layout(push_constant) uniform Constants {
+    uint batch_size;
+    uint dim;
+    uint accumulate;
+} pcs;
+
+shared float s_subgroup_sums[32];
+shared float s_sum_dy_gamma_x;
+
+void main() {
+    uint row = gl_WorkGroupID.x;
+    if (row >= pcs.batch_size) return;
+
+    uint lid = gl_LocalInvocationID.x;
+    uint row_offset = row * pcs.dim;
+    float inv_rms = inv_rms_data[row];
+
+    float local_sum = 0.0;
+    for (uint c = lid; c < pcs.dim; c += 256) {
+        float dy = grad_out[row_offset + c];
+        float g = gamma_data[c];
+        float x = in_data[row_offset + c];
+        float x_hat = x * inv_rms;
+        local_sum += dy * g * x_hat;
+    }
+
+    #ifdef GL_KHR_shader_subgroup_arithmetic
+    local_sum = subgroupAdd(local_sum);
+    #endif
+
+    uint sg_id = gl_SubgroupID;
+    uint num_sg = gl_NumSubgroups;
+
+    if (subgroupElect()) {
+        s_subgroup_sums[sg_id] = local_sum;
+    }
+    barrier();
+
+    if (sg_id == 0) {
+        float val = (lid < num_sg) ? s_subgroup_sums[lid] : 0.0;
+        #ifdef GL_KHR_shader_subgroup_arithmetic
+        val = subgroupAdd(val);
+        #endif
+        if (lid == 0) {
+            s_sum_dy_gamma_x = val;
+        }
+    }
+    barrier();
+
+    float sum_dy_gamma_x = s_sum_dy_gamma_x;
+    float inv_dim = 1.0 / float(pcs.dim);
+
+    for (uint c = lid; c < pcs.dim; c += 256) {
+        float dy = grad_out[row_offset + c];
+        float g = gamma_data[c];
+        float x = in_data[row_offset + c];
+        float x_hat = x * inv_rms;
+        float dx = inv_rms * (dy * g - x_hat * (sum_dy_gamma_x * inv_dim));
+        grad_in[row_offset + c] = dx;
+    }
+
+    if (row == 0) {
+        for (uint c = lid; c < pcs.dim; c += 256) {
+            float sum = 0.0;
+            for (uint r = 0; r < pcs.batch_size; ++r) {
+                float dy = grad_out[r * pcs.dim + c];
+                float x = in_data[r * pcs.dim + c];
+                float inv_rms_val = inv_rms_data[r];
+                sum += dy * (x * inv_rms_val);
+            }
+            if (pcs.accumulate != 0) {
+                grad_gamma[c] += sum;
+            } else {
+                grad_gamma[c] = sum;
+            }
+        }
+    }
+}

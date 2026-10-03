@@ -1,12 +1,10 @@
 #pragma once
 
-#include <algorithm>
-#include <cmath>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
-#include "helper/logger.h"
-#include "math/tensor.h"
+class Tensor;
 
 class Loss_Scaler
 {
@@ -26,21 +24,7 @@ public:
                 float _backoff_factor = 0.5f,
                 uint32_t _growth_interval = 2000,
                 bool _enabled = true,
-                float _max_scale = 1024.0f)
-        : scale_factor(_initial_scale),
-          growth_factor(_growth_factor),
-          backoff_factor(_backoff_factor),
-          max_scale(_max_scale),
-          growth_interval(_growth_interval),
-          is_enabled(_enabled)
-    {
-        Logger::logMessage(Input_Format{"Loss_Scaler::Loss_Scaler: Initialized with scale={:.1f}, growth={:.2f}, backoff={:.2f}, interval={}, max_scale={:.1f}",
-                                        scale_factor, growth_factor, backoff_factor, growth_interval, max_scale},
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::LOSS_COMPUTE | Log_Feature::FP16_METRICS);
-    }
+                float _max_scale = 1024.0f);
 
     float scaleLoss(float loss_value) const noexcept
     {
@@ -51,114 +35,22 @@ public:
         return loss_value * scale_factor;
     }
 
-    void scaleGradient(Tensor &gradient) const
-    {
-        if (!is_enabled || scale_factor == 1.0f)
-        {
-            return;
-        }
-        gradient.mulScalar(scale_factor, gradient);
-    }
+    void scaleGradient(Tensor &gradient) const;
+    void unscaleGradient(Tensor &gradient) const;
 
-    void unscaleGradient(Tensor &gradient) const
-    {
-        if (!is_enabled || scale_factor == 0.0f)
-        {
-            return;
-        }
-        gradient.mulScalar(1.0f / scale_factor, gradient);
-    }
+    bool hasOverflow(const Tensor &gradient) const;
+    bool hasOverflow(const std::vector<Tensor> &gradients) const;
+    bool hasOverflow(const std::vector<std::pair<Tensor *, Tensor *>> &param_grad_pairs) const;
+    void unscaleGradients(std::vector<std::pair<Tensor *, Tensor *>> &param_grad_pairs) const;
 
-    bool hasOverflow(const Tensor &gradient) const
-    {
-        if (gradient.getExecutionTarget() == Execution_Target::VULKAN_GPU)
-        {
-            return false;
-        }
-        const auto &data = gradient.getData();
-        for (float val : data)
-        {
-            if (std::isnan(val) || std::isinf(val))
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    bool hasOverflow(const std::vector<Tensor> &gradients) const
-    {
-        for (const auto &grad : gradients)
-        {
-            if (hasOverflow(grad))
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    bool hasOverflow(const std::vector<std::pair<Tensor *, Tensor *>> &param_grad_pairs) const
-    {
-        for (const auto &[param, grad] : param_grad_pairs)
-        {
-            if (grad && hasOverflow(*grad))
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    void unscaleGradients(std::vector<std::pair<Tensor *, Tensor *>> &param_grad_pairs) const
-    {
-        for (auto &[param, grad] : param_grad_pairs)
-        {
-            if (grad)
-            {
-                unscaleGradient(*grad);
-            }
-        }
-    }
-
-    bool step(bool overflow_detected)
-    {
-        if (!is_enabled)
-        {
-            return true;
-        }
-
-        if (overflow_detected)
-        {
-            scale_factor = std::max(scale_factor * backoff_factor, min_scale);
-            good_steps = 0;
-            Logger::logMessage(Input_Format{"Loss_Scaler::step: Overflow detected! Backed off scale factor to {:.4f}", scale_factor},
-                               Log_Level::LOG_WARNING,
-                               true,
-                               0,
-                               Log_Feature::LOSS_COMPUTE | Log_Feature::FP16_METRICS);
-            return false;
-        }
-
-        good_steps++;
-        if (good_steps >= growth_interval)
-        {
-            scale_factor = std::min(scale_factor * growth_factor, max_scale);
-            good_steps = 0;
-            Logger::logMessage(Input_Format{"Loss_Scaler::step: Increased scale factor to {:.4f}", scale_factor},
-                               Log_Level::LOG_INFO,
-                               true,
-                               0,
-                               Log_Feature::LOSS_COMPUTE | Log_Feature::FP16_METRICS);
-        }
-        return true;
-    }
+    bool step(bool overflow_detected);
 
     uint32_t getGrowthInterval() const noexcept { return growth_interval; }
     uint32_t getGoodSteps() const noexcept { return good_steps; }
     float getBackoffFactor() const noexcept { return backoff_factor; }
     float getGrowthFactor() const noexcept { return growth_factor; }
     float getScaleFactor() const noexcept { return scale_factor; }
+    float getScale() const noexcept { return scale_factor; }
     float getMinScale() const noexcept { return min_scale; }
     float getMaxScale() const noexcept { return max_scale; }
     bool isEnabled() const noexcept { return is_enabled; }

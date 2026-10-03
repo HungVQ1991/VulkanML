@@ -21,20 +21,10 @@ public:
     Compute_Graph(Compute_Graph &&other) noexcept = default;
     Compute_Graph &operator=(Compute_Graph &&other) noexcept = default;
 
-    void addNode(const Compute_Node &_node)
-    {
-        nodes.push_back(_node);
-    }
-
-    void addNode(Compute_Node &&_node)
-    {
-        nodes.push_back(std::move(_node));
-    }
-
-    void clear() noexcept
-    {
-        nodes.clear();
-    }
+    void addNode(const Compute_Node &_node);
+    void addNode(Compute_Node &&_node);
+    void clear() noexcept;
+    void print();
 
     const Compute_Node &getNode(size_t _index) const { return nodes.at(_index); }
     Compute_Node &getNode(size_t _index) { return nodes.at(_index); }

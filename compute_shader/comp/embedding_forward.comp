@@ -1,0 +1,29 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer IndicesBuffer { float indices_data[]; };
+layout(std430, binding = 1) readonly buffer WeightBuffer { float weight_data[]; };
+layout(std430, binding = 2) writeonly buffer OutputBuffer { float output_data[]; };
+
+layout(push_constant) uniform Constants {
+    uint num_tokens;
+    uint embedding_dim;
+    uint vocab_size;
+} pc;
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    uint total = pc.num_tokens * pc.embedding_dim;
+    if (gid >= total) return;
+
+    uint token_idx = gid / pc.embedding_dim;
+    uint dim_idx = gid % pc.embedding_dim;
+
+    int row = int(round(indices_data[token_idx]));
+    if (row >= 0 && uint(row) < pc.vocab_size) {
+        output_data[gid] = weight_data[uint(row) * pc.embedding_dim + dim_idx];
+    } else {
+        output_data[gid] = 0.0;
+    }
+}

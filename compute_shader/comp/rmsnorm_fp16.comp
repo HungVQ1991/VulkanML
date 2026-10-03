@@ -1,0 +1,77 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+#extension GL_KHR_shader_subgroup_basic : enable
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer InBuffer { float16_t in_data[]; };
+layout(std430, binding = 1) readonly buffer GammaBuffer { float16_t gamma_data[]; };
+layout(std430, binding = 2) writeonly buffer OutBuffer { float16_t out_data[]; };
+layout(std430, binding = 3) writeonly buffer InvRmsBuffer { float inv_rms_data[]; };
+
+layout(push_constant) uniform Constants {
+    uint batch_size;
+    uint dim;
+    float epsilon;
+} pcs;
+
+shared float s_subgroup_sums[32];
+shared float s_inv_rms;
+
+void main() {
+    uint row = gl_WorkGroupID.x;
+    if (row >= pcs.batch_size) return;
+
+    uint lid = gl_LocalInvocationID.x;
+    uint row_offset = row * pcs.dim;
+
+    // Step 1: Accumulate local sum of squares in FP32
+    float sum_sq = 0.0;
+    for (uint c = lid; c < pcs.dim; c += 256) {
+        float val = float(in_data[row_offset + c]);
+        sum_sq += val * val;
+    }
+
+    // Step 2: Intra-subgroup reduction
+    #ifdef GL_KHR_shader_subgroup_arithmetic
+    sum_sq = subgroupAdd(sum_sq);
+    #endif
+
+    uint sg_id = gl_SubgroupID;
+    uint num_sg = gl_NumSubgroups;
+
+    if (subgroupElect()) {
+        s_subgroup_sums[sg_id] = sum_sq;
+    }
+    barrier();
+
+    // Step 3: Inter-subgroup reduction by the first subgroup
+    if (sg_id == 0) {
+        float val = (lid < num_sg) ? s_subgroup_sums[lid] : 0.0;
+        #ifdef GL_KHR_shader_subgroup_arithmetic
+        val = subgroupAdd(val);
+        #endif
+        if (lid == 0) {
+            float mean_sq = val / float(pcs.dim);
+            if (isnan(mean_sq) || isinf(mean_sq) || mean_sq < 0.0) mean_sq = 0.0;
+            s_inv_rms = inversesqrt(mean_sq + pcs.epsilon);
+            inv_rms_data[row] = s_inv_rms;
+        }
+    }
+    barrier();
+
+    float inv_rms = s_inv_rms;
+
+    // Step 4: Write normalized and scaled output in FP16
+    for (uint c = lid; c < pcs.dim; c += 256) {
+        float val = float(in_data[row_offset + c]);
+        float g = float(gamma_data[c]);
+        if (isnan(val) || isinf(val)) val = 0.0;
+        if (isnan(g) || isinf(g)) g = 1.0;
+        float norm_val = val * inv_rms * g;
+        if (isnan(norm_val) || isinf(norm_val)) norm_val = 0.0;
+        out_data[row_offset + c] = float16_t(clamp(norm_val, -65504.0, 65504.0));
+    }
+}
