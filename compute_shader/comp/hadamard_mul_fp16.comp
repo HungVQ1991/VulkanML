@@ -1,0 +1,33 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer Buffer_A { float16_t data_a[]; };
+layout(std430, binding = 1) readonly buffer Buffer_B { float16_t data_b[]; };
+layout(std430, binding = 2) writeonly buffer Buffer_C { float16_t data_c[]; };
+
+layout(push_constant) uniform Elementwise_Dimensions {
+    uint total_elements;
+    uint cols;
+    uint is_broadcast;
+} dims;
+
+void main() {
+    uint elem_idx = gl_GlobalInvocationID.x;
+    if (elem_idx >= dims.total_elements)
+        return;
+
+    uint rhs_idx = elem_idx;
+    if (dims.is_broadcast != 0) {
+        rhs_idx = elem_idx % dims.cols;
+    }
+    float a = float(data_a[elem_idx]);
+    float b = float(data_b[rhs_idx]);
+    if (isnan(a) || isinf(a)) a = 0.0;
+    if (isnan(b) || isinf(b)) b = 0.0;
+    float res = a * b;
+    if (isnan(res) || isinf(res)) res = 0.0;
+    data_c[elem_idx] = float16_t(clamp(res, -65504.0, 65504.0));
+}

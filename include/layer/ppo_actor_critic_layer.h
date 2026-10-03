@@ -106,7 +106,7 @@ public:
         }
         critic_output_tensor = current_critic;
 
-        actor_output_tensor.concatenateCollumns(critic_output_tensor, output_tensor);
+        actor_output_tensor.concatenateColumns(critic_output_tensor, output_tensor);
 
         is_forward_completed = true;
         return output_tensor;
@@ -149,7 +149,7 @@ public:
         }
 
         Tensor combined_output(_batched_input.getExecutionTarget());
-        running_actor.concatenateCollumns(running_critic, combined_output);
+        running_actor.concatenateColumns(running_critic, combined_output);
         return combined_output;
     }
 
@@ -191,7 +191,7 @@ public:
             throw std::invalid_argument("Output gradient dimension mismatch");
         }
 
-        _output_gradient.splitCollumns(static_cast<size_t>(actor_output_dimension), actor_gradient, critic_gradient);
+        _output_gradient.splitColumns(static_cast<size_t>(actor_output_dimension), actor_gradient, critic_gradient);
 
         Tensor current_actor_gradient = actor_gradient;
         for (auto it = actor.rbegin(); it != actor.rend(); ++it)

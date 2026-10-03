@@ -159,6 +159,7 @@ public:
     float getBackoffFactor() const noexcept { return backoff_factor; }
     float getGrowthFactor() const noexcept { return growth_factor; }
     float getScaleFactor() const noexcept { return scale_factor; }
+    float getScale() const noexcept { return scale_factor; }
     float getMinScale() const noexcept { return min_scale; }
     float getMaxScale() const noexcept { return max_scale; }
     bool isEnabled() const noexcept { return is_enabled; }

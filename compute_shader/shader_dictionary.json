@@ -100,7 +100,28 @@
     "output_count": 0,
     "supports_cooperative_matrix": false,
     "index_expr": "global_id",
-    "code": "if (global_id >= {pc_0}) return; float g = {in_1}[global_id] * uintBitsToFloat({pc_8}); if (isnan(g) || isinf(g)) return; float max_g = uintBitsToFloat({pc_5}); if (max_g > 0.0) g = clamp(g, -max_g, max_g); float b1 = uintBitsToFloat({pc_2}); float b2 = uintBitsToFloat({pc_3}); float m = b1 * {in_2}[global_id] + (1.0 - b1) * g; float v = b2 * {in_3}[global_id] + (1.0 - b2) * (g * g); {in_2}[global_id] = m; {in_3}[global_id] = v; float m_hat = m * uintBitsToFloat({pc_6}); float v_hat = v * (uintBitsToFloat({pc_7}) * uintBitsToFloat({pc_7})); {in_0}[global_id] -= uintBitsToFloat({pc_1}) * (m_hat / (sqrt(v_hat) + uintBitsToFloat({pc_4})));"
+    "code": "if (global_id >= {pc_0}) return; float g = {in_1}[global_id] * uintBitsToFloat({pc_8}); if (isnan(g) || isinf(g)) return; float max_g = uintBitsToFloat({pc_5}); if (max_g > 0.0) g = clamp(g, -max_g, max_g); float b1 = uintBitsToFloat({pc_2}); float b2 = uintBitsToFloat({pc_3}); float m = b1 * {in_2}[global_id] + (1.0 - b1) * g; float v = b2 * {in_3}[global_id] + (1.0 - b2) * (g * g); {in_2}[global_id] = m; {in_3}[global_id] = v; float m_hat = m * uintBitsToFloat({pc_6}); float v_hat = v * (uintBitsToFloat({pc_7}) * uintBitsToFloat({pc_7})); float wd = uintBitsToFloat({pc_9}); float step_val = m_hat / (sqrt(v_hat) + uintBitsToFloat({pc_4})); if (wd > 0.0) { {in_0}[global_id] -= uintBitsToFloat({pc_1}) * (step_val + wd * {in_0}[global_id]); } else { {in_0}[global_id] -= uintBitsToFloat({pc_1}) * step_val; }"
+  },
+  "ADAM_UPDATE_FP16": {
+    "op_class": "STANDALONE",
+    "input_count": 5,
+    "output_count": 1,
+    "supports_cooperative_matrix": false,
+    "persistent_outputs": [0]
+  },
+  "LINEAR_BACKWARD_WEIGHT_ADAM_FP16": {
+    "op_class": "STANDALONE",
+    "input_count": 6,
+    "output_count": 2,
+    "supports_cooperative_matrix": false,
+    "persistent_outputs": [0, 1]
+  },
+  "LINEAR_BACKWARD_WEIGHT_ADAM_COOPMAT_FP16": {
+    "op_class": "STANDALONE",
+    "input_count": 6,
+    "output_count": 2,
+    "supports_cooperative_matrix": true,
+    "persistent_outputs": [0, 1]
   },
   "SOFTMAX": {
     "op_class": "STANDALONE",
@@ -211,11 +232,24 @@
     "output_count": 1,
     "supports_cooperative_matrix": false
   },
+  "LINEAR_BACKWARD_INPUT_COOPMAT_FP16": {
+    "op_class": "STANDALONE",
+    "input_count": 2,
+    "output_count": 1,
+    "supports_cooperative_matrix": true
+  },
   "LINEAR_BACKWARD_WEIGHT_BIAS_FP16": {
     "op_class": "STANDALONE",
     "input_count": 2,
     "output_count": 2,
     "supports_cooperative_matrix": false,
+    "persistent_outputs": [0, 1]
+  },
+  "LINEAR_BACKWARD_WEIGHT_BIAS_COOPMAT_FP16": {
+    "op_class": "STANDALONE",
+    "input_count": 2,
+    "output_count": 2,
+    "supports_cooperative_matrix": true,
     "persistent_outputs": [0, 1]
   },
   "GELU_FP16": {
@@ -567,5 +601,283 @@
     "input_count": 3,
     "output_count": 1,
     "supports_cooperative_matrix": true
+  },
+  "RMSNORM": {
+    "op_class": "STANDALONE",
+    "input_count": 2,
+    "output_count": 2,
+    "supports_cooperative_matrix": false
+  },
+  "RMSNORM_BACKWARD": {
+    "op_class": "STANDALONE",
+    "input_count": 4,
+    "output_count": 2,
+    "supports_cooperative_matrix": false,
+    "persistent_outputs": [0, 1]
+  },
+  "RMSNORM_GAMMA_GRAD": {
+    "op_class": "STANDALONE",
+    "input_count": 3,
+    "output_count": 1,
+    "supports_cooperative_matrix": false
+  },
+  "ROPE": {
+    "op_class": "STANDALONE",
+    "input_count": 1,
+    "output_count": 1,
+    "supports_cooperative_matrix": false
+  },
+  "SWIGLU": {
+    "op_class": "ELEMENTWISE",
+    "input_count": 2,
+    "output_count": 1,
+    "supports_cooperative_matrix": false,
+    "code": "if (global_id >= {pc_0}) return; float a = {in_0}[global_id]; float b = {in_1}[global_id]; float sig_a = 1.0 / (1.0 + exp(-clamp(a, -85.0, 85.0))); {out_0}[global_id] = a * sig_a * b;"
+  },
+  "SWIGLU_BACKWARD": {
+    "op_class": "STANDALONE",
+    "input_count": 3,
+    "output_count": 2,
+    "supports_cooperative_matrix": false
+  },
+  "RMSNORM_FP16": {
+    "op_class": "STANDALONE",
+    "input_count": 2,
+    "output_count": 2,
+    "supports_cooperative_matrix": false
+  },
+  "RMSNORM_BACKWARD_FP16": {
+    "op_class": "STANDALONE",
+    "input_count": 4,
+    "output_count": 2,
+    "supports_cooperative_matrix": false,
+    "persistent_outputs": [0, 1]
+  },
+  "RMSNORM_GAMMA_GRAD_FP16": {
+    "op_class": "STANDALONE",
+    "input_count": 3,
+    "output_count": 1,
+    "supports_cooperative_matrix": false
+  },
+  "ROPE_FP16": {
+    "op_class": "STANDALONE",
+    "input_count": 1,
+    "output_count": 1,
+    "supports_cooperative_matrix": false
+  },
+  "SWIGLU_FP16": {
+    "op_class": "ELEMENTWISE",
+    "input_count": 2,
+    "output_count": 1,
+    "supports_cooperative_matrix": false,
+    "code": "if (global_id >= {pc_0}) return; float a = float({in_0}[global_id]); float b = float({in_1}[global_id]); float sig_a = 1.0 / (1.0 + exp(-clamp(a, -85.0, 85.0))); {out_0}[global_id] = float16_t(clamp(a * sig_a * b, -65504.0, 65504.0));"
+  },
+  "SWIGLU_BACKWARD_FP16": {
+    "op_class": "STANDALONE",
+    "input_count": 3,
+    "output_count": 2,
+    "supports_cooperative_matrix": false
+  },
+  "FUSED_SWIGLU_FORWARD": {
+    "op_class": "STANDALONE",
+    "input_count": 1,
+    "output_count": 1,
+    "supports_cooperative_matrix": false
+  },
+  "FUSED_SWIGLU_FORWARD_FP16": {
+    "op_class": "STANDALONE",
+    "input_count": 1,
+    "output_count": 1,
+    "supports_cooperative_matrix": false
+  },
+  "FUSED_SWIGLU_BACKWARD": {
+    "op_class": "STANDALONE",
+    "input_count": 2,
+    "output_count": 1,
+    "supports_cooperative_matrix": false
+  },
+  "FUSED_SWIGLU_BACKWARD_FP16": {
+    "op_class": "STANDALONE",
+    "input_count": 2,
+    "output_count": 1,
+    "supports_cooperative_matrix": false
+  },
+  "FLASH_ATTENTION_FP16": {
+    "op_class": "STANDALONE",
+    "input_count": 3,
+    "output_count": 2,
+    "supports_cooperative_matrix": true
+  },
+  "FLASH_ATTENTION_BACKWARD_FP16": {
+    "op_class": "STANDALONE",
+    "input_count": 5,
+    "output_count": 4,
+    "supports_cooperative_matrix": true
+  },
+  "EMBEDDING_FORWARD": {
+    "op_class": "STANDALONE",
+    "input_count": 2,
+    "output_count": 1,
+    "supports_cooperative_matrix": false
+  },
+  "EMBEDDING_FORWARD_FP16": {
+    "op_class": "STANDALONE",
+    "input_count": 2,
+    "output_count": 1,
+    "supports_cooperative_matrix": false
+  },
+  "EMBEDDING_BACKWARD": {
+    "op_class": "STANDALONE",
+    "input_count": 2,
+    "output_count": 1,
+    "supports_cooperative_matrix": false
+  },
+  "ATTENTION_DECODE": {
+    "op_class": "STANDALONE",
+    "input_count": 3,
+    "output_count": 1,
+    "supports_cooperative_matrix": false
+  },
+  "FUSED_CROSS_ENTROPY": {
+    "op_class": "STANDALONE",
+    "input_count": 2,
+    "output_count": 2,
+    "supports_cooperative_matrix": false,
+    "persistent_outputs": [0, 1]
+  },
+  "ADD_FP16": {
+    "op_class": "ELEMENTWISE",
+    "input_count": 2,
+    "output_count": 1,
+    "supports_cooperative_matrix": false,
+    "code": "if (global_id >= {pc_0}) return; if ({pc_2} == 1) { {out_0}[global_id] = {in_0}[global_id] + {in_1}[global_id % {pc_1}]; } else { {out_0}[global_id] = {in_0}[global_id] + {in_1}[global_id]; }"
+  },
+  "SUB_FP16": {
+    "op_class": "ELEMENTWISE",
+    "input_count": 2,
+    "output_count": 1,
+    "supports_cooperative_matrix": false,
+    "code": "if (global_id >= {pc_0}) return; if ({pc_2} == 1) { {out_0}[global_id] = {in_0}[global_id] - {in_1}[global_id % {pc_1}]; } else { {out_0}[global_id] = {in_0}[global_id] - {in_1}[global_id]; }"
+  },
+  "MUL_SCALAR_FP16": {
+    "op_class": "ELEMENTWISE",
+    "input_count": 1,
+    "output_count": 1,
+    "supports_cooperative_matrix": false,
+    "code": "if (global_id >= {pc_0}) return; {out_0}[global_id] = {in_0}[global_id] * float16_t(uintBitsToFloat({pc_1}));"
+  },
+  "EMBEDDING_BACKWARD_FP16": {
+    "op_class": "STANDALONE",
+    "input_count": 2,
+    "output_count": 1,
+    "supports_cooperative_matrix": false
+  },
+  "FUSED_CROSS_ENTROPY_FP16": {
+    "op_class": "STANDALONE",
+    "input_count": 2,
+    "output_count": 2,
+    "supports_cooperative_matrix": false,
+    "persistent_outputs": [0, 1]
+  },
+  "CONCATENATE_COLUMNS_FP16": {
+    "op_class": "MATRIX_2D",
+    "input_count": 2,
+    "output_count": 1,
+    "supports_cooperative_matrix": false,
+    "index_expr": "r * ({pc_1} + {pc_2}) + c",
+    "code": "uint r = gl_GlobalInvocationID.y; uint c = gl_GlobalInvocationID.x; uint total_cols = {pc_1} + {pc_2}; if (r >= {pc_0} || c >= total_cols) return; uint out_idx = r * total_cols + c; if (c < {pc_1}) { {out_0}[out_idx] = {in_0}[r * {pc_1} + c]; } else { {out_0}[out_idx] = {in_1}[r * {pc_2} + (c - {pc_1})]; }"
+  },
+  "CONCATENATE_ROWS_FP16": {
+    "op_class": "MATRIX_2D",
+    "input_count": 2,
+    "output_count": 1,
+    "supports_cooperative_matrix": false,
+    "index_expr": "r * {pc_2} + c",
+    "code": "uint r = gl_GlobalInvocationID.y; uint c = gl_GlobalInvocationID.x; uint total_rows = {pc_0} + {pc_1}; if (r >= total_rows || c >= {pc_2}) return; uint out_idx = r * {pc_2} + c; if (r < {pc_0}) { {out_0}[out_idx] = {in_0}[r * {pc_2} + c]; } else { {out_0}[out_idx] = {in_1}[(r - {pc_0}) * {pc_2} + c]; }"
+  },
+  "TRANSPOSE_FP16": {
+    "op_class": "MATRIX_2D",
+    "input_count": 1,
+    "output_count": 1,
+    "supports_cooperative_matrix": false,
+    "index_expr": "c * {pc_0} + r",
+    "code": "uint r = gl_GlobalInvocationID.y; uint c = gl_GlobalInvocationID.x; if (r < {pc_0} && c < {pc_1}) { {out_0}[c * {pc_0} + r] = {in_0}[r * {pc_1} + c]; }"
+  },
+  "CONTIGUOUS_FP16": {
+    "op_class": "STANDALONE",
+    "input_count": 1,
+    "output_count": 1,
+    "supports_cooperative_matrix": false,
+    "code": "if (global_id >= {pc_0}) return; uint shapes[6] = uint[6]({pc_3}, {pc_4}, {pc_5}, {pc_6}, {pc_7}, {pc_8}); uint strides[6] = uint[6]({pc_9}, {pc_10}, {pc_11}, {pc_12}, {pc_13}, {pc_14}); uint rem = global_id; uint in_idx = {pc_2}; for (int d = int({pc_1}) - 1; d >= 0; --d) { uint dim_size = shapes[d]; if (dim_size > 0) { uint coord = rem % dim_size; rem = rem / dim_size; in_idx += coord * strides[d]; } } {out_0}[global_id] = {in_0}[in_idx];"
+  },
+  "SPLIT_COLUMNS_FP16": {
+    "op_class": "MATRIX_2D",
+    "input_count": 1,
+    "output_count": 2,
+    "supports_cooperative_matrix": false,
+    "persistent_outputs": [0, 1],
+    "index_expr": "r * ({pc_1} + {pc_2}) + c",
+    "code": "uint r = gl_GlobalInvocationID.y; uint c = gl_GlobalInvocationID.x; uint total_cols = {pc_1} + {pc_2}; if (r >= {pc_0} || c >= total_cols) return; uint in_idx = r * total_cols + c; if (c < {pc_1}) { {out_0}[r * {pc_1} + c] = {in_0}[in_idx]; } else { {out_1}[r * {pc_2} + (c - {pc_1})] = {in_0}[in_idx]; }"
+  },
+  "SPLIT_ROWS_FP16": {
+    "op_class": "MATRIX_2D",
+    "input_count": 1,
+    "output_count": 2,
+    "supports_cooperative_matrix": false,
+    "persistent_outputs": [0, 1],
+    "index_expr": "r * {pc_2} + c",
+    "code": "uint r = gl_GlobalInvocationID.y; uint c = gl_GlobalInvocationID.x; uint total_rows = {pc_0} + {pc_1}; if (r >= total_rows || c >= {pc_2}) return; uint in_idx = r * {pc_2} + c; if (r < {pc_0}) { {out_0}[r * {pc_2} + c] = {in_0}[in_idx]; } else { {out_1}[(r - {pc_0}) * {pc_2} + c] = {in_0}[in_idx]; }"
+  },
+  "HADAMARD_MUL_FP16": {
+    "op_class": "ELEMENTWISE",
+    "input_count": 2,
+    "output_count": 1,
+    "supports_cooperative_matrix": false,
+    "code": "if (global_id >= {pc_0}) return; if ({pc_2} == 1) { {out_0}[global_id] = {in_0}[global_id] * {in_1}[global_id % {pc_1}]; } else { {out_0}[global_id] = {in_0}[global_id] * {in_1}[global_id]; }"
+  },
+  "HADAMARD_DIV_FP16": {
+    "op_class": "ELEMENTWISE",
+    "input_count": 2,
+    "output_count": 1,
+    "supports_cooperative_matrix": false,
+    "code": "if (global_id >= {pc_0}) return; if ({pc_2} == 1) { {out_0}[global_id] = {in_0}[global_id] / {in_1}[global_id % {pc_1}]; } else { {out_0}[global_id] = {in_0}[global_id] / {in_1}[global_id]; }"
+  },
+  "SOFTMAX_FP16": {
+    "op_class": "STANDALONE",
+    "input_count": 1,
+    "output_count": 1,
+    "supports_cooperative_matrix": false,
+    "shared_mem_size": 32,
+    "writes_multiple_elements": true
+  },
+  "SOFTMAX_BACKWARD_FP16": {
+    "op_class": "STANDALONE",
+    "input_count": 2,
+    "output_count": 1,
+    "supports_cooperative_matrix": false,
+    "shared_mem_size": 32,
+    "writes_multiple_elements": true
+  },
+  "ATTENTION_DECODE_FP16": {
+    "op_class": "STANDALONE",
+    "input_count": 3,
+    "output_count": 1,
+    "supports_cooperative_matrix": false
+  },
+  "GLOBAL_AVGPOOL_FORWARD_FP16": {
+    "op_class": "TENSOR_3D",
+    "input_count": 1,
+    "output_count": 1,
+    "supports_cooperative_matrix": false,
+    "index_expr": "n * {pc_3} + c",
+    "code": "uint c = gl_GlobalInvocationID.x; uint n = gl_GlobalInvocationID.y; if (c >= {pc_3} || n >= {pc_0}) return; float sum = 0.0; uint total_sp = {pc_1} * {pc_2}; uint sp_vec = total_sp & ~3u; uint in_base = n * total_sp * {pc_3} + c; uint step_c = {pc_3}; uint sp = 0; for (; sp < sp_vec; sp += 4) { vec4 in_vec = vec4(float({in_0}[in_base + sp * step_c]), float({in_0}[in_base + (sp + 1) * step_c]), float({in_0}[in_base + (sp + 2) * step_c]), float({in_0}[in_base + (sp + 3) * step_c])); sum += dot(in_vec, vec4(1.0)); } for (; sp < total_sp; ++sp) { sum += float({in_0}[in_base + sp * step_c]); } {out_0}[n * {pc_3} + c] = float16_t(sum / float(total_sp));"
+  },
+  "GLOBAL_AVGPOOL_BACKWARD_FP16": {
+    "op_class": "TENSOR_3D",
+    "input_count": 1,
+    "output_count": 1,
+    "supports_cooperative_matrix": false,
+    "index_expr": "in_idx",
+    "code": "uint c = gl_GlobalInvocationID.x; uint iw = gl_GlobalInvocationID.y; uint n_ih = gl_GlobalInvocationID.z; uint n = n_ih / {pc_1}; uint ih = n_ih % {pc_1}; if (c >= {pc_3} || iw >= {pc_2} || ih >= {pc_1} || n >= {pc_0}) return; uint in_idx = n * {pc_1} * {pc_2} * {pc_3} + ih * {pc_2} * {pc_3} + iw * {pc_3} + c; {out_0}[in_idx] = float16_t(float({in_0}[n * {pc_3} + c]) / float({pc_1} * {pc_2}));"
   }
 }

@@ -22,26 +22,89 @@
 
 extern bool is_coop;
 
+enum class Execution_Stage
+{
+    NONE = 0,
+    FORWARD,
+    BACKWARD,
+    OPTIMIZER,
+    BACKWARD_OPTIMIZER
+};
+
 class Execution_Engine
 {
+public:
+    struct Loss_Readback_Slot
+    {
+        std::shared_ptr<gpu::vector> buffer;
+        uint32_t valid_tokens = 0;
+        size_t total_tokens = 0;
+        bool has_pending_read = false;
+    };
+
 private:
+    Execution_Stage current_stage = Execution_Stage::NONE;
+    double last_submit_time_ms = 0.0;
+    double last_fence_wait_ms = 0.0;
     std::unique_ptr<Vulkan_Context> context;
     std::unique_ptr<Vulkan_Network> network;
     std::unique_ptr<Pipeline_Cache_Manager> pipeline_cache_manager;
     std::unique_ptr<Shader_Dictionary> shader_dictionary;
-    std::string shader_folder_path = "compute_shader";
+    std::string shader_folder_path = "compute_shader/spv";
     Compute_Graph current_graph;
     std::unique_ptr<Graph_Executor> graph_executor;
 
     std::unordered_map<size_t, Cached_Graph_Template> cached_graph_templates;
     bool is_graph_cache_enabled = true;
     bool is_static_graph_enabled = false;
+    bool is_fused_gemm_adam_enabled = false;
+    double last_execution_time_ms = 0.0;
+    size_t last_executed_node_count = 0;
+    std::array<Execution_Stage, MAX_FRAMES_IN_FLIGHT> frame_stages{Execution_Stage::NONE, Execution_Stage::NONE};
+    std::array<Loss_Readback_Slot, MAX_FRAMES_IN_FLIGHT> loss_slots;
+    float latest_loss = 0.0f;
+    bool is_async_loss_enabled = false;
+
+    void processPendingLossReadback(uint32_t frame_index)
+    {
+        if (frame_index < loss_slots.size() && loss_slots[frame_index].has_pending_read)
+        {
+            auto read_start = std::chrono::high_resolution_clock::now();
+            auto& slot = loss_slots[frame_index];
+            if (slot.buffer && slot.buffer->isHostMapped())
+            {
+                const float* ptr = static_cast<const float*>(slot.buffer->getHostMappedPointer());
+                if (ptr)
+                {
+                    float sum = 0.0f;
+                    for (size_t i = 0; i < slot.total_tokens; ++i)
+                    {
+                        float val = ptr[i];
+                        if (!std::isnan(val) && !std::isinf(val))
+                        {
+                            sum += val;
+                        }
+                    }
+                    if (slot.valid_tokens > 0)
+                    {
+                        latest_loss = sum / static_cast<float>(slot.valid_tokens);
+                    }
+                }
+            }
+            slot.has_pending_read = false;
+            auto read_end = std::chrono::high_resolution_clock::now();
+            double read_ms = std::chrono::duration<double, std::milli>(read_end - read_start).count();
+            Step_Timings::getInstance().loss_read_ms += read_ms;
+            Step_Timings::getInstance().loss_readback_ms += read_ms;
+        }
+    }
 
     size_t computeGraphSignature(const Compute_Graph &graph) const
     {
         const auto &nodes = graph.getNodes();
         size_t graph_signature_hash = nodes.size();
         graph_signature_hash ^= static_cast<size_t>(is_coop ? 1 : 0) + 0x9e3779b9 + (graph_signature_hash << 6) + (graph_signature_hash >> 2);
+        graph_signature_hash ^= static_cast<size_t>(is_fused_gemm_adam_enabled ? 1 : 0) + 0x9e3779b9 + (graph_signature_hash << 6) + (graph_signature_hash >> 2);
 
         std::unordered_map<VkBuffer, size_t> buffer_to_id;
         buffer_to_id.reserve(nodes.size() * 2);
@@ -121,6 +184,7 @@ private:
 
         context = std::make_unique<Vulkan_Context>();
         is_coop = context->isCooperativeMatrixEnabled();
+        Graph_Optimizer::setFusedGemmAdamEnabled(is_fused_gemm_adam_enabled);
         network = std::make_unique<Vulkan_Network>(*context, shader_folder_path);
         pipeline_cache_manager = std::make_unique<Pipeline_Cache_Manager>(*context, network->getPipelineLayout());
         shader_dictionary = std::make_unique<Shader_Dictionary>("compute_shader/shader_dictionary.json");
@@ -145,6 +209,11 @@ private:
     }
 
 public:
+
+    void setExecutionStage(Execution_Stage stage) noexcept { current_stage = stage; }
+    Execution_Stage getExecutionStage() const noexcept { return current_stage; }
+    double getLastSubmitTimeMs() const noexcept { return last_submit_time_ms; }
+    double getLastFenceWaitMs() const noexcept { return last_fence_wait_ms; }
     ~Execution_Engine()
     {
         Logger::logMessage("Execution_Engine::~Execution_Engine: Destroying execution engine",
@@ -217,24 +286,66 @@ public:
                            Log_Feature::SHADER_GENERATION | Log_Feature::DISPATCH_EXECUTION);
     }
 
-    void executeGraph(VkFence _external_fence = VK_NULL_HANDLE)
+    void prepareCurrentFrame(Execution_Stage _stage = Execution_Stage::NONE)
     {
+        uint32_t current_frame_index = context->getCurrentFrame();
+        if (!context->isFrameReady(current_frame_index))
+        {
+            auto wait_start_time = std::chrono::high_resolution_clock::now();
+            context->prepareFrame(current_frame_index);
+            auto wait_end_time = std::chrono::high_resolution_clock::now();
+            last_fence_wait_ms = std::chrono::duration<double, std::milli>(wait_end_time - wait_start_time).count();
+
+            context->cleanGarbage(current_frame_index);
+            graph_executor->resetFrameState(current_frame_index);
+            processPendingLossReadback(current_frame_index);
+
+            Execution_Stage waited_stage = (current_frame_index < frame_stages.size()) ? frame_stages[current_frame_index] : Execution_Stage::NONE;
+            switch (waited_stage)
+            {
+            case Execution_Stage::FORWARD:
+                Step_Timings::getInstance().fwd_loss_fence_wait_ms += last_fence_wait_ms;
+                break;
+            case Execution_Stage::BACKWARD:
+            case Execution_Stage::BACKWARD_OPTIMIZER:
+                Step_Timings::getInstance().bwd_fence_wait_ms += last_fence_wait_ms;
+                break;
+            case Execution_Stage::OPTIMIZER:
+                Step_Timings::getInstance().opt_fence_wait_ms += last_fence_wait_ms;
+                break;
+            default:
+                break;
+            }
+        }
+        else
+        {
+            last_fence_wait_ms = 0.0;
+            processPendingLossReadback(current_frame_index);
+        }
+    }
+
+    void executeGraph(VkFence _external_fence = VK_NULL_HANDLE, Execution_Stage _stage = Execution_Stage::NONE)
+    {
+        prepareCurrentFrame(_stage);
+
+        auto submit_start_time = std::chrono::high_resolution_clock::now();
+        last_executed_node_count = current_graph.getNodes().size();
         uint32_t current_frame_index = context->getCurrentFrame();
 
         if (current_graph.getNodes().empty() && context->getTransferTasks().empty())
         {
             Logger::logMessage("Execution_Engine::executeGraph: Executing empty compute graph and transfer task queue",
-                               Log_Level::LOG_WARNING,
-                               false,
-                               0,
-                               Log_Feature::DISPATCH_EXECUTION);
+                Log_Level::LOG_WARNING,
+                false,
+                0,
+                Log_Feature::DISPATCH_EXECUTION);
         }
 
-        Logger::logMessage(Input_Format{"Execution_Engine::executeGraph: Executing compute graph for frame {}", current_frame_index},
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::DISPATCH_EXECUTION);
+        Logger::logMessage(Input_Format{ "Execution_Engine::executeGraph: Executing compute graph for frame {}", current_frame_index },
+            Log_Level::LOG_DEBUG,
+            true,
+            0,
+            Log_Feature::DISPATCH_EXECUTION);
 
         if (is_static_graph_enabled)
         {
@@ -249,7 +360,7 @@ public:
                     precompileTemplatePipelines(template_iterator->second);
                 }
 
-                auto &cached_graph = template_iterator->second.instantiated_graphs[current_frame_index];
+                auto& cached_graph = template_iterator->second.instantiated_graphs[current_frame_index];
                 Graph_Optimizer::applyCachedTemplateInPlace(current_graph, template_iterator->second, cached_graph);
 
                 if (!graph_executor->isStaticBaked(current_frame_index) ||
@@ -259,6 +370,7 @@ public:
                     graph_executor->bakeStaticGraph(cached_graph, current_frame_index, graph_signature);
                 }
 
+                last_executed_node_count = cached_graph.getNodes().size();
                 graph_executor->executeStaticGraph(cached_graph, context->getTransferTasks(), current_frame_index, _external_fence);
             }
             else if (!current_graph.getNodes().empty())
@@ -271,10 +383,12 @@ public:
                 {
                     graph_executor->bakeStaticGraph(current_graph, current_frame_index, graph_signature);
                 }
+                last_executed_node_count = current_graph.getNodes().size();
                 graph_executor->executeStaticGraph(current_graph, context->getTransferTasks(), current_frame_index, _external_fence);
             }
             else
             {
+                last_executed_node_count = current_graph.getNodes().size();
                 graph_executor->compileAndExecute(current_graph, context->getTransferTasks(), current_frame_index, _external_fence);
             }
         }
@@ -289,43 +403,64 @@ public:
                 precompileTemplatePipelines(template_iterator->second);
             }
 
-            auto &cached_graph = template_iterator->second.instantiated_graphs[current_frame_index];
+            auto& cached_graph = template_iterator->second.instantiated_graphs[current_frame_index];
             Graph_Optimizer::applyCachedTemplateInPlace(current_graph, template_iterator->second, cached_graph);
+            last_executed_node_count = cached_graph.getNodes().size();
             graph_executor->compileAndExecute(cached_graph, context->getTransferTasks(), current_frame_index, _external_fence);
         }
         else
         {
             Graph_Optimizer::optimize(current_graph);
+            last_executed_node_count = current_graph.getNodes().size();
             graph_executor->compileAndExecute(current_graph, context->getTransferTasks(), current_frame_index, _external_fence);
         }
 
-        context->resetStagingOffset(current_frame_index);
+        auto submit_end_time = std::chrono::high_resolution_clock::now();
+        last_submit_time_ms = std::chrono::duration<double, std::milli>(submit_end_time - submit_start_time).count();
+
         context->clearTransferTasks();
         current_graph.clear();
 
+        Execution_Stage effective_stage = (_stage != Execution_Stage::NONE) ? _stage : current_stage;
+        switch (effective_stage)
+        {
+        case Execution_Stage::FORWARD:
+            Step_Timings::getInstance().fwd_loss_gpu_submit_ms += last_submit_time_ms;
+            break;
+        case Execution_Stage::BACKWARD:
+            Step_Timings::getInstance().bwd_gpu_submit_ms += last_submit_time_ms;
+            break;
+        case Execution_Stage::BACKWARD_OPTIMIZER:
+            Step_Timings::getInstance().bwd_gpu_submit_ms += last_submit_time_ms;
+            Step_Timings::getInstance().is_chained_bwd_opt = true;
+            break;
+        case Execution_Stage::OPTIMIZER:
+            Step_Timings::getInstance().opt_gpu_submit_ms += last_submit_time_ms;
+            break;
+        default:
+            break;
+        }
+
+        if (current_frame_index < frame_stages.size())
+        {
+            frame_stages[current_frame_index] = effective_stage;
+        }
         context->advanceFrame();
 
-        uint32_t next_frame_index = context->getCurrentFrame();
-        context->prepareFrame();
-        context->cleanGarbage(next_frame_index);
-        graph_executor->resetFrameState(next_frame_index);
+        last_execution_time_ms = last_submit_time_ms + last_fence_wait_ms;
+        
     }
 
     void executeStaticReplay(VkFence _external_fence = VK_NULL_HANDLE)
     {
+        prepareCurrentFrame();
         uint32_t current_frame_index = context->getCurrentFrame();
         graph_executor->executeStaticGraphReplay(current_graph, context->getTransferTasks(), current_frame_index, _external_fence);
 
-        context->resetStagingOffset(current_frame_index);
         context->clearTransferTasks();
         current_graph.clear();
 
         context->advanceFrame();
-
-        uint32_t next_frame_index = context->getCurrentFrame();
-        context->prepareFrame();
-        context->cleanGarbage(next_frame_index);
-        graph_executor->resetFrameState(next_frame_index);
     }
 
     void waitIdle() const
@@ -404,7 +539,7 @@ public:
     {
         if (_enable && (!context || !context->isCooperativeMatrixSupported()))
         {
-            Logger::logMessage("Execution_Engine::setCooperativeMatrixEnabled: Device does not support Cooperative Matrix",
+            Logger::logMessage("Execution_Engine::setCooperativeMatrixEnabled: Device does not support Cooperative Tensor",
                                Log_Level::LOG_WARNING,
                                true,
                                0,
@@ -447,5 +582,45 @@ public:
     void enableStaticGraph(bool _enable = true) noexcept
     {
         setStaticGraphEnabled(_enable);
+    }
+
+    bool isFusedGemmAdamEnabled() const noexcept { return is_fused_gemm_adam_enabled; }
+    void setFusedGemmAdamEnabled(bool _enable) noexcept
+    {
+        if (is_fused_gemm_adam_enabled != _enable)
+        {
+            waitIdle();
+            is_fused_gemm_adam_enabled = _enable;
+            Graph_Optimizer::setFusedGemmAdamEnabled(_enable);
+            invalidateGraphCache();
+            invalidateStaticGraph();
+        }
+    }
+    void enableFusedGemmAdam(bool _enable = true) noexcept
+    {
+        setFusedGemmAdamEnabled(_enable);
+    }
+
+    double getLastExecutionTimeMs() const noexcept { return last_execution_time_ms; }
+    size_t getLastExecutedNodeCount() const noexcept { return last_executed_node_count; }
+
+    Loss_Readback_Slot& getLossSlot(uint32_t frame_index) { return loss_slots[frame_index % MAX_FRAMES_IN_FLIGHT]; }
+    float getLatestLoss() const noexcept { return latest_loss; }
+    void setLatestLoss(float loss) noexcept { latest_loss = loss; }
+    void setAsyncLossEnabled(bool enable) noexcept { is_async_loss_enabled = enable; }
+    bool isAsyncLossEnabled() const noexcept { return is_async_loss_enabled; }
+
+    float readPendingLoss(uint32_t frame_index)
+    {
+        uint32_t idx = frame_index % MAX_FRAMES_IN_FLIGHT;
+        if (loss_slots[idx].has_pending_read)
+        {
+            if (context)
+            {
+                vkDeviceWaitIdle(context->getDevice());
+            }
+            processPendingLossReadback(idx);
+        }
+        return latest_loss;
     }
 };

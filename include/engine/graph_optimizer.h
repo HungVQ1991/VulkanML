@@ -104,6 +104,8 @@ struct Cached_Graph_Template
 class Graph_Optimizer
 {
 private:
+    static inline bool is_fused_gemm_adam_enabled = false;
+
     static constexpr size_t MAX_PUSH_CONSTANTS_BYTES = 128;
     static constexpr size_t MAX_STORAGE_BUFFER_BINDINGS = 32;
     static constexpr size_t MAX_FUSED_OPERATIONS = 8;
@@ -172,7 +174,7 @@ private:
             }
         }
 
-        if (_node.pipeline_id == Compute_Pipeline::ADAM_UPDATE)
+        if (_node.pipeline_id == Compute_Pipeline::ADAM_UPDATE || _node.pipeline_id == Compute_Pipeline::ADAM_UPDATE_FP16)
         {
             if (_node.buffers.size() > 0 && _node.buffers[0] && _node.buffers[0]->getBuffer() != VK_NULL_HANDLE)
             {
@@ -185,6 +187,21 @@ private:
             if (_node.buffers.size() > 3 && _node.buffers[3] && _node.buffers[3]->getBuffer() != VK_NULL_HANDLE)
             {
                 _writes.push_back(_node.buffers[3]->getBuffer());
+            }
+            if (_node.pipeline_id == Compute_Pipeline::ADAM_UPDATE_FP16 && _node.buffers.size() > 5 && _node.buffers[5] && _node.buffers[5]->getBuffer() != VK_NULL_HANDLE)
+            {
+                _writes.push_back(_node.buffers[5]->getBuffer());
+            }
+        }
+        else if (_node.pipeline_id == Compute_Pipeline::LINEAR_BACKWARD_WEIGHT_ADAM_FP16 ||
+                 _node.pipeline_id == Compute_Pipeline::LINEAR_BACKWARD_WEIGHT_ADAM_COOPMAT_FP16)
+        {
+            for (size_t idx : {2, 3, 4, 6, 7})
+            {
+                if (idx < _node.buffers.size() && _node.buffers[idx] && _node.buffers[idx]->getBuffer() != VK_NULL_HANDLE)
+                {
+                    _writes.push_back(_node.buffers[idx]->getBuffer());
+                }
             }
         }
         else if (_node.pipeline_id == Compute_Pipeline::SGD_UPDATE)
@@ -277,7 +294,12 @@ private:
         const auto &consumer_metadata = shader_dictionary.getMetadata(_consumer_pipeline);
         const auto &producer_metadata = shader_dictionary.getMetadata(_producer_pipeline);
 
-        if (is_coop && (producer_metadata.is_cooperative_matrix_support || consumer_metadata.is_cooperative_matrix_support))
+        if (consumer_metadata.is_cooperative_matrix_support)
+        {
+            return false;
+        }
+
+        if (is_coop && producer_metadata.is_cooperative_matrix_support)
         {
             return false;
         }
@@ -568,43 +590,174 @@ private:
         }
     }
 
+    static std::vector<Compute_Node> fuseLinearBackwardAdamPass(const std::vector<Compute_Node> &_nodes)
+    {
+        if (!is_fused_gemm_adam_enabled || _nodes.size() < 2)
+        {
+            return _nodes;
+        }
+
+        std::vector<Compute_Node> result = _nodes;
+        std::vector<bool> consumed(result.size(), false);
+
+        for (size_t i = 0; i < result.size(); ++i)
+        {
+            if (consumed[i])
+            {
+                continue;
+            }
+
+            auto &node_bwd = result[i];
+            bool is_bwd_weight = (node_bwd.pipeline_id == Compute_Pipeline::LINEAR_BACKWARD_WEIGHT_BIAS_COOPMAT_FP16 ||
+                                  node_bwd.pipeline_id == Compute_Pipeline::LINEAR_BACKWARD_WEIGHT_BIAS_FP16);
+            if (!is_bwd_weight || node_bwd.buffers.size() < 4 || node_bwd.push_constants_data.size() < 16)
+            {
+                continue;
+            }
+
+            const uint32_t *bwd_pc = reinterpret_cast<const uint32_t *>(node_bwd.push_constants_data.data());
+            uint32_t batch_size = bwd_pc[0];
+            uint32_t in_dim = bwd_pc[1];
+            uint32_t out_dim = bwd_pc[2];
+            uint32_t accumulate = bwd_pc[3];
+
+            if (accumulate != 0)
+            {
+                continue;
+            }
+
+            auto dw_buf = node_bwd.buffers[2];
+            if (!dw_buf || dw_buf->getBuffer() == VK_NULL_HANDLE)
+            {
+                continue;
+            }
+
+            VkBuffer dw_handle = dw_buf->getBuffer();
+
+            int matching_adam_index = -1;
+            for (size_t j = i + 1; j < result.size(); ++j)
+            {
+                if (consumed[j])
+                {
+                    continue;
+                }
+
+                auto &node_adam = result[j];
+                bool is_adam = (node_adam.pipeline_id == Compute_Pipeline::ADAM_UPDATE_FP16 ||
+                                node_adam.pipeline_id == Compute_Pipeline::ADAM_UPDATE);
+                if (is_adam && node_adam.buffers.size() >= 6 && node_adam.push_constants_data.size() >= 24)
+                {
+                    if (node_adam.buffers[1] && node_adam.buffers[1]->getBuffer() == dw_handle)
+                    {
+                        const uint32_t *adam_pc_u = reinterpret_cast<const uint32_t *>(node_adam.push_constants_data.data());
+                        uint32_t total_elements = adam_pc_u[0];
+                        if (total_elements == in_dim * out_dim)
+                        {
+                            matching_adam_index = static_cast<int>(j);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (matching_adam_index >= 0)
+            {
+                auto &node_adam = result[matching_adam_index];
+                const float *adam_pc_f = reinterpret_cast<const float *>(node_adam.push_constants_data.data());
+                float beta1 = adam_pc_f[1];
+                float beta2 = adam_pc_f[2];
+                float epsilon = adam_pc_f[3];
+                float max_grad = adam_pc_f[4];
+                float weight_decay = adam_pc_f[5];
+
+                struct Fused_PC
+                {
+                    uint32_t batch_size;
+                    uint32_t in_dim;
+                    uint32_t out_dim;
+                    float beta1;
+                    float beta2;
+                    float eps;
+                    float max_grad;
+                    float weight_decay;
+                } fused_pc{batch_size, in_dim, out_dim, beta1, beta2, epsilon, max_grad, weight_decay};
+
+                bool use_coop = (node_bwd.pipeline_id == Compute_Pipeline::LINEAR_BACKWARD_WEIGHT_BIAS_COOPMAT_FP16);
+                node_bwd.pipeline_id = use_coop
+                    ? Compute_Pipeline::LINEAR_BACKWARD_WEIGHT_ADAM_COOPMAT_FP16
+                    : Compute_Pipeline::LINEAR_BACKWARD_WEIGHT_ADAM_FP16;
+
+                node_bwd.buffers = {
+                    node_bwd.buffers[0],
+                    node_bwd.buffers[1],
+                    node_adam.buffers[0],
+                    node_adam.buffers[2],
+                    node_adam.buffers[3],
+                    node_adam.buffers[4],
+                    node_adam.buffers[5],
+                    node_bwd.buffers[3]
+                };
+
+                node_bwd.push_constants_data.resize(sizeof(Fused_PC));
+                std::memcpy(node_bwd.push_constants_data.data(), &fused_pc, sizeof(Fused_PC));
+                node_bwd.workgroup_count_x = (out_dim + 15) / 16;
+                node_bwd.workgroup_count_y = (in_dim + 15) / 16;
+                node_bwd.workgroup_count_z = 1;
+
+                consumed[matching_adam_index] = true;
+            }
+        }
+
+        std::vector<Compute_Node> compacted;
+        compacted.reserve(result.size());
+        for (size_t i = 0; i < result.size(); ++i)
+        {
+            if (!consumed[i])
+            {
+                compacted.push_back(std::move(result[i]));
+            }
+        }
+        return compacted;
+    }
+
     static Cached_Graph_Template optimizeInternal(const std::vector<Compute_Node> &_original_nodes, bool _is_tracking_mappings)
     {
+        std::vector<Compute_Node> effective_nodes = fuseLinearBackwardAdamPass(_original_nodes);
         const Shader_Dictionary &shader_dictionary = Shader_Dictionary::getInstance();
         Cached_Graph_Template graph_template;
-        if (_original_nodes.empty())
+        if (effective_nodes.empty())
         {
             return graph_template;
         }
 
         Compute_Node current_fused_node;
-        current_fused_node.pipeline_id = _original_nodes[0].pipeline_id;
-        current_fused_node.push_constants_data = _original_nodes[0].push_constants_data;
-        current_fused_node.workgroup_count_x = _original_nodes[0].workgroup_count_x;
-        current_fused_node.workgroup_count_y = _original_nodes[0].workgroup_count_y;
-        current_fused_node.workgroup_count_z = _original_nodes[0].workgroup_count_z;
+        current_fused_node.pipeline_id = effective_nodes[0].pipeline_id;
+        current_fused_node.push_constants_data = effective_nodes[0].push_constants_data;
+        current_fused_node.workgroup_count_x = effective_nodes[0].workgroup_count_x;
+        current_fused_node.workgroup_count_y = effective_nodes[0].workgroup_count_y;
+        current_fused_node.workgroup_count_z = effective_nodes[0].workgroup_count_z;
         current_fused_node.is_fused = false;
 
         std::vector<Buffer_Binding_Mapping> current_buffer_mappings;
         std::vector<Push_Constant_Mapping> current_push_constants_mappings;
         std::vector<uint32_t> current_raw_node_indices;
 
-        const Snippet_Metadata &first_metadata = shader_dictionary.getMetadata(_original_nodes[0].pipeline_id);
+        const Snippet_Metadata &first_metadata = shader_dictionary.getMetadata(effective_nodes[0].pipeline_id);
         current_fused_node.fused_operations.push_back(
-            buildFusedOperation(current_fused_node, _original_nodes[0], 0, first_metadata, 0, _is_tracking_mappings ? &current_buffer_mappings : nullptr));
+            buildFusedOperation(current_fused_node, effective_nodes[0], 0, first_metadata, 0, _is_tracking_mappings ? &current_buffer_mappings : nullptr));
 
         if (_is_tracking_mappings)
         {
             current_push_constants_mappings.push_back(Push_Constant_Mapping{
                 .raw_node_index = 0,
                 .fused_push_constants_offset = 0,
-                .push_constants_size = static_cast<uint32_t>(_original_nodes[0].push_constants_data.size())});
+                .push_constants_size = static_cast<uint32_t>(effective_nodes[0].push_constants_data.size())});
             current_raw_node_indices.push_back(0);
         }
 
-        for (size_t i = 1; i < _original_nodes.size(); ++i)
+        for (size_t i = 1; i < effective_nodes.size(); ++i)
         {
-            const Compute_Node &next_node = _original_nodes[i];
+            const Compute_Node &next_node = effective_nodes[i];
 
             bool is_sharing_buffer = false;
             for (const auto &buffer_a : current_fused_node.buffers)
@@ -711,7 +864,7 @@ private:
             }
             else
             {
-                markExternalOutputs(current_fused_node, _original_nodes, i);
+                markExternalOutputs(current_fused_node, effective_nodes, i);
 
                 graph_template.fused_nodes.push_back(current_fused_node);
                 if (_is_tracking_mappings)
@@ -747,7 +900,7 @@ private:
             }
         }
 
-        markExternalOutputs(current_fused_node, _original_nodes, _original_nodes.size());
+        markExternalOutputs(current_fused_node, effective_nodes, effective_nodes.size());
 
         graph_template.fused_nodes.push_back(current_fused_node);
         if (_is_tracking_mappings)
@@ -773,7 +926,7 @@ public:
     static void optimize(Compute_Graph &_graph)
     {
 #if !ENABLE_SHADER_FUSION
-        auto nodes = _graph.getNodes();
+        auto nodes = fuseLinearBackwardAdamPass(_graph.getNodes());
         assignPipelineBarriers(nodes);
         _graph.clear();
         for (const auto &node : nodes)
@@ -951,4 +1104,7 @@ public:
     static constexpr size_t getMaxPushConstantsBytes() noexcept { return MAX_PUSH_CONSTANTS_BYTES; }
     static constexpr size_t getMaxStorageBufferBindings() noexcept { return MAX_STORAGE_BUFFER_BINDINGS; }
     static constexpr size_t getMaxFusedOperations() noexcept { return MAX_FUSED_OPERATIONS; }
+
+    static void setFusedGemmAdamEnabled(bool _enable) noexcept { is_fused_gemm_adam_enabled = _enable; }
+    static bool isFusedGemmAdamEnabled() noexcept { return is_fused_gemm_adam_enabled; }
 };

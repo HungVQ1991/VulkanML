@@ -22,8 +22,8 @@ class IOptimizer
 public:
     virtual ~IOptimizer() noexcept = default;
 
-    virtual void step(const std::vector<std::pair<Matrix *, Matrix *>> &_parameter_gradient_pairs) = 0;
-    virtual void step(const std::vector<std::pair<Matrix *, Matrix *>> &_parameter_gradient_pairs, float _grad_scale)
+    virtual void step(const std::vector<std::pair<Tensor *, Tensor *>> &_parameter_gradient_pairs) = 0;
+    virtual void step(const std::vector<std::pair<Tensor *, Tensor *>> &_parameter_gradient_pairs, float _grad_scale)
     {
         (void)_grad_scale;
         step(_parameter_gradient_pairs);
@@ -40,4 +40,7 @@ public:
     virtual Optimizer_Type getType() const noexcept = 0;
 
     virtual void setLearningRate(float _learning_rate) = 0;
+
+    virtual void setMaxGradient(float _max_gradient) noexcept { (void)_max_gradient; }
+    virtual float getMaxGradient() const noexcept { return 0.0f; }
 };

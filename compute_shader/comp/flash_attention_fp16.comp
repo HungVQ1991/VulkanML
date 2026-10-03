@@ -1,0 +1,220 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_KHR_cooperative_matrix : require
+
+#define TILE_M 16
+#define TILE_N 16
+#define TILE_K 16
+#define MAX_D  128
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer QBuffer { float16_t q_data[]; };
+layout(std430, binding = 1) readonly buffer KBuffer { float16_t k_data[]; };
+layout(std430, binding = 2) readonly buffer VBuffer { float16_t v_data[]; };
+layout(std430, binding = 3) writeonly buffer OBuffer { float16_t o_data[]; };
+layout(std430, binding = 4) writeonly buffer LBuffer { float l_data[]; };
+
+layout(push_constant) uniform Constants {
+    uint batch_size;  // B * H
+    uint seq_len;     // N
+    uint head_dim;    // D
+    uint is_causal;   // 1 or 0
+    float scale;      // 1.0 / sqrt(head_dim)
+} pcs;
+
+shared float16_t smem_q[TILE_M * MAX_D];
+shared float16_t smem_k[TILE_N * MAX_D];
+shared float16_t smem_kt[MAX_D * TILE_N];
+shared float16_t smem_v[TILE_N * MAX_D];
+shared float16_t smem_p[TILE_M * TILE_N];
+shared float     smem_s[TILE_M * TILE_N];
+shared float     smem_o[TILE_M * MAX_D];
+shared float     smem_m[TILE_M];
+shared float     smem_l[TILE_M];
+shared float     smem_alpha[TILE_M];
+shared float16_t smem_pv_tile[TILE_M * TILE_N];
+
+void main() {
+    uint b = gl_WorkGroupID.z;
+    if (b >= pcs.batch_size) return;
+
+    uint q_tile_idx = gl_WorkGroupID.y;
+    uint q_start = q_tile_idx * TILE_M;
+    if (q_start >= pcs.seq_len) return;
+
+    uint lane_id = gl_LocalInvocationID.x;
+    uint D = pcs.head_dim;
+    uint batch_offset = b * pcs.seq_len * D;
+
+    // Step 1: Initialize running statistics and accumulator O in shared memory
+    if (lane_id < TILE_M) {
+        smem_m[lane_id] = -1e20;
+        smem_l[lane_id] = 0.0;
+    }
+    for (uint idx = lane_id; idx < TILE_M * D; idx += 32) {
+        smem_o[idx] = 0.0;
+    }
+
+    // Step 2: Load Q block (16 x D) into smem_q
+    for (uint idx = lane_id; idx < TILE_M * D; idx += 32) {
+        uint r = idx / D;
+        uint c = idx % D;
+        uint global_q_idx = q_start + r;
+        if (global_q_idx < pcs.seq_len) {
+            smem_q[idx] = q_data[batch_offset + global_q_idx * D + c];
+        } else {
+            smem_q[idx] = float16_t(0.0);
+        }
+    }
+    barrier();
+
+    // Step 3: Loop over K, V blocks (16 x D each)
+    uint num_k_tiles = (pcs.seq_len + TILE_N - 1) / TILE_N;
+    for (uint k_tile_idx = 0; k_tile_idx < num_k_tiles; ++k_tile_idx) {
+        uint k_start = k_tile_idx * TILE_N;
+
+        // Causal early exit
+        if (pcs.is_causal != 0 && k_start > q_start + (TILE_M - 1)) {
+            break;
+        }
+
+        // Cooperative load K block and transpose into smem_kt for GEMM: Q * K^T
+        for (uint idx = lane_id; idx < TILE_N * D; idx += 32) {
+            uint r = idx / D;
+            uint c = idx % D;
+            uint global_k_idx = k_start + r;
+            float16_t val = (global_k_idx < pcs.seq_len) ? k_data[batch_offset + global_k_idx * D + c] : float16_t(0.0);
+            smem_k[idx] = val;
+            // Transposed layout: (D x TILE_N)
+            smem_kt[c * TILE_N + r] = val;
+        }
+
+        // Cooperative load V block (TILE_N x D)
+        for (uint idx = lane_id; idx < TILE_N * D; idx += 32) {
+            uint r = idx / D;
+            uint c = idx % D;
+            uint global_v_idx = k_start + r;
+            smem_v[idx] = (global_v_idx < pcs.seq_len) ? v_data[batch_offset + global_v_idx * D + c] : float16_t(0.0);
+        }
+        barrier();
+
+        // 3a. Compute S = Q_block * K_block^T (16 x 16) using cooperative matrix
+        coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc_s;
+        acc_s = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+
+        for (uint kd = 0; kd < D; kd += TILE_K) {
+            coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> matQ;
+            coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> matKt;
+
+            coopMatLoad(matQ, smem_q, kd, D, gl_CooperativeMatrixLayoutRowMajor);
+            coopMatLoad(matKt, smem_kt, kd * TILE_N, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+
+            acc_s = coopMatMulAdd(matQ, matKt, acc_s);
+        }
+
+        coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> res_s;
+        res_s = coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(acc_s);
+        coopMatStore(res_s, smem_p, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+        barrier();
+
+        // 3b. Scale, apply causal mask, and unpack to smem_s
+        for (uint idx = lane_id; idx < TILE_M * TILE_N; idx += 32) {
+            uint r = idx / TILE_N;
+            uint c = idx % TILE_N;
+            uint q_pos = q_start + r;
+            uint k_pos = k_start + c;
+
+            if (q_pos >= pcs.seq_len || k_pos >= pcs.seq_len || (pcs.is_causal != 0 && q_pos < k_pos)) {
+                smem_s[idx] = -1e20;
+            } else {
+                smem_s[idx] = float(smem_p[idx]) * pcs.scale;
+            }
+        }
+        barrier();
+
+        // 3c. Online softmax update per row
+        if (lane_id < TILE_M) {
+            uint r = lane_id;
+            float m_prev = smem_m[r];
+            float m_curr = -1e20;
+            for (uint c = 0; c < TILE_N; ++c) {
+                m_curr = max(m_curr, smem_s[r * TILE_N + c]);
+            }
+            float m_new = max(m_prev, m_curr);
+            float alpha = exp(m_prev - m_new);
+            smem_alpha[r] = alpha;
+
+            float row_sum = 0.0;
+            for (uint c = 0; c < TILE_N; ++c) {
+                float p_val = exp(smem_s[r * TILE_N + c] - m_new);
+                smem_p[r * TILE_N + c] = float16_t(p_val);
+                row_sum += p_val;
+            }
+            smem_l[r] = smem_l[r] * alpha + row_sum;
+            smem_m[r] = m_new;
+        }
+        barrier();
+
+        // 3d. Rescale existing accumulator O by alpha
+        for (uint idx = lane_id; idx < TILE_M * D; idx += 32) {
+            uint r = idx / D;
+            smem_o[idx] *= smem_alpha[r];
+        }
+        barrier();
+
+        // 3e. Compute P_block * V_block (16 x D) and accumulate into smem_o
+        coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> matP;
+        coopMatLoad(matP, smem_p, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+
+        for (uint vd = 0; vd < D; vd += TILE_N) {
+            coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> matV;
+            coopMatLoad(matV, smem_v, vd, D, gl_CooperativeMatrixLayoutRowMajor);
+
+            coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc_pv;
+            acc_pv = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+            acc_pv = coopMatMulAdd(matP, matV, acc_pv);
+
+            coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> res_pv;
+            res_pv = coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(acc_pv);
+            coopMatStore(res_pv, smem_pv_tile, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+            barrier();
+
+            for (uint idx = lane_id; idx < TILE_M * TILE_N; idx += 32) {
+                uint r = idx / TILE_N;
+                uint c = idx % TILE_N;
+                if (vd + c < D) {
+                    smem_o[r * D + (vd + c)] += float(smem_pv_tile[idx]);
+                }
+            }
+            barrier();
+        }
+    }
+
+    // Step 4: Normalize O by running sum l and store directly to global memory
+    for (uint idx = lane_id; idx < TILE_M * D; idx += 32) {
+        uint r = idx / D;
+        uint c = idx % D;
+        uint global_q_idx = q_start + r;
+        if (global_q_idx < pcs.seq_len) {
+            float l_val = smem_l[r];
+            float inv_l = (l_val > 0.0) ? (1.0 / l_val) : 0.0;
+            float out_val = smem_o[idx] * inv_l;
+            if (isnan(out_val) || isinf(out_val)) out_val = 0.0;
+            o_data[batch_offset + global_q_idx * D + c] = float16_t(clamp(out_val, -65504.0, 65504.0));
+        }
+    }
+
+    // Step 5: Store LogSumExp L_i = m_i + log(l_i) for FlashAttention-2 Backward
+    if (lane_id < TILE_M) {
+        uint global_q_idx = q_start + lane_id;
+        if (global_q_idx < pcs.seq_len) {
+            float l_val = smem_l[lane_id];
+            float logsumexp = (l_val > 0.0) ? (smem_m[lane_id] + log(l_val)) : -1e20;
+            if (isnan(logsumexp) || isinf(logsumexp)) logsumexp = -1e20;
+            l_data[b * pcs.seq_len + global_q_idx] = logsumexp;
+        }
+    }
+}

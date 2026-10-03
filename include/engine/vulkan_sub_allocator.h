@@ -12,6 +12,7 @@
 #include <vulkan/vulkan.h>
 
 #include "helper/logger.h"
+#include "helper/user_preferences.h"
 
 class Vulkan_Context;
 
@@ -214,7 +215,7 @@ private:
     VkPhysicalDevice physical_device = VK_NULL_HANDLE;
     VkPhysicalDeviceMemoryProperties physical_device_memory_properties{};
     std::vector<Memory_Chunk> memory_chunks;
-    VkDeviceSize default_chunk_size = 256 * 1024 * 1024;
+    VkDeviceSize default_chunk_size = 64 * 1024 * 1024;
     size_t arena_chunk_index = std::numeric_limits<size_t>::max();
     mutable std::mutex allocator_mutex;
     Memory_Planner memory_planner;
@@ -324,6 +325,12 @@ public:
     explicit Vulkan_Sub_Allocator(VkDevice _device, const Vulkan_Context &_context, VkPhysicalDevice _physical_device = VK_NULL_HANDLE)
         : device(_device), context(_context), physical_device(_physical_device)
     {
+        uint32_t staging_mb = User_Preferences::getInstance().getMemoryPreferences().staging_pool_initial_size_mb;
+        if (staging_mb > 0)
+        {
+            default_chunk_size = static_cast<VkDeviceSize>(staging_mb) * 1024 * 1024;
+        }
+
         Logger::logMessage("Vulkan_Sub_Allocator::Vulkan_Sub_Allocator: Initializing sub allocator",
                            Log_Level::LOG_DEBUG,
                            true,

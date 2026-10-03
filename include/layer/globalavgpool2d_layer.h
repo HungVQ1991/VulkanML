@@ -173,7 +173,4 @@ public:
     void setInputHeight(uint32_t _height) noexcept { input_height = _height; }
     void setInputWidth(uint32_t _width) noexcept { input_width = _width; }
     void setChannels(uint32_t _channels) noexcept { channels = _channels; }
-    void setIsForwardCompleted(bool _is_completed) noexcept { is_forward_completed = _is_completed; }
 };
-
-using GlobalAvgPool2d_Layer = Global_Avg_Pool_2d_Layer;

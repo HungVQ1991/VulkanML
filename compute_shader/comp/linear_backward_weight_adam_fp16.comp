@@ -1,0 +1,156 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+// 1. Activation from forward: [batch_size, in_dim]
+layout(std430, set = 0, binding = 0) readonly buffer InputX {
+    float16_t x_data[];
+};
+
+// 2. Output gradient from downstream: [batch_size, out_dim]
+layout(std430, set = 0, binding = 1) readonly buffer GradY {
+    float16_t dy_data[];
+};
+
+// 3. Master FP32 weights to update in-place: [in_dim, out_dim]
+layout(std430, set = 0, binding = 2) restrict buffer WeightBuffer {
+    float weights[];
+};
+
+// 4. Adam 1st moment vector (mean): [in_dim, out_dim]
+layout(std430, set = 0, binding = 3) restrict buffer MBuffer {
+    float m_vec[];
+};
+
+// 5. Adam 2nd moment vector (uncentered variance): [in_dim, out_dim]
+layout(std430, set = 0, binding = 4) restrict buffer VBuffer {
+    float v_vec[];
+};
+
+// 6. Dynamic optimizer parameters (updated per step)
+layout(std430, set = 0, binding = 5) readonly restrict buffer DynamicParams {
+    float lr;
+    float inv_correction1;
+    float inv_sqrt_correction2;
+    float inv_scale;
+} dyn;
+
+// 7. FP16 weight cache for forward & backward GEMM: [in_dim, out_dim]
+layout(std430, set = 0, binding = 6) writeonly restrict buffer Fp16WeightBuffer {
+    float16_t fp16_weights[];
+};
+
+// 8. Bias gradient: [out_dim]
+layout(std430, set = 0, binding = 7) buffer GradB {
+    float db_data[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint batch_size;    // M (sequence tokens)
+    uint in_dim;        // K (input dimension)
+    uint out_dim;       // N (output dimension)
+    float beta1;        // Adam beta1 (e.g. 0.9)
+    float beta2;        // Adam beta2 (e.g. 0.999)
+    float eps;          // Numerical stability epsilon (e.g. 1e-8)
+    float max_grad;     // Gradient clipping threshold (0 = disabled)
+    float weight_decay; // AdamW decoupled weight decay
+} pc;
+
+shared float16_t tile_x[16][17];
+shared float16_t tile_dy[16][17];
+
+void main() {
+    uint col = gl_GlobalInvocationID.x;
+    uint row = gl_GlobalInvocationID.y;
+
+    uint local_col = gl_LocalInvocationID.x;
+    uint local_row = gl_LocalInvocationID.y;
+
+    float dw_sum = 0.0;
+    float db_sum = 0.0;
+    uint num_tiles = (pc.batch_size + 15) / 16;
+
+    for (uint t = 0; t < num_tiles; ++t) {
+        uint x_row = t * 16 + local_row;
+        uint x_col = gl_WorkGroupID.y * 16 + local_col;
+        if (x_row < pc.batch_size && x_col < pc.in_dim) {
+            tile_x[local_row][local_col] = x_data[x_row * pc.in_dim + x_col];
+        } else {
+            tile_x[local_row][local_col] = float16_t(0.0);
+        }
+
+        uint dy_row = t * 16 + local_row;
+        uint dy_col = gl_WorkGroupID.x * 16 + local_col;
+        if (dy_row < pc.batch_size && dy_col < pc.out_dim) {
+            tile_dy[local_row][local_col] = dy_data[dy_row * pc.out_dim + dy_col];
+        } else {
+            tile_dy[local_row][local_col] = float16_t(0.0);
+        }
+
+        barrier();
+
+        #pragma unroll
+        for (uint k = 0; k < 16; ++k) {
+            dw_sum = fma(float(tile_x[k][local_row]), float(tile_dy[k][local_col]), dw_sum);
+        }
+
+        if (gl_WorkGroupID.y == 0 && local_row == 0) {
+            #pragma unroll
+            for (uint k = 0; k < 16; ++k) {
+                db_sum += float(tile_dy[k][local_col]);
+            }
+        }
+
+        barrier();
+    }
+
+    if (row < pc.in_dim && col < pc.out_dim) {
+        uint g_idx = row * pc.out_dim + col;
+
+        // 1. Raw gradient from GEMM
+        float g = dw_sum;
+        if (isnan(g) || isinf(g)) g = 0.0;
+
+        // 2. Unscale loss scale
+        g *= dyn.inv_scale;
+
+        // 3. Gradient clipping (if enabled)
+        if (pc.max_grad > 0.0) {
+            g = clamp(g, -pc.max_grad, pc.max_grad);
+        }
+
+        // 4. Update biased 1st and 2nd moment estimates
+        float m_old = m_vec[g_idx];
+        float v_old = v_vec[g_idx];
+        float m_val = fma(pc.beta1, m_old, (1.0 - pc.beta1) * g);
+        float v_val = fma(pc.beta2, v_old, (1.0 - pc.beta2) * (g * g));
+
+        m_vec[g_idx] = m_val;
+        v_vec[g_idx] = v_val;
+
+        // 5. Bias-corrected moment estimates
+        float m_hat = m_val * dyn.inv_correction1;
+        float v_hat_sqrt = sqrt(v_val) * dyn.inv_sqrt_correction2;
+
+        // 6. AdamW weight update (step + weight decay)
+        float step_val = m_hat / (v_hat_sqrt + pc.eps);
+        float p = weights[g_idx];
+        if (pc.weight_decay > 0.0) {
+            p -= dyn.lr * (step_val + pc.weight_decay * p);
+        } else {
+            p -= dyn.lr * step_val;
+        }
+
+        // 7. Write back master FP32 weight & update FP16 weight cache
+        weights[g_idx] = p;
+        fp16_weights[g_idx] = float16_t(clamp(p, -65504.0, 65504.0));
+    }
+
+    // Write out dB
+    if (gl_WorkGroupID.y == 0 && local_row == 0 && col < pc.out_dim) {
+        if (isnan(db_sum) || isinf(db_sum)) db_sum = 0.0;
+        db_data[col] = db_sum;
+    }
+}

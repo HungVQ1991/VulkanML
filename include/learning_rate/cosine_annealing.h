@@ -18,6 +18,7 @@ private:
     float current_learning_rate = 0.001f;
     int maximum_epoch = 100;
     int current_epoch = 0;
+    int warmup_steps = 0;
 
     void validateParameters() const
     {
@@ -48,21 +49,40 @@ private:
                                Log_Feature::LR_SCHEDULER);
             throw std::invalid_argument("maximum_epoch must be greater than 0.");
         }
+        if (warmup_steps < 0 || warmup_steps >= maximum_epoch)
+        {
+            Logger::logMessage("Cosine_Annealing::validateParameters: warmup_steps must be >= 0 and < maximum_epoch.",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::LR_SCHEDULER);
+            throw std::invalid_argument("warmup_steps must be >= 0 and < maximum_epoch.");
+        }
     }
 
 public:
     Cosine_Annealing(float _initial_learning_rate = 0.001f,
                      float _minimum_learning_rate = 0.0f,
-                     int _maximum_epoch = 100)
+                     int _maximum_epoch = 100,
+                     int _warmup_steps = 0)
         : learning_rate(_initial_learning_rate),
           minimum_learning_rate(_minimum_learning_rate),
-          current_learning_rate(_initial_learning_rate),
-          maximum_epoch(_maximum_epoch)
+          current_learning_rate((_warmup_steps > 0) ? _minimum_learning_rate : _initial_learning_rate),
+          maximum_epoch(_maximum_epoch),
+          warmup_steps(_warmup_steps)
     {
         validateParameters();
     }
 
     ~Cosine_Annealing() noexcept override = default;
+
+    int getWarmupSteps() const noexcept { return warmup_steps; }
+    void setWarmupSteps(int _warmup_steps)
+    {
+        warmup_steps = _warmup_steps;
+        validateParameters();
+        updateRate();
+    }
 
     float updateRate() override
     {
@@ -75,9 +95,16 @@ public:
                                Log_Feature::LR_SCHEDULER);
             current_learning_rate = minimum_learning_rate;
         }
+        else if (warmup_steps > 0 && current_epoch < warmup_steps)
+        {
+            float progress = static_cast<float>(current_epoch) / static_cast<float>(warmup_steps);
+            current_learning_rate = minimum_learning_rate + progress * (learning_rate - minimum_learning_rate);
+        }
         else
         {
-            float progress = static_cast<float>(current_epoch) / static_cast<float>(maximum_epoch);
+            int decay_epoch = current_epoch - warmup_steps;
+            int total_decay_epochs = maximum_epoch - warmup_steps;
+            float progress = static_cast<float>(decay_epoch) / static_cast<float>(total_decay_epochs);
             float cosine_value = std::cos(progress * std::numbers::pi_v<float>);
             current_learning_rate = minimum_learning_rate + 0.5f * (learning_rate - minimum_learning_rate) * (1.0f + cosine_value);
         }

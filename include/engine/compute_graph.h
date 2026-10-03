@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "compute_node.h"
+#include "helper/magic_enum.hpp"
 
 class Compute_Graph
 {
@@ -34,6 +35,15 @@ public:
     void clear() noexcept
     {
         nodes.clear();
+    }
+
+    void print()
+    {
+        Logger::logMessage(Input_Format{"Node count: {} nodes", nodes.size()}, Log_Level::LOG_INFO, true, 1, Log_Feature::GRAPH);
+        for (const Compute_Node &node : nodes)
+        {
+            Logger::logMessage(Input_Format{"{}", static_cast<std::string>(magic_enum::enum_name<Compute_Pipeline>(node.pipeline_id))}, Log_Level::LOG_INFO, true, nodes.size(), Log_Feature::GRAPH);
+        }
     }
 
     const Compute_Node &getNode(size_t _index) const { return nodes.at(_index); }

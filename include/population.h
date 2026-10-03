@@ -178,6 +178,10 @@ public:
         std::vector<float> input_vector(state_data, state_data + state_dimension);
         Tensor input_tensor(1, state_dimension, std::move(input_vector), execution_target);
         Tensor output_tensor = individual_net.forward(input_tensor);
+        if (execution_target == Execution_Target::VULKAN_GPU)
+        {
+            Execution_Engine::getInstance().executeGraph();
+        }
 
         const auto &output_data = output_tensor.getData();
         if (output_data.empty())
@@ -199,6 +203,10 @@ public:
 
         Neural_Network individual_net = getIndividual(individual_index);
         Tensor output_tensor = individual_net.forward(state_tensor);
+        if (execution_target == Execution_Target::VULKAN_GPU)
+        {
+            Execution_Engine::getInstance().executeGraph();
+        }
 
         const auto &output_data = output_tensor.getData();
         if (output_data.empty())
@@ -255,6 +263,13 @@ public:
         {
             current_tensor = adapter.template_layer->forward(current_tensor, adapter.batched_params);
         }
+
+        if (execution_target == Execution_Target::VULKAN_GPU)
+        {
+            Execution_Engine::getInstance().executeGraph();
+        }
+
+
 
         std::vector<float> action_values = current_tensor.getData();
         for (size_t i = 0; i < active_count; ++i)

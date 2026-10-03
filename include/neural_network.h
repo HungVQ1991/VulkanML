@@ -239,21 +239,65 @@ public:
         Tensor dummy_input(_batch_size, _input_dimension, execution_target);
         Tensor dummy_target(_batch_size, _output_dimension, execution_target);
 
+        IOptimizer &optimizer = training_context.getOptimizer();
+        bool is_adam = (optimizer.getType() == Optimizer_Type::ADAM_OPTIMIZER);
+        std::vector<Adam_Optimizer::Parameter_State> saved_loaded_states;
+        size_t saved_timestep = 0;
+        if (is_adam)
+        {
+            auto &adam = static_cast<Adam_Optimizer &>(optimizer);
+            saved_loaded_states = adam.getLoadedStates();
+            saved_timestep = adam.getTimestep();
+        }
+
+        auto params = getParametersAndGradients();
+        std::vector<std::vector<float>> saved_parameters;
+        saved_parameters.reserve(params.size());
+        for (auto &[param, grad] : params)
+        {
+            if (param)
+            {
+                saved_parameters.push_back(param->getData());
+            }
+            else
+            {
+                saved_parameters.push_back({});
+            }
+        }
+
         forward(dummy_input);
         backward(dummy_target);
 
-        IOptimizer &optimizer = training_context.getOptimizer();
         optimizer.step(getParametersAndGradients());
 
         reset();
         optimizer.reset();
+
+        for (size_t i = 0; i < params.size(); ++i)
+        {
+            if (params[i].first && !saved_parameters[i].empty())
+            {
+                params[i].first->uploadData(saved_parameters[i]);
+            }
+        }
+        for (auto &layer : layers)
+        {
+            layer->invalidateWeightCache();
+        }
+
+        if (is_adam && (!saved_loaded_states.empty() || saved_timestep > 0))
+        {
+            auto &adam = static_cast<Adam_Optimizer &>(optimizer);
+            adam.setLoadedStates(saved_loaded_states);
+            adam.setTimestep(saved_timestep);
+        }
 
         if (execution_target == Execution_Target::VULKAN_GPU)
         {
             Execution_Engine &engine = Execution_Engine::getInstance();
             engine.enableGraphCaching(true);
             engine.warmCache(engine.getCurrentGraph());
-            Gpu_Matrix_Impl::distinct_operations_count = engine.getCurrentGraph().getNodeCount();
+            Gpu_Tensor_Impl::distinct_operations_count = engine.getCurrentGraph().getNodeCount();
             engine.getCurrentGraph().clear();
             engine.waitIdle();
         }
@@ -311,6 +355,11 @@ public:
         if (_target_tensor.getExecutionTarget() != execution_target)
         {
             _target_tensor.setExecutionTarget(execution_target);
+        }
+
+        if (_target_tensor.getDataType() != _input_tensor.getDataType())
+        {
+            _target_tensor.setDataType(_input_tensor.getDataType());
         }
 
         uint32_t current_frame = (execution_target == Execution_Target::VULKAN_GPU) ? engine.getContext().getCurrentFrame() : 0;
@@ -584,9 +633,18 @@ public:
             {
                 layer->loadInference(input_file_stream);
             }
+            layer->setExecutionTarget(_execution_target);
+            layer->setAccumulated(is_gradient_accumulation_enabled);
+            layer->setMixedPrecision(is_mixed_precision_enabled);
+            layer->invalidateWeightCache();
         }
 
         setExecutionTarget(_execution_target);
+        if (_execution_target == Execution_Target::VULKAN_GPU)
+        {
+            Execution_Engine::getInstance().getContext().executePendingTransfers();
+            Execution_Engine::getInstance().invalidateStaticGraph();
+        }
         Logger::logMessage(Input_Format{"Neural_Network::loadInference: Inference loaded from {}", _file_path}, Log_Level::LOG_INFO, true, 1);
     }
 
@@ -702,6 +760,10 @@ public:
             {
                 layer->loadCheckpoint(input_file_stream);
             }
+            layer->setExecutionTarget(_execution_target);
+            layer->setAccumulated(is_gradient_accumulation_enabled);
+            layer->setMixedPrecision(is_mixed_precision_enabled);
+            layer->invalidateWeightCache();
         }
 
         if (_total_epochs < training_context.getCurrentEpoch())
@@ -715,6 +777,11 @@ public:
         training_context.getLearningRate().setMaxEpoch(static_cast<int>(_total_epochs));
 
         setExecutionTarget(_execution_target);
+        if (_execution_target == Execution_Target::VULKAN_GPU)
+        {
+            Execution_Engine::getInstance().getContext().executePendingTransfers();
+            Execution_Engine::getInstance().invalidateStaticGraph();
+        }
     }
 
     const ILearning_Rate &getLearningRate() const { return training_context.getLearningRate(); }
@@ -838,6 +905,15 @@ public:
         for (auto &layer : layers)
         {
             layer->setExecutionTarget(_new_execution_target);
+            layer->setAccumulated(is_gradient_accumulation_enabled);
+            layer->setMixedPrecision(is_mixed_precision_enabled);
+            layer->invalidateWeightCache();
+        }
+        invalidateStaticBufferBindings();
+        if (execution_target == Execution_Target::VULKAN_GPU)
+        {
+            Execution_Engine::getInstance().getContext().executePendingTransfers();
+            Execution_Engine::getInstance().invalidateStaticGraph();
         }
         is_target_synchronized = true;
     }
@@ -920,6 +996,9 @@ public:
     void enableStaticGraph(bool _enable = true) noexcept { Execution_Engine::getInstance().setStaticGraphEnabled(_enable); }
     void setStaticGraphEnabled(bool _enable) noexcept { Execution_Engine::getInstance().setStaticGraphEnabled(_enable); }
     bool isStaticGraphEnabled() const noexcept { return Execution_Engine::getInstance().isStaticGraphEnabled(); }
+    void enableFusedGemmAdam(bool _enable = true) noexcept { Execution_Engine::getInstance().setFusedGemmAdamEnabled(_enable); }
+    void setFusedGemmAdamEnabled(bool _enable) noexcept { Execution_Engine::getInstance().setFusedGemmAdamEnabled(_enable); }
+    bool isFusedGemmAdamEnabled() const noexcept { return Execution_Engine::getInstance().isFusedGemmAdamEnabled(); }
     void invalidateStaticGraph() noexcept
     {
         invalidateStaticBufferBindings();

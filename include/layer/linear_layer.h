@@ -29,19 +29,13 @@ private:
     Tensor weights_gradient_tensor;
     Tensor biases_gradient_tensor;
 
-    Tensor weights_fp16;
-    Tensor biases_fp16;
-    Tensor input_tensor_fp16;
-    Tensor output_tensor_fp16;
-    Tensor input_gradient_tensor_fp16;
-    Tensor output_gradient_tensor_fp16;
-
     size_t input_dimension = 0;
-    float initialization_gain = 2.0f;
     size_t output_dimension = 0;
+    float initialization_gain = 0.02f;
     bool is_forward_completed = false;
-    bool is_weights_fp16_dirty = true;
     Execution_Target execution_target = Execution_Target::CPU;
+    bool cache_is_3d = false;
+    Shape cache_orig_shape;
 
 public:
     using ILayer::forward;
@@ -54,19 +48,14 @@ public:
           input_gradient_tensor(0, 0),
           weights_gradient_tensor(0, 0),
           biases_gradient_tensor(0, 0),
-          weights_fp16(0, 0),
-          biases_fp16(0, 0),
-          input_tensor_fp16(0, 0),
-          output_tensor_fp16(0, 0),
-          input_gradient_tensor_fp16(0, 0),
-          output_gradient_tensor_fp16(0, 0),
           is_forward_completed(false)
     {}
 
     Linear_Layer(size_t _input_dimension,
                  size_t _output_dimension,
                  Execution_Target _execution_target = Execution_Target::CPU,
-                 float _initialization_gain = 2.0f)
+                 float _initialization_gain = 2.0f,
+                 Data_Type _data_type = Data_Type::FLOAT32)
         : weights(0, 0, _execution_target),
           biases(0, 0, _execution_target),
           input_tensor(0, 0, _execution_target),
@@ -74,17 +63,17 @@ public:
           input_gradient_tensor(0, 0, _execution_target),
           weights_gradient_tensor(_input_dimension, _output_dimension, _execution_target),
           biases_gradient_tensor(1, _output_dimension, _execution_target),
-          weights_fp16(0, 0, _execution_target),
-          biases_fp16(0, 0, _execution_target),
-          input_tensor_fp16(0, 0, _execution_target),
-          output_tensor_fp16(0, 0, _execution_target),
-          input_gradient_tensor_fp16(0, 0, _execution_target),
-          output_gradient_tensor_fp16(0, 0, _execution_target),
           input_dimension(_input_dimension),
           output_dimension(_output_dimension),
+          initialization_gain(_initialization_gain),
           is_forward_completed(false),
           execution_target(_execution_target)
     {
+        if (_data_type == Data_Type::FLOAT16)
+        {
+            is_mixed_precision_enabled = true;
+        }
+
         std::vector<float> weight_data(_input_dimension * _output_dimension);
         std::vector<float> bias_data(_output_dimension, 0.0f);
 
@@ -115,50 +104,44 @@ public:
 
     Tensor forward(const Tensor &_input_tensor) override
     {
-        if (_input_tensor.getColumns() != input_dimension)
+        size_t in_features = (_input_tensor.getShape().getRank() >= 2)
+                             ? _input_tensor.getShape()[_input_tensor.getShape().getRank() - 1]
+                             : _input_tensor.getColumns();
+        if (in_features != input_dimension)
         {
-            Logger::logMessage(Input_Format{"Linear_Layer::forward: Input dimension mismatch"},
+            Logger::logMessage(Input_Format{"Linear_Layer::forward: Input dimension mismatch (expected {}, got {})",
+                                            input_dimension, in_features},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
                                Log_Feature::DENSE_COMPUTE | Log_Feature::FORWARD_EVALUATION);
-            throw std::invalid_argument("Input dimension mismatch");
+            throw std::invalid_argument(std::format("Linear_Layer input dimension mismatch (expected {}, got {})", input_dimension, in_features));
+        }
+
+        cache_orig_shape = _input_tensor.getShape();
+        cache_is_3d = (cache_orig_shape.getRank() == 3);
+
+        Tensor eff_input = _input_tensor;
+        if (cache_is_3d)
+        {
+            eff_input.reshape(Shape{ cache_orig_shape[0] * cache_orig_shape[1], input_dimension });
         }
 
         Logger::logMessage(Input_Format{"Linear_Layer::forward: batch_size={}, input_dimension={}, output_dimension={}",
-                                        _input_tensor.getRows(),
-                                        input_dimension,
-                                        output_dimension},
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           1,
-                           Log_Feature::DENSE_COMPUTE | Log_Feature::FORWARD_EVALUATION);
+                                         eff_input.getRows(),
+                                         input_dimension,
+                                         output_dimension},
+                            Log_Level::LOG_DEBUG,
+                            true,
+                            1,
+                            Log_Feature::DENSE_COMPUTE | Log_Feature::FORWARD_EVALUATION);
 
-        input_tensor = _input_tensor;
-        if (is_mixed_precision_enabled && execution_target == Execution_Target::VULKAN_GPU)
+        input_tensor = eff_input;
+        input_tensor.linearForward(weights, biases, output_tensor);
+
+        if (cache_is_3d)
         {
-            if (input_tensor.getDataType() != Data_Type::FLOAT16)
-            {
-                input_tensor.to(Data_Type::FLOAT16, input_tensor_fp16);
-            }
-            else
-            {
-                input_tensor_fp16 = input_tensor;
-            }
-
-            if (is_weights_fp16_dirty || weights_fp16.isEmpty() || biases_fp16.isEmpty())
-            {
-                weights.to(Data_Type::FLOAT16, weights_fp16);
-                biases.to(Data_Type::FLOAT16, biases_fp16);
-                is_weights_fp16_dirty = false;
-            }
-
-            input_tensor_fp16.linearForward(weights_fp16, biases_fp16, output_tensor_fp16);
-            output_tensor = output_tensor_fp16;
-        }
-        else
-        {
-            input_tensor.linearForward(weights, biases, output_tensor);
+            output_tensor.reshape(Shape{ cache_orig_shape[0], cache_orig_shape[1], output_dimension });
         }
 
         logBufferAddress(&weights, "weights (Forward)");
@@ -193,65 +176,40 @@ public:
                                Log_Feature::DENSE_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
             throw std::logic_error("Backward called before forward");
         }
-        if (_output_gradient.getColumns() != output_dimension || _output_gradient.getRows() != input_tensor.getRows())
+
+        size_t out_features = (_output_gradient.getShape().getRank() >= 2)
+                              ? _output_gradient.getShape()[_output_gradient.getShape().getRank() - 1]
+                              : _output_gradient.getColumns();
+        if (out_features != output_dimension)
         {
             Logger::logMessage(Input_Format{"Linear_Layer::backward: Gradient output dimension mismatch"},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
                                Log_Feature::DENSE_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
-            throw std::invalid_argument("Gradient output dimension mismatch");
+            throw std::invalid_argument(std::format("Linear_Layer gradient output dimension mismatch (expected {}, got {})", output_dimension, out_features));
+        }
+
+        Tensor eff_grad = _output_gradient;
+        if (cache_is_3d && eff_grad.getShape().getRank() == 3)
+        {
+            eff_grad.reshape(Shape{ cache_orig_shape[0] * cache_orig_shape[1], output_dimension });
         }
 
         Logger::logMessage(Input_Format{"Linear_Layer::backward: output_gradient rows={}, columns={}",
-                                        _output_gradient.getRows(),
-                                        _output_gradient.getColumns()},
+                                        eff_grad.getRows(),
+                                        eff_grad.getColumns()},
                            Log_Level::LOG_DEBUG,
                            true,
                            1,
                            Log_Feature::DENSE_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
-        if (is_mixed_precision_enabled && execution_target == Execution_Target::VULKAN_GPU)
-        {
-            if (_output_gradient.getDataType() != Data_Type::FLOAT16)
-            {
-                _output_gradient.to(Data_Type::FLOAT16, output_gradient_tensor_fp16);
-            }
-            else
-            {
-                output_gradient_tensor_fp16 = _output_gradient;
-            }
+        eff_grad.linearBackwardInput(weights, input_gradient_tensor);
+        input_tensor.linearBackwardWeightBias(eff_grad, weights_gradient_tensor, biases_gradient_tensor, is_accumulated);
 
-            if (!is_accumulated)
-            {
-                input_tensor_fp16.linearBackwardWeightBias(output_gradient_tensor_fp16, weights_gradient_tensor, biases_gradient_tensor);
-            }
-            else
-            {
-                Tensor step_weights_grad(weights_gradient_tensor.getShape(), execution_target);
-                Tensor step_biases_grad(biases_gradient_tensor.getShape(), execution_target);
-                input_tensor_fp16.linearBackwardWeightBias(output_gradient_tensor_fp16, step_weights_grad, step_biases_grad);
-                weights_gradient_tensor = weights_gradient_tensor + step_weights_grad;
-                biases_gradient_tensor = biases_gradient_tensor + step_biases_grad;
-            }
-            output_gradient_tensor_fp16.linearBackwardInput(weights_fp16, input_gradient_tensor_fp16);
-            input_gradient_tensor = input_gradient_tensor_fp16;
-        }
-        else
+        if (cache_is_3d)
         {
-            if (!is_accumulated)
-            {
-                input_tensor.linearBackwardWeightBias(_output_gradient, weights_gradient_tensor, biases_gradient_tensor);
-            }
-            else
-            {
-                Tensor step_weights_grad(weights_gradient_tensor.getShape(), execution_target);
-                Tensor step_biases_grad(biases_gradient_tensor.getShape(), execution_target);
-                input_tensor.linearBackwardWeightBias(_output_gradient, step_weights_grad, step_biases_grad);
-                weights_gradient_tensor = weights_gradient_tensor + step_weights_grad;
-                biases_gradient_tensor = biases_gradient_tensor + step_biases_grad;
-            }
-            _output_gradient.linearBackwardInput(weights, input_gradient_tensor);
+            input_gradient_tensor.reshape(cache_orig_shape);
         }
 
         logBufferAddress(&input_tensor, "input_tensor (Backward)");
@@ -270,13 +228,15 @@ public:
 
     void invalidateWeightCache() noexcept override
     {
-        is_weights_fp16_dirty = true;
+        weights.invalidateFp16Cache();
+        biases.invalidateFp16Cache();
     }
 
     void setMixedPrecision(bool _enable) noexcept override
     {
         ILayer::setMixedPrecision(_enable);
-        is_weights_fp16_dirty = true;
+        weights.invalidateFp16Cache();
+        biases.invalidateFp16Cache();
     }
 
     void resetGradient() override
@@ -311,7 +271,7 @@ public:
         biases = Tensor::loadTensor(_input_file_stream, execution_target);
         input_dimension = weights.getRows();
         output_dimension = weights.getColumns();
-        is_weights_fp16_dirty = true;
+        invalidateWeightCache();
     }
 
     void saveCheckpoint(std::ofstream &_output_file_stream) const override
@@ -330,7 +290,7 @@ public:
         biases_gradient_tensor = Tensor::loadTensor(_input_file_stream, execution_target);
         input_dimension = weights.getRows();
         output_dimension = weights.getColumns();
-        is_weights_fp16_dirty = true;
+        invalidateWeightCache();
     }
 
     std::function<float(std::mt19937&)> getPopulationParameterInitializer(size_t param_index) const override
@@ -394,7 +354,7 @@ public:
                 throw std::invalid_argument("Linear_Layer::setPopulationParameter: Weight size mismatch");
             }
             weights = Tensor(input_dimension, output_dimension, std::move(flat_data), execution_target);
-            is_weights_fp16_dirty = true;
+            invalidateWeightCache();
         }
         else if (param_index == 1)
         {
@@ -403,7 +363,7 @@ public:
                 throw std::invalid_argument("Linear_Layer::setPopulationParameter: Bias size mismatch");
             }
             biases = Tensor(1, output_dimension, std::move(flat_data), execution_target);
-            is_weights_fp16_dirty = true;
+            invalidateWeightCache();
         }
         else
         {
@@ -422,7 +382,7 @@ public:
             throw std::invalid_argument("Dimension size of weight must match");
         }
         weights = _new_weights;
-        is_weights_fp16_dirty = true;
+        invalidateWeightCache();
     }
     void setBiases(const Tensor &_new_biases)
     {
@@ -436,7 +396,7 @@ public:
             throw std::invalid_argument("Dimension size of bias must match");
         }
         biases = _new_biases;
-        is_weights_fp16_dirty = true;
+        invalidateWeightCache();
     }
     void setWeightsGradient(const Tensor &_tensor) { weights_gradient_tensor = _tensor; }
     void setBiasesGradient(const Tensor &_tensor) { biases_gradient_tensor = _tensor; }
@@ -462,12 +422,6 @@ public:
         input_tensor.setExecutionTarget(_new_execution_target);
         output_tensor.setExecutionTarget(_new_execution_target);
         input_gradient_tensor.setExecutionTarget(_new_execution_target);
-        weights_fp16.setExecutionTarget(_new_execution_target);
-        biases_fp16.setExecutionTarget(_new_execution_target);
-        input_tensor_fp16.setExecutionTarget(_new_execution_target);
-        output_tensor_fp16.setExecutionTarget(_new_execution_target);
-        input_gradient_tensor_fp16.setExecutionTarget(_new_execution_target);
-        output_gradient_tensor_fp16.setExecutionTarget(_new_execution_target);
     }
     void setInitializationGain(float _initialization_gain) noexcept { initialization_gain = _initialization_gain; }
     void setIsForwardCompleted(bool _is_completed) noexcept { is_forward_completed = _is_completed; }

@@ -264,7 +264,7 @@ public:
         VkPipelineShaderStageCreateInfo shader_stage_create_information{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
             .pNext = is_coop ? &required_subgroup_size_create_information : nullptr,
-            .flags = is_coop ? VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT : 0u,
+            .flags = is_coop ? static_cast<VkPipelineShaderStageCreateFlags>(VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT) : VkPipelineShaderStageCreateFlags{0},
             .stage = VK_SHADER_STAGE_COMPUTE_BIT,
             .module = shader_module,
             .pName = "main",

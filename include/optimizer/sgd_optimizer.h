@@ -51,7 +51,7 @@ public:
 
     ~Sgd_Optimizer() noexcept override = default;
 
-    void step(const std::vector<std::pair<Matrix *, Matrix *>> &_parameter_gradient_pairs) override
+    void step(const std::vector<std::pair<Tensor *, Tensor *>> &_parameter_gradient_pairs) override
     {
         step(_parameter_gradient_pairs, 1.0f);
     }
@@ -68,7 +68,7 @@ public:
         engine.updateDynamicOptimizerParams(learning_rate, 1.0f, 1.0f, inv_scale, current_frame);
     }
 
-    void step(const std::vector<std::pair<Matrix *, Matrix *>> &_parameter_gradient_pairs, float _grad_scale) override
+    void step(const std::vector<std::pair<Tensor *, Tensor *>> &_parameter_gradient_pairs, float _grad_scale) override
     {
         stepDynamicParams(_grad_scale);
 
@@ -157,7 +157,7 @@ public:
     ILearning_Rate *getLearningRateScheduler() const noexcept { return learning_rate_scheduler; }
     Optimizer_Type getType() const noexcept override { return Optimizer_Type::SGD_OPTIMIZER; }
     float getLearningRate() const noexcept override { return learning_rate; }
-    float getMaxGradient() const noexcept { return max_gradient; }
+    float getMaxGradient() const noexcept override { return max_gradient; }
 
     void setLearningRateScheduler(ILearning_Rate *_learning_rate_scheduler) noexcept { learning_rate_scheduler = _learning_rate_scheduler; }
     void setLearningRate(float _learning_rate) override
@@ -180,7 +180,4 @@ public:
         learning_rate = _learning_rate;
         learning_rate_scheduler = nullptr;
     }
-    void setMaxGradient(float _max_gradient) noexcept { max_gradient = _max_gradient; }
 };
-
-using SGD_Optimizer = Sgd_Optimizer;

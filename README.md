@@ -35,7 +35,7 @@ The library provides a **device-agnostic tensor computation layer** on top of wh
 │             MaxPool2D · GlobalAvgPool2D · ResNet Block · Actor-Critic    │
 ├──────────────────────────────────────────────────────────────────────────┤
 │                      TENSOR ABSTRACTION  (math/)                         │
-│                     Tensor<N-D> · Matrix · Shape                         │
+│                     Tensor<N-D> · Tensor · Shape                         │
 │             Cpu_Tensor_Impl ◄──── PIMPL ────► Gpu_Tensor_Impl            │
 ├──────────────────────────────────────────────────────────────────────────┤
 │                       EXECUTION ENGINE  (engine/)                        │
@@ -47,7 +47,7 @@ The library provides a **device-agnostic tensor computation layer** on top of wh
                    │      Vulkan Compute API    │
                    │  VkComputePipeline         │
                    │  VkCommandBuffer dispatch  │
-                   │  Cooperative Matrix Ext.   │
+                   │  Cooperative Tensor Ext.   │
                    └────────────────────────────┘
 ```
 
@@ -65,7 +65,7 @@ The library provides a **device-agnostic tensor computation layer** on top of wh
 | **Neuroevolution** | Population with Tournament Selection, Uniform Crossover, Gaussian Mutation, Elitism; batched GPU inference over full generation |
 | **RL Agents** | DQN (with Replay Buffer + Target Network), PPO (Actor-Critic) |
 | **GPU Backend** | Vulkan Compute Shaders, JIT operator fusion, on-disk Pipeline Cache, Sub-allocator memory pool |
-| **Cooperative Matrix** | Auto-detected `VK_KHR_cooperative_matrix` for 16×16×16 subgroup GEMM |
+| **Cooperative Tensor** | Auto-detected `VK_KHR_cooperative_matrix` for 16×16×16 subgroup GEMM |
 | **Mixed Precision (AMP)** | True Native FP16 compute & storage, Zero-Cast pipeline, dynamic Loss Scaler, FP32 master weights |
 | **Data Pipeline** | Async CPU-side data pipeline for overlapping I/O with GPU training |
 | **Serialization** | Binary model format (inference + checkpoint) with topology auto-restoration |
@@ -118,8 +118,8 @@ int main()
     // JIT operator fusion warmup
     net.compileAndWarmup(512, 784, 10);
 
-    Matrix input(512, 784, target);
-    Matrix target_labels(512, 10, target);
+    Tensor input(512, 784, target);
+    Tensor target_labels(512, 10, target);
 
     net.trainStep(input, target_labels);
     net.getLearningRate().step();
@@ -179,7 +179,7 @@ int main()
 | **ALU Compute Throughput** | 1x (Single-Issue) | **2x (Packed Dual-Issue Wave32 ALU)** | Higher arithmetic intensity |
 | **Dynamic Range** | $1.4 \times 10^{-45} \dots 3.4 \times 10^{38}$ | $5.96 \times 10^{-8} \dots 65,504$ | Sufficient dynamic range for deep learning |
 | **Underflow Normal Threshold** | $\sim 1.18 \times 10^{-38}$ | $\sim 6.10 \times 10^{-5}$ | Managed via Dynamic Loss Scaling |
-| **Cooperative Matrix Subgroup** | Standard Tile | **$16 \times 16 \times 16$ Tile (FP32 Accumulator)** | Hardware tensor acceleration |
+| **Cooperative Tensor Subgroup** | Standard Tile | **$16 \times 16 \times 16$ Tile (FP32 Accumulator)** | Hardware tensor acceleration |
 | **Accumulators & Reduction** | FP32 | **FP32** | Zero overflow risk during dot products |
 | **Master Weights (Optimizer)** | FP32 | **FP32 (Adam / SGD)** | Preserves tiny parameter updates |
 | **Gradient Scaling** | Not needed | **Dynamic Loss Scaler** | Rescales gradients to prevent underflow |
@@ -249,7 +249,7 @@ int main()
 Most open-source ML projects depend on CUDA, which locks them to NVIDIA hardware. VulkanML uses Vulkan Compute to:
 
 - Run on **any GPU** that supports Vulkan 1.3 (AMD, Intel, NVIDIA, mobile).
-- Exploit **Cooperative Matrix** extensions for accelerated GEMM when available.
+- Exploit **Cooperative Tensor** extensions for accelerated GEMM when available.
 - Maintain a **zero-dependency GPU backend** — no driver SDKs, no runtime libraries beyond the Vulkan loader.
 - Expose low-level **memory management** and **pipeline construction** explicitly, as a learning exercise.
 
@@ -282,7 +282,7 @@ cmake --build build --config Release
 
 ```
 include/
-├── math/               Tensor, Matrix, Shape, CPU/GPU backends
+├── math/               Tensor, Tensor, Shape, CPU/GPU backends
 ├── engine/             Vulkan_Context, Graph_Executor, Graph_Optimizer,
 │                       Shader_Generator, Sub-Allocator, Pipeline_Cache,
 │                       Async_Data_Pipeline

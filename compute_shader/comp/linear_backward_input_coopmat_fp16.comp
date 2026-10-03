@@ -1,0 +1,111 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_KHR_cooperative_matrix : require
+
+#define TILE_M 16
+#define TILE_N 16
+#define TILE_K 16
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer GradY {
+    float16_t dy_data[];
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer WeightsW {
+    float16_t w_data[];
+};
+
+layout(std430, set = 0, binding = 2) writeonly buffer GradX {
+    float16_t dx_data[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint batch_size; // M (tokens)
+    uint in_dim;     // K (input dimension)
+    uint out_dim;    // N (output dimension)
+} params;
+
+shared float16_t smem_a[TILE_M * TILE_K];
+shared float16_t smem_b[TILE_K * TILE_N];
+
+void main() {
+    uint tile_col = gl_WorkGroupID.x * TILE_N; // along in_dim (K)
+    uint tile_row = gl_WorkGroupID.y * TILE_M; // along batch_size (M)
+
+    if (tile_row >= params.batch_size || tile_col >= params.in_dim) return;
+
+    uint lane_id = gl_LocalInvocationID.x;
+
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc;
+    acc = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+
+    bool is_m_aligned = (tile_row + TILE_M <= params.batch_size);
+    bool is_k_aligned = (tile_col + TILE_N <= params.in_dim);
+
+    for (uint n = 0; n < params.out_dim; n += TILE_K) {
+        bool is_n_aligned = (n + TILE_K <= params.out_dim);
+
+        // Load tile of dY [16 x 16] (Row-major)
+        coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> matA;
+        if (is_m_aligned && is_n_aligned) {
+            coopMatLoad(matA, dy_data, tile_row * params.out_dim + n, params.out_dim, gl_CooperativeMatrixLayoutRowMajor);
+        } else {
+            for (uint i = 0; i < 8; ++i) {
+                uint idx = lane_id * 8 + i;
+                uint lr = idx / TILE_K;
+                uint lc = idx % TILE_K;
+                uint gr = tile_row + lr;
+                uint gc = n + lc;
+                smem_a[idx] = (gr < params.batch_size && gc < params.out_dim)
+                    ? dy_data[gr * params.out_dim + gc]
+                    : float16_t(0.0);
+            }
+            barrier();
+            coopMatLoad(matA, smem_a, 0, TILE_K, gl_CooperativeMatrixLayoutRowMajor);
+            barrier();
+        }
+
+        // Load tile of W^T [16 x 16]: W^T(r, c) = W(tile_col + c, n + r)
+        coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> matB;
+        for (uint i = 0; i < 8; ++i) {
+            uint idx = lane_id * 8 + i;
+            uint r = idx / TILE_N;
+            uint c = idx % TILE_N;
+            uint gw_row = tile_col + c;
+            uint gw_col = n + r;
+            smem_b[idx] = (gw_row < params.in_dim && gw_col < params.out_dim)
+                ? w_data[gw_row * params.out_dim + gw_col]
+                : float16_t(0.0);
+        }
+        barrier();
+        coopMatLoad(matB, smem_b, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+        barrier();
+
+        acc = coopMatMulAdd(matA, matB, acc);
+    }
+
+    coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> res;
+    res = coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(acc);
+
+    if (is_m_aligned && is_k_aligned) {
+        coopMatStore(res, dx_data, tile_row * params.in_dim + tile_col, params.in_dim, gl_CooperativeMatrixLayoutRowMajor);
+    } else {
+        coopMatStore(res, smem_a, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+        barrier();
+        for (uint i = 0; i < 8; ++i) {
+            uint idx = lane_id * 8 + i;
+            uint lr = idx / TILE_N;
+            uint lc = idx % TILE_N;
+            uint gr = tile_row + lr;
+            uint gc = tile_col + lc;
+            if (gr < params.batch_size && gc < params.in_dim) {
+                float16_t val = smem_a[idx];
+                if (isnan(float(val)) || isinf(float(val))) val = float16_t(0.0);
+                dx_data[gr * params.in_dim + gc] = val;
+            }
+        }
+    }
+}

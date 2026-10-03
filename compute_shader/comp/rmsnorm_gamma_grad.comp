@@ -1,0 +1,33 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer GradOutBuffer { float grad_out[]; };
+layout(std430, binding = 1) readonly buffer InBuffer { float in_data[]; };
+layout(std430, binding = 2) readonly buffer InvRmsBuffer { float inv_rms_data[]; };
+layout(std430, binding = 3) buffer GradGammaBuffer { float grad_gamma[]; };
+
+layout(push_constant) uniform Constants {
+    uint batch_size;
+    uint dim;
+    uint accumulate;
+} pcs;
+
+void main() {
+    uint c = gl_GlobalInvocationID.x;
+    if (c >= pcs.dim) return;
+
+    float sum = 0.0;
+    for (uint r = 0; r < pcs.batch_size; ++r) {
+        float dy = grad_out[r * pcs.dim + c];
+        float x = in_data[r * pcs.dim + c];
+        float inv_rms = inv_rms_data[r];
+        sum += dy * (x * inv_rms);
+    }
+
+    if (pcs.accumulate != 0) {
+        grad_gamma[c] += sum;
+    } else {
+        grad_gamma[c] = sum;
+    }
+}

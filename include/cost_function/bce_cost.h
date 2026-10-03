@@ -18,8 +18,8 @@ class Bce_Cost : public ICost_Function
 {
 private:
     float epsilon = 1e-7f;
-    mutable Matrix loss_matrix;
-    mutable Matrix gradient_matrix;
+    mutable Tensor loss_matrix;
+    mutable Tensor gradient_matrix;
 
 public:
     explicit Bce_Cost(float _epsilon = 1e-7f, Execution_Target _execution_target = Execution_Target::CPU)
@@ -31,7 +31,7 @@ public:
 
     ~Bce_Cost() noexcept override = default;
 
-     float computeLoss(const Matrix &_prediction_matrix, const Matrix &_target_matrix) const override
+     float computeLoss(const Tensor &_prediction_matrix, const Tensor &_target_matrix) const override
     {
         if (_prediction_matrix.getRows() != _target_matrix.getRows() || _prediction_matrix.getColumns() != _target_matrix.getColumns())
         {
@@ -80,7 +80,7 @@ public:
         return loss_matrix.getScalar() / static_cast<float>(total_elements);
     }
 
-    Matrix computeGradient(const Matrix &_prediction_matrix, const Matrix &_target_matrix) const override
+    Tensor computeGradient(const Tensor &_prediction_matrix, const Tensor &_target_matrix) const override
     {
         if (_prediction_matrix.getRows() != _target_matrix.getRows() || _prediction_matrix.getColumns() != _target_matrix.getColumns())
         {
@@ -108,7 +108,7 @@ public:
                                false,
                                0,
                                Log_Feature::LOSS_COMPUTE);
-            return Matrix(0, 0, _prediction_matrix.getExecutionTarget());
+            return Tensor(0, 0, _prediction_matrix.getExecutionTarget());
         }
 
         Logger::logMessage(Input_Format{"Bce_Cost::computeGradient: rows={}, columns={}",
@@ -152,14 +152,12 @@ public:
         _input_file_stream.read(reinterpret_cast<char *>(&epsilon), sizeof(epsilon));
     }
 
-    const Matrix &getGradientMatrix() const noexcept { return gradient_matrix; }
-    const Matrix &getLossMatrix() const noexcept { return loss_matrix; }
+    const Tensor &getGradientMatrix() const noexcept { return gradient_matrix; }
+    const Tensor &getLossMatrix() const noexcept { return loss_matrix; }
     Cost_Type getType() const noexcept override { return Cost_Type::BCE; }
     float getEpsilon() const noexcept { return epsilon; }
 
-    void setGradientMatrix(const Matrix &_matrix) { gradient_matrix = _matrix; }
-    void setLossMatrix(const Matrix &_matrix) { loss_matrix = _matrix; }
+    void setGradientMatrix(const Tensor &_matrix) { gradient_matrix = _matrix; }
+    void setLossMatrix(const Tensor &_matrix) { loss_matrix = _matrix; }
     void setEpsilon(float _epsilon) noexcept { epsilon = _epsilon; }
 };
-
-using BCE_Cost = Bce_Cost;

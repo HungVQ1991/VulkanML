@@ -31,3 +31,6 @@ include/environment/
 .prettierrc
 include/tokenizer/
 token.cpp
+build_syllable_tokenizer.cpp
+tokenizer/
+VULKANML_PROJECT_REVIEW.md

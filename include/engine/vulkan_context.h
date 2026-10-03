@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstring>
 #include <format>
 #include <functional>
@@ -14,7 +15,9 @@
 #include <vulkan/vulkan.h>
 
 #include "helper/logger.h"
+#include "helper/training_profiler.h"
 #include "helper/magic_enum.hpp"
+#include "helper/user_preferences.h"
 #include "vulkan_sub_allocator.h"
 
 #ifndef IS_VULKAN_DEBUG_VALIDATION
@@ -94,11 +97,20 @@ private:
     mutable VkFence fences[MAX_FRAMES_IN_FLIGHT]{VK_NULL_HANDLE, VK_NULL_HANDLE};
     mutable std::function<void(VkFence)> flush_callback = nullptr;
 
+    bool is_timeline_semaphore_supported = false;
+    VkSemaphore timeline_semaphore = VK_NULL_HANDLE;
+    mutable std::atomic<uint64_t> current_timeline_value{0};
+
+    mutable VkBuffer readback_staging_buffer = VK_NULL_HANDLE;
+    mutable Memory_Allocation readback_staging_allocation{};
+    mutable void *readback_mapped_pointer = nullptr;
+    mutable VkDeviceSize readback_staging_capacity = 0;
+
     mutable std::mutex garbage_mutex;
-    mutable std::mutex context_mutex;
+    mutable std::recursive_mutex context_mutex;
     mutable std::vector<Resource_Garbage> garbage_bins[MAX_FRAMES_IN_FLIGHT];
 
-    mutable bool is_frame_ready[MAX_FRAMES_IN_FLIGHT]{false, false};
+    mutable bool is_frame_ready[MAX_FRAMES_IN_FLIGHT]{true, true};
 
     void initializeFences()
     {
@@ -118,6 +130,45 @@ private:
                                    Log_Feature::DEVICE_MANAGEMENT | Log_Feature::SYNCHRONIZATION);
                 throw std::runtime_error("Failed to create fence");
             }
+        }
+    }
+
+    void initializeTimelineSemaphore()
+    {
+        if (!User_Preferences::getInstance().isTimelineSemaphoreEnabled())
+        {
+            is_timeline_semaphore_supported = false;
+            return;
+        }
+
+        VkSemaphoreTypeCreateInfo timeline_type_create_info{
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
+            .pNext = nullptr,
+            .semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE,
+            .initialValue = 0};
+
+        VkSemaphoreCreateInfo semaphore_create_info{
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+            .pNext = &timeline_type_create_info,
+            .flags = 0};
+
+        if (vkCreateSemaphore(device, &semaphore_create_info, nullptr, &timeline_semaphore) == VK_SUCCESS)
+        {
+            is_timeline_semaphore_supported = true;
+            Logger::logMessage("Vulkan_Context::initializeTimelineSemaphore: Timeline semaphore initialized successfully",
+                               Log_Level::LOG_INFO,
+                               true,
+                               0,
+                               Log_Feature::SYNCHRONIZATION);
+        }
+        else
+        {
+            is_timeline_semaphore_supported = false;
+            Logger::logMessage("Vulkan_Context::initializeTimelineSemaphore: Failed to create timeline semaphore",
+                               Log_Level::LOG_WARNING,
+                               true,
+                               0,
+                               Log_Feature::SYNCHRONIZATION);
         }
     }
 
@@ -373,6 +424,17 @@ private:
             }
         }
 
+        VkPhysicalDeviceTimelineSemaphoreFeatures timeline_semaphore_features{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES,
+            .pNext = nullptr,
+            .timelineSemaphore = VK_TRUE};
+
+        if (User_Preferences::getInstance().isTimelineSemaphoreEnabled())
+        {
+            timeline_semaphore_features.pNext = device_create_pnext;
+            device_create_pnext = &timeline_semaphore_features;
+        }
+
         VkPhysicalDeviceFeatures enabled_features{};
 
         VkDeviceCreateInfo device_create_information{
@@ -425,11 +487,10 @@ private:
             return;
         }
 
-        std::vector<VkCooperativeMatrixPropertiesKHR> properties(
-            property_count,
-            VkCooperativeMatrixPropertiesKHR{
-                .sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR,
-                .pNext = nullptr});
+        VkCooperativeMatrixPropertiesKHR default_property{};
+        default_property.sType = VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR;
+        default_property.pNext = nullptr;
+        std::vector<VkCooperativeMatrixPropertiesKHR> properties(property_count, default_property);
 
         if (vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR(physical_device, &property_count, properties.data()) != VK_SUCCESS)
         {
@@ -525,6 +586,7 @@ public:
         createPipelineCache();
         createCommandPool();
         initializeFences();
+        initializeTimelineSemaphore();
         allocator = std::make_unique<Vulkan_Sub_Allocator>(device, *this, physical_device);
     }
 
@@ -557,6 +619,22 @@ public:
             }
         }
 
+        if (readback_staging_buffer != VK_NULL_HANDLE)
+        {
+            vkUnmapMemory(device, readback_staging_allocation.memory);
+            vkDestroyBuffer(device, readback_staging_buffer, nullptr);
+            allocator->free(readback_staging_allocation);
+            readback_staging_buffer = VK_NULL_HANDLE;
+            readback_mapped_pointer = nullptr;
+            readback_staging_capacity = 0;
+        }
+
+        if (timeline_semaphore != VK_NULL_HANDLE)
+        {
+            vkDestroySemaphore(device, timeline_semaphore, nullptr);
+            timeline_semaphore = VK_NULL_HANDLE;
+        }
+
         allocator.reset();
 
         if (command_pool != VK_NULL_HANDLE)
@@ -587,6 +665,11 @@ public:
 
     void deferDestruction(uint32_t _used_frame, VkBuffer _buffer, const Memory_Allocation &_allocation) const
     {
+        if (_buffer != VK_NULL_HANDLE)
+        {
+            removeTransferTasksForBuffer(_buffer);
+        }
+
         if (_buffer != VK_NULL_HANDLE || _allocation.memory != VK_NULL_HANDLE)
         {
             std::lock_guard<std::mutex> lock(garbage_mutex);
@@ -626,8 +709,6 @@ public:
 
     void *allocateStagingSpace(uint32_t _frame_index, VkDeviceSize _size, VkBuffer &_out_buffer, VkDeviceSize &_out_offset) const
     {
-        std::lock_guard<std::mutex> lock(context_mutex);
-
         if (_frame_index >= MAX_FRAMES_IN_FLIGHT)
         {
             Logger::logMessage(Input_Format{"Vulkan_Context::allocateStagingSpace: frame_index out of bounds ({})", _frame_index},
@@ -638,10 +719,15 @@ public:
             _frame_index = _frame_index % MAX_FRAMES_IN_FLIGHT;
         }
 
-        if (current_offsets[_frame_index] + _size > staging_capacities[_frame_index] || staging_buffers[_frame_index] == VK_NULL_HANDLE)
+        std::lock_guard lock(context_mutex);
+
+        constexpr VkDeviceSize ALIGNMENT = 256;
+        VkDeviceSize aligned_size = (_size + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1);
+
+        if (staging_buffers[_frame_index] == VK_NULL_HANDLE || aligned_size > staging_capacities[_frame_index])
         {
             constexpr VkDeviceSize INITIAL_STAGING_CAPACITY = 32 * 1024 * 1024;
-            VkDeviceSize calculated_size = std::max(staging_capacities[_frame_index] * 2, current_offsets[_frame_index] + _size + 1024 * 1024);
+            VkDeviceSize calculated_size = std::max(staging_capacities[_frame_index] * 2, current_offsets[_frame_index] + aligned_size + 1024 * 1024);
             VkDeviceSize new_capacity = std::max(INITIAL_STAGING_CAPACITY, calculated_size);
 
             Logger::logMessage(Input_Format{"Vulkan_Context::allocateStagingSpace: Reallocating staging buffer for frame {} to new capacity {} bytes", _frame_index, new_capacity},
@@ -728,10 +814,20 @@ public:
             staging_capacities[_frame_index] = new_capacity;
         }
 
+        if (current_offsets[_frame_index] + aligned_size > staging_capacities[_frame_index])
+        {
+            const_cast<Vulkan_Context*>(this)->executePendingTransfers();
+            if (!is_frame_ready[_frame_index])
+            {
+                const_cast<Vulkan_Context*>(this)->prepareFrame(_frame_index);
+            }
+            current_offsets[_frame_index] = 0;
+        }
+
         _out_buffer = staging_buffers[_frame_index];
         _out_offset = current_offsets[_frame_index];
         void *target_pointer = static_cast<char *>(staging_mapped_pointers[_frame_index]) + _out_offset;
-        current_offsets[_frame_index] += _size;
+        current_offsets[_frame_index] += aligned_size;
 
         Logger::logMessage(Input_Format{"Vulkan_Context::allocateStagingSpace: Allocated {} bytes in staging buffer for frame {}", _size, _frame_index},
                            Log_Level::LOG_DEBUG,
@@ -788,20 +884,31 @@ public:
                                Log_Feature::MEMORY_ALLOCATION | Log_Feature::MEMORY_TRANSFER);
             return;
         }
-        std::lock_guard<std::mutex> lock(context_mutex);
+        std::lock_guard lock(context_mutex);
         current_offsets[_frame_index] = 0;
     }
 
     void addTransferTask(const Buffer_Transfer_Task &_task) const
     {
-        std::lock_guard<std::mutex> lock(context_mutex);
+        std::lock_guard lock(context_mutex);
         pending_transfer_tasks.push_back(_task);
     }
 
+    void removeTransferTasksForBuffer(VkBuffer _buffer) const
+    {
+        if (_buffer == VK_NULL_HANDLE)
+        {
+            return;
+        }
+        std::lock_guard lock(context_mutex);
+        std::erase_if(pending_transfer_tasks, [_buffer](const Buffer_Transfer_Task &task) {
+            return task.source_buffer == _buffer || task.destination_buffer == _buffer;
+        });
+    }
 
     void clearTransferTasks() const
     {
-        std::lock_guard<std::mutex> lock(context_mutex);
+        std::lock_guard lock(context_mutex);
         pending_transfer_tasks.clear();
     }
 
@@ -809,7 +916,7 @@ public:
     {
         std::vector<Buffer_Transfer_Task> transfers_to_execute;
         {
-            std::lock_guard<std::mutex> lock(context_mutex);
+            std::lock_guard lock(context_mutex);
             if (pending_transfer_tasks.empty())
             {
                 return;
@@ -855,12 +962,25 @@ public:
 
         for (const auto &task : transfers_to_execute)
         {
-            VkBufferCopy copy_region{
-                .srcOffset = task.source_offset,
-                .dstOffset = task.destination_offset,
-                .size = task.size};
+            if (task.destination_buffer == VK_NULL_HANDLE || task.size == 0 ||
+                (task.source_buffer != VK_NULL_HANDLE && task.source_buffer == task.destination_buffer && task.source_offset == task.destination_offset))
+            {
+                continue;
+            }
 
-            vkCmdCopyBuffer(command_buffer, task.source_buffer, task.destination_buffer, 1, &copy_region);
+            if (task.source_buffer == VK_NULL_HANDLE)
+            {
+                vkCmdFillBuffer(command_buffer, task.destination_buffer, task.destination_offset, task.size, static_cast<uint32_t>(task.source_offset));
+            }
+            else
+            {
+                VkBufferCopy copy_region{
+                    .srcOffset = task.source_offset,
+                    .dstOffset = task.destination_offset,
+                    .size = task.size};
+
+                vkCmdCopyBuffer(command_buffer, task.source_buffer, task.destination_buffer, 1, &copy_region);
+            }
 
             VkBufferMemoryBarrier memory_barrier{
                 .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
@@ -929,11 +1049,14 @@ public:
         }
 
         {
-            std::lock_guard<std::mutex> lock(context_mutex);
+            std::lock_guard lock(context_mutex);
             for (const auto &staging_garbage_item : staging_garbages[_frame_index])
             {
                 if (staging_garbage_item.buffer != VK_NULL_HANDLE)
                 {
+                    std::erase_if(pending_transfer_tasks, [&](const Buffer_Transfer_Task &task) {
+                        return task.source_buffer == staging_garbage_item.buffer || task.destination_buffer == staging_garbage_item.buffer;
+                    });
                     vkDestroyBuffer(device, staging_garbage_item.buffer, nullptr);
                 }
                 if (staging_garbage_item.allocation.memory != VK_NULL_HANDLE)
@@ -963,6 +1086,7 @@ public:
         {
             if (garbage_item.buffer != VK_NULL_HANDLE)
             {
+                removeTransferTasksForBuffer(garbage_item.buffer);
                 vkDestroyBuffer(device, garbage_item.buffer, nullptr);
             }
             if (garbage_item.allocation.memory != VK_NULL_HANDLE)
@@ -972,16 +1096,22 @@ public:
         }
     }
 
-    void prepareFrame()
+    void prepareFrame(uint32_t _frame_index = UINT32_MAX)
     {
-        if (is_frame_ready[current_frame])
+        uint32_t target_frame = (_frame_index == UINT32_MAX) ? current_frame : _frame_index;
+        if (target_frame >= MAX_FRAMES_IN_FLIGHT)
         {
             return;
         }
 
-        if (device == VK_NULL_HANDLE || fences[current_frame] == VK_NULL_HANDLE)
+        if (is_frame_ready[target_frame])
         {
-            Logger::logMessage(Input_Format{"Vulkan_Context::prepareFrame: Invalid device or fence handle for frame {}", current_frame},
+            return;
+        }
+
+        if (device == VK_NULL_HANDLE || fences[target_frame] == VK_NULL_HANDLE)
+        {
+            Logger::logMessage(Input_Format{"Vulkan_Context::prepareFrame: Invalid device or fence handle for frame {}", target_frame},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
@@ -989,14 +1119,14 @@ public:
             throw std::runtime_error("invalid handle");
         }
 
-        VkResult fence_status = vkGetFenceStatus(device, fences[current_frame]);
+        VkResult fence_status = vkGetFenceStatus(device, fences[target_frame]);
         if (fence_status == VK_NOT_READY)
         {
-            vkWaitForFences(device, 1, &fences[current_frame], VK_TRUE, UINT64_MAX);
+            vkWaitForFences(device, 1, &fences[target_frame], VK_TRUE, UINT64_MAX);
         }
 
-        cleanGarbage(current_frame);
-        is_frame_ready[current_frame] = true;
+        cleanGarbage(target_frame);
+        is_frame_ready[target_frame] = true;
     }
 
     void advanceFrame() const
@@ -1041,11 +1171,41 @@ public:
                            Log_Feature::MEMORY_TRANSFER);
     }
 
+    void fillBuffer(VkBuffer _destination_buffer,
+                    VkDeviceSize _size,
+                    VkDeviceSize _destination_offset = 0,
+                    uint32_t _pattern = 0) const
+    {
+        if (_destination_buffer == VK_NULL_HANDLE || _size == 0)
+        {
+            Logger::logMessage("Vulkan_Context::fillBuffer: Invalid parameters provided for buffer fill",
+                               Log_Level::LOG_WARNING,
+                               true,
+                               0,
+                               Log_Feature::MEMORY_TRANSFER);
+            return;
+        }
+
+        Buffer_Transfer_Task transfer_task{
+            .source_buffer = VK_NULL_HANDLE,
+            .source_offset = static_cast<VkDeviceSize>(_pattern),
+            .destination_buffer = _destination_buffer,
+            .destination_offset = _destination_offset,
+            .size = _size};
+
+        addTransferTask(transfer_task);
+        Logger::logMessage(Input_Format{"Vulkan_Context::fillBuffer: Enqueued fill task of size {} bytes, pattern 0x{:08x}", _size, _pattern},
+                           Log_Level::LOG_DEBUG,
+                           true,
+                           0,
+                           Log_Feature::MEMORY_TRANSFER);
+    }
+
     Vulkan_Sub_Allocator &getAllocator() const noexcept { return *allocator; }
     const VkCooperativeMatrixPropertiesKHR &getCooperativeMatrixProperties() const noexcept { return cooperative_matrix_properties; }
     const std::vector<Buffer_Transfer_Task> &getTransferTasks() const
     {
-        std::lock_guard<std::mutex> lock(context_mutex);
+        std::lock_guard lock(context_mutex);
         return pending_transfer_tasks;
     }
     VkDeviceSize getCurrentStagingOffset(uint32_t _frame_index) const noexcept { return current_offsets[_frame_index]; }
@@ -1083,5 +1243,122 @@ public:
         {
             is_float16_enabled = _enable;
         }
+    }
+
+    uint64_t getNextTimelineValue() const noexcept { return ++current_timeline_value; }
+    uint64_t getCurrentTimelineValue() const noexcept { return current_timeline_value.load(); }
+    VkSemaphore getTimelineSemaphore() const noexcept { return timeline_semaphore; }
+    bool isTimelineSemaphoreSupported() const noexcept { return is_timeline_semaphore_supported && (timeline_semaphore != VK_NULL_HANDLE); }
+
+    void waitTimelineSemaphore(uint64_t target_value, uint64_t timeout_ns = UINT64_MAX) const
+    {
+        if (!isTimelineSemaphoreSupported())
+        {
+            if (device != VK_NULL_HANDLE && compute_queue != VK_NULL_HANDLE)
+            {
+                vkQueueWaitIdle(compute_queue);
+            }
+            return;
+        }
+
+        uint64_t wait_values[1] = { target_value };
+        VkSemaphoreWaitInfo wait_info{
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .semaphoreCount = 1,
+            .pSemaphores = &timeline_semaphore,
+            .pValues = wait_values};
+
+        VkResult res = vkWaitSemaphores(device, &wait_info, timeout_ns);
+        if (res != VK_SUCCESS)
+        {
+            Logger::logMessage(Input_Format{"Vulkan_Context::waitTimelineSemaphore: Wait failed with code {}", static_cast<int>(res)},
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::SYNCHRONIZATION);
+        }
+    }
+
+    void *ensureReadbackStagingBuffer(VkDeviceSize required_size, VkBuffer &out_buffer) const
+    {
+        std::lock_guard lock(context_mutex);
+
+        constexpr VkDeviceSize ALIGNMENT = 256;
+        VkDeviceSize aligned_size = (required_size + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1);
+
+        VkDeviceSize initial_capacity = static_cast<VkDeviceSize>(User_Preferences::getInstance().getStagingPoolSizeMb()) * 1024 * 1024;
+        if (initial_capacity == 0)
+        {
+            initial_capacity = 64 * 1024 * 1024;
+        }
+
+        if (readback_staging_buffer == VK_NULL_HANDLE || aligned_size > readback_staging_capacity)
+        {
+            VkDeviceSize new_capacity = std::max(initial_capacity, std::max(readback_staging_capacity * 2, aligned_size));
+
+            if (readback_staging_buffer != VK_NULL_HANDLE)
+            {
+                vkDeviceWaitIdle(device);
+                vkUnmapMemory(device, readback_staging_allocation.memory);
+                vkDestroyBuffer(device, readback_staging_buffer, nullptr);
+                allocator->free(readback_staging_allocation);
+                readback_staging_buffer = VK_NULL_HANDLE;
+                readback_mapped_pointer = nullptr;
+                readback_staging_capacity = 0;
+            }
+
+            VkBufferCreateInfo buffer_create_info{
+                .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .size = new_capacity,
+                .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+                .queueFamilyIndexCount = 0,
+                .pQueueFamilyIndices = nullptr};
+
+            if (vkCreateBuffer(device, &buffer_create_info, nullptr, &readback_staging_buffer) != VK_SUCCESS)
+            {
+                Logger::logMessage("Vulkan_Context::ensureReadbackStagingBuffer: Failed to create readback staging buffer",
+                                   Log_Level::LOG_ERROR,
+                                   true,
+                                   0,
+                                   Log_Feature::MEMORY_ALLOCATION | Log_Feature::MEMORY_TRANSFER);
+                throw std::runtime_error("Vulkan_Context::ensureReadbackStagingBuffer: Failed to create readback staging buffer");
+            }
+
+            VkMemoryRequirements mem_req;
+            vkGetBufferMemoryRequirements(device, readback_staging_buffer, &mem_req);
+
+            readback_staging_allocation = allocator->allocate(mem_req, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, physical_device);
+
+            if (vkBindBufferMemory(device, readback_staging_buffer, readback_staging_allocation.memory, readback_staging_allocation.offset) != VK_SUCCESS)
+            {
+                vkDestroyBuffer(device, readback_staging_buffer, nullptr);
+                allocator->free(readback_staging_allocation);
+                readback_staging_buffer = VK_NULL_HANDLE;
+                throw std::runtime_error("Vulkan_Context::ensureReadbackStagingBuffer: Failed to bind memory");
+            }
+
+            if (vkMapMemory(device, readback_staging_allocation.memory, readback_staging_allocation.offset, new_capacity, 0, &readback_mapped_pointer) != VK_SUCCESS)
+            {
+                vkDestroyBuffer(device, readback_staging_buffer, nullptr);
+                allocator->free(readback_staging_allocation);
+                readback_staging_buffer = VK_NULL_HANDLE;
+                throw std::runtime_error("Vulkan_Context::ensureReadbackStagingBuffer: Failed to map memory");
+            }
+
+            readback_staging_capacity = new_capacity;
+            Logger::logMessage(Input_Format{"Vulkan_Context::ensureReadbackStagingBuffer: Allocated & persistently mapped readback staging buffer of {} MB", new_capacity / (1024 * 1024)},
+                               Log_Level::LOG_INFO,
+                               true,
+                               0,
+                               Log_Feature::MEMORY_ALLOCATION | Log_Feature::MEMORY_TRANSFER);
+        }
+
+        out_buffer = readback_staging_buffer;
+        return readback_mapped_pointer;
     }
 };

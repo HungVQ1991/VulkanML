@@ -1,0 +1,35 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer InMatrix { float16_t data_in[]; };
+layout(std430, binding = 1) writeonly buffer OutY { float16_t data_y[]; };
+
+layout(push_constant) uniform Constants {
+    uint total_elements; // rows * half_dim
+    uint half_dim;       // total_cols / 2
+} pcs;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pcs.total_elements) return;
+
+    uint row = idx / pcs.half_dim;
+    uint col = idx % pcs.half_dim;
+    uint total_cols = pcs.half_dim * 2;
+    uint in_base = row * total_cols + col;
+
+    float a = float(data_in[in_base]);
+    float b = float(data_in[in_base + pcs.half_dim]);
+    if (isnan(a) || isinf(a)) a = 0.0;
+    if (isnan(b) || isinf(b)) b = 0.0;
+
+    float sig_a = 1.0 / (1.0 + exp(-clamp(a, -85.0, 85.0)));
+    float silu_a = a * sig_a;
+    float y = silu_a * b;
+    if (isnan(y) || isinf(y)) y = 0.0;
+
+    data_y[idx] = float16_t(clamp(y, -65504.0, 65504.0));
+}

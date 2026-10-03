@@ -1,0 +1,78 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer InBuffer { float16_t in_data[]; };
+layout(std430, binding = 1) writeonly buffer OutBuffer { float16_t out_data[]; };
+
+layout(push_constant) uniform Constants {
+    uint total_pairs;
+    uint seq_len;
+    uint head_dim;
+    int direction; // +1 for forward, -1 for backward
+    float base;
+    uint num_heads;
+    uint mode; // 0: standard, 1: fused_permute ([B,S,H,D] -> [B,H,S,D]), 2: fused_unpermute ([B,H,S,D] -> [B,S,H,D])
+} pcs;
+
+void main() {
+    uint pair_id = gl_GlobalInvocationID.x;
+    if (pair_id >= pcs.total_pairs) return;
+
+    uint base_idx = pair_id * 2;
+    uint D = pcs.head_dim;
+    uint S = pcs.seq_len;
+    uint H = pcs.num_heads;
+
+    uint c = base_idx % D;
+    uint pair_idx = c / 2;
+    uint token_pos;
+    uint in_idx;
+    uint out_idx;
+
+    if (pcs.mode == 1) {
+        // Mode 1 (Fused Permute FWD): thread pair_id is in [B, H, S, D] target layout
+        token_pos = (base_idx / D) % S;
+        uint h = (base_idx / (D * S)) % H;
+        uint b = base_idx / (D * S * H);
+
+        // Read from [B, S, H, D] source layout
+        in_idx = b * (S * H * D) + token_pos * (H * D) + h * D + c;
+        out_idx = base_idx;
+    } else if (pcs.mode == 2) {
+        // Mode 2 (Fused Unpermute BWD): thread pair_id is in [B, H, S, D] source layout
+        token_pos = (base_idx / D) % S;
+        uint h = (base_idx / (D * S)) % H;
+        uint b = base_idx / (D * S * H);
+
+        // Read from [B, H, S, D] source layout
+        in_idx = base_idx;
+        // Write to [B, S, H, D] target layout
+        out_idx = b * (S * H * D) + token_pos * (H * D) + h * D + c;
+    } else {
+        // Standard mode 0
+        token_pos = (base_idx / D) % S;
+        in_idx = base_idx;
+        out_idx = base_idx;
+    }
+
+    float theta = pow(pcs.base, -2.0 * float(pair_idx) / float(D));
+    float alpha = float(pcs.direction) * float(token_pos) * theta;
+    float cos_a = cos(alpha);
+    float sin_a = sin(alpha);
+
+    float x0 = float(in_data[in_idx]);
+    float x1 = float(in_data[in_idx + 1]);
+    if (isnan(x0) || isinf(x0)) x0 = 0.0;
+    if (isnan(x1) || isinf(x1)) x1 = 0.0;
+
+    float r0 = x0 * cos_a - x1 * sin_a;
+    float r1 = x0 * sin_a + x1 * cos_a;
+    if (isnan(r0) || isinf(r0)) r0 = 0.0;
+    if (isnan(r1) || isinf(r1)) r1 = 0.0;
+
+    out_data[out_idx]     = float16_t(clamp(r0, -65504.0, 65504.0));
+    out_data[out_idx + 1] = float16_t(clamp(r1, -65504.0, 65504.0));
+}

@@ -1,0 +1,36 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer GradY { float data_dy[]; };
+layout(std430, binding = 1) readonly buffer InMatrix { float data_in[]; };
+layout(std430, binding = 2) writeonly buffer GradX { float data_dx[]; };
+
+layout(push_constant) uniform Constants {
+    uint total_elements; // rows * half_dim
+    uint half_dim;       // total_cols / 2
+} pcs;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pcs.total_elements) return;
+
+    uint row = idx / pcs.half_dim;
+    uint col = idx % pcs.half_dim;
+    uint total_cols = pcs.half_dim * 2;
+    uint in_base = row * total_cols + col;
+
+    float dy = data_dy[idx];
+    float a = data_in[in_base];
+    float b = data_in[in_base + pcs.half_dim];
+
+    float sig_a = 1.0 / (1.0 + exp(-clamp(a, -85.0, 85.0)));
+    float silu_a = a * sig_a;
+    float d_silu_a = sig_a * (1.0 + a * (1.0 - sig_a));
+
+    float db_val = dy * silu_a;
+    float da_val = dy * b * d_silu_a;
+
+    data_dx[in_base] = da_val;
+    data_dx[in_base + pcs.half_dim] = db_val;
+}

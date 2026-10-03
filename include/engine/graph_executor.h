@@ -182,6 +182,11 @@ private:
             {
                 uint32_t real_buffer_index = (i < _output_buffer_indices.size()) ? _output_buffer_indices[i] : 0;
                 bool is_external = _external_buffer_indices_set.contains(real_buffer_index);
+                std::string target_type = "float";
+                if (real_buffer_index < _node_buffers.size() && _node_buffers[real_buffer_index])
+                {
+                    target_type = std::string(getDataTypeGlslName(_node_buffers[real_buffer_index]->getDataType()));
+                }
 
                 size_t position = 0;
                 while ((position = _text.find(token_prefix, position)) != std::string::npos)
@@ -193,16 +198,26 @@ private:
                         _text.replace(position, end_position - position + 1, _output_identifiers[i]);
                         position += _output_identifiers[i].length();
 
+                        if (target_type == "float16_t")
+                        {
+                            size_t eq_pos = _text.find('=', position);
+                            if (eq_pos != std::string::npos)
+                            {
+                                size_t semi_pos = _text.find(';', eq_pos);
+                                if (semi_pos != std::string::npos)
+                                {
+                                    std::string expr = _text.substr(eq_pos + 1, semi_pos - (eq_pos + 1));
+                                    std::string wrapped_expr = std::format(" float16_t({})", expr);
+                                    _text.replace(eq_pos + 1, semi_pos - (eq_pos + 1), wrapped_expr);
+                                }
+                            }
+                        }
+
                         if (is_external)
                         {
                             size_t semicolon_position = _text.find(';', position);
                             if (semicolon_position != std::string::npos)
                             {
-                                std::string target_type = "float";
-                                if (real_buffer_index < _node_buffers.size() && _node_buffers[real_buffer_index])
-                                {
-                                    target_type = std::string(getDataTypeGlslName(_node_buffers[real_buffer_index]->getDataType()));
-                                }
                                 std::string write_statement = std::format(" buf_{}[{}] = {}({});", real_buffer_index, index_expression, target_type, _output_identifiers[i]);
                                 _text.insert(semicolon_position + 1, write_statement);
                                 position = semicolon_position + 1 + write_statement.length();
@@ -264,7 +279,7 @@ private:
                         }
                     }
                 }
-                if (op.pipeline_id == Compute_Pipeline::ADAM_UPDATE)
+                if (op.pipeline_id == Compute_Pipeline::ADAM_UPDATE || op.pipeline_id == Compute_Pipeline::ADAM_UPDATE_FP16)
                 {
                     for (size_t idx : {0, 2, 3})
                     {
@@ -303,9 +318,20 @@ private:
                     written_buffers.push_back(_node.buffers[i]);
                 }
             }
-            if (_node.pipeline_id == Compute_Pipeline::ADAM_UPDATE)
+            if (_node.pipeline_id == Compute_Pipeline::ADAM_UPDATE || _node.pipeline_id == Compute_Pipeline::ADAM_UPDATE_FP16)
             {
                 for (size_t idx : {0, 2, 3})
+                {
+                    if (idx < _node.buffers.size() && _node.buffers[idx])
+                    {
+                        written_buffers.push_back(_node.buffers[idx]);
+                    }
+                }
+            }
+            else if (_node.pipeline_id == Compute_Pipeline::LINEAR_BACKWARD_WEIGHT_ADAM_FP16 ||
+                     _node.pipeline_id == Compute_Pipeline::LINEAR_BACKWARD_WEIGHT_ADAM_COOPMAT_FP16)
+            {
+                for (size_t idx : {2, 3, 4, 6, 7})
                 {
                     if (idx < _node.buffers.size() && _node.buffers[idx])
                     {
@@ -367,6 +393,24 @@ private:
                 static_cast<uint32_t>(buffer_barriers.size()), buffer_barriers.data(),
                 0, nullptr);
         }
+    }
+
+    void insertComputeMemoryBarrier(VkCommandBuffer _command_buffer) const
+    {
+        VkMemoryBarrier memory_barrier{
+            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+            .pNext = nullptr,
+            .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT};
+
+        vkCmdPipelineBarrier(
+            _command_buffer,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0,
+            1, &memory_barrier,
+            0, nullptr,
+            0, nullptr);
     }
 
     void executeFallbackNode(VkCommandBuffer _command_buffer, const Compute_Node &_node, size_t _node_index, uint32_t _frame_index)
@@ -940,6 +984,11 @@ public:
                 buffer_type = getDataTypeGlslName(_node.buffers[buffer_index]->getDataType());
             }
 
+            if (buffer_type == "float16_t")
+            {
+                shader_generator.enableFloat16();
+            }
+
             shader_generator.addBuffer(buffer_index, std::format("buf_{}", buffer_index), buffer_type, buffer_access);
         }
 
@@ -1014,13 +1063,15 @@ public:
                 shader_generator.addLogicSnippet("    uint ih = n_ih % pc.data[1];");
                 shader_generator.addLogicSnippet("    if (c >= pc.data[3] || iw >= pc.data[2] || ih >= pc.data[1] || n >= pc.data[0]) return;");
             }
-            else if (primary_pipeline == Compute_Pipeline::GLOBAL_AVGPOOL_FORWARD)
+            else if (primary_pipeline == Compute_Pipeline::GLOBAL_AVGPOOL_FORWARD ||
+                     primary_pipeline == Compute_Pipeline::GLOBAL_AVGPOOL_FORWARD_FP16)
             {
                 shader_generator.addLogicSnippet("    uint c = gl_GlobalInvocationID.x;");
                 shader_generator.addLogicSnippet("    uint n = gl_GlobalInvocationID.y;");
                 shader_generator.addLogicSnippet("    if (c >= pc.data[3] || n >= pc.data[0]) return;");
             }
-            else if (primary_pipeline == Compute_Pipeline::GLOBAL_AVGPOOL_BACKWARD)
+            else if (primary_pipeline == Compute_Pipeline::GLOBAL_AVGPOOL_BACKWARD ||
+                     primary_pipeline == Compute_Pipeline::GLOBAL_AVGPOOL_BACKWARD_FP16)
             {
                 shader_generator.addLogicSnippet("    uint c = gl_GlobalInvocationID.x;");
                 shader_generator.addLogicSnippet("    uint iw = gl_GlobalInvocationID.y;");
@@ -1468,10 +1519,16 @@ public:
 
                     const auto *effective_buffers = &node.buffers;
                     std::vector<std::shared_ptr<gpu::vector>> localized_buffers;
-                    if (node.pipeline_id == Compute_Pipeline::ADAM_UPDATE && node.buffers.size() > 4)
+                    if ((node.pipeline_id == Compute_Pipeline::ADAM_UPDATE || node.pipeline_id == Compute_Pipeline::ADAM_UPDATE_FP16) && node.buffers.size() > 4)
                     {
                         localized_buffers = node.buffers;
                         localized_buffers[4] = dynamic_optimizer_buffers[_frame_index];
+                        effective_buffers = &localized_buffers;
+                    }
+                    else if ((node.pipeline_id == Compute_Pipeline::LINEAR_BACKWARD_WEIGHT_ADAM_FP16 || node.pipeline_id == Compute_Pipeline::LINEAR_BACKWARD_WEIGHT_ADAM_COOPMAT_FP16) && node.buffers.size() > 5)
+                    {
+                        localized_buffers = node.buffers;
+                        localized_buffers[5] = dynamic_optimizer_buffers[_frame_index];
                         effective_buffers = &localized_buffers;
                     }
                     else if (node.pipeline_id == Compute_Pipeline::SGD_UPDATE && node.buffers.size() > 2)
@@ -1509,6 +1566,7 @@ public:
 
             if (node.is_barrier_required_after)
             {
+                insertComputeMemoryBarrier(_command_buffer);
                 insertBufferMemoryBarriers(_command_buffer, getNodeWrittenBuffers(node));
             }
         }
@@ -1545,7 +1603,6 @@ public:
                            0,
                            Log_Feature::DISPATCH_EXECUTION);
 
-        VkDevice device = context.getDevice();
         VkCommandBuffer command_buffer = command_buffers[_frame_index];
 
         context.resetFrameFence(_frame_index);
@@ -1580,17 +1637,25 @@ public:
         {
             for (const auto &task : _transfer_tasks)
             {
-                if (task.size == 0 || task.source_buffer == VK_NULL_HANDLE || task.destination_buffer == VK_NULL_HANDLE)
+                if (task.destination_buffer == VK_NULL_HANDLE || task.size == 0 ||
+                    (task.source_buffer != VK_NULL_HANDLE && task.source_buffer == task.destination_buffer && task.source_offset == task.destination_offset))
                 {
                     continue;
                 }
 
-                VkBufferCopy copy_region{
-                    .srcOffset = task.source_offset,
-                    .dstOffset = task.destination_offset,
-                    .size = task.size};
+                if (task.source_buffer == VK_NULL_HANDLE)
+                {
+                    vkCmdFillBuffer(command_buffer, task.destination_buffer, task.destination_offset, task.size, static_cast<uint32_t>(task.source_offset));
+                }
+                else
+                {
+                    VkBufferCopy copy_region{
+                        .srcOffset = task.source_offset,
+                        .dstOffset = task.destination_offset,
+                        .size = task.size};
 
-                vkCmdCopyBuffer(command_buffer, task.source_buffer, task.destination_buffer, 1, &copy_region);
+                    vkCmdCopyBuffer(command_buffer, task.source_buffer, task.destination_buffer, 1, &copy_region);
+                }
             }
 
             VkMemoryBarrier transfer_memory_barrier{
@@ -1633,14 +1698,15 @@ public:
 
         VkFence primary_fence = (_external_fence != VK_NULL_HANDLE) ? _external_fence : context.getFrameFence(_frame_index);
 
-        if (vkQueueSubmit(context.getComputeQueue(), 1, &submit_information, primary_fence) != VK_SUCCESS)
+        VkResult submit_res = vkQueueSubmit(context.getComputeQueue(), 1, &submit_information, primary_fence);
+        if (submit_res != VK_SUCCESS)
         {
-            Logger::logMessage(Input_Format{"Graph_Executor::compileAndExecute: Failed to submit command buffer for frame {}", _frame_index},
+            Logger::logMessage(Input_Format{"Graph_Executor::compileAndExecute: Failed to submit command buffer for frame {}, VkResult={}", _frame_index, static_cast<int>(submit_res)},
                                Log_Level::LOG_ERROR,
                                true,
                                0,
                                Log_Feature::DISPATCH_EXECUTION);
-            throw std::runtime_error("Failed to submit command buffer");
+            throw std::runtime_error("Failed to submit command buffer: VkResult=" + std::to_string(static_cast<int>(submit_res)));
         }
 
         if (_external_fence != VK_NULL_HANDLE && _external_fence != context.getFrameFence(_frame_index))
@@ -1725,7 +1791,11 @@ public:
             for (size_t b_idx = 0; b_idx < n.buffers.size(); ++b_idx)
             {
                 auto buf = n.buffers[b_idx];
-                if (n.pipeline_id == Compute_Pipeline::ADAM_UPDATE && b_idx == 4)
+                if ((n.pipeline_id == Compute_Pipeline::ADAM_UPDATE || n.pipeline_id == Compute_Pipeline::ADAM_UPDATE_FP16) && b_idx == 4)
+                {
+                    buf = dynamic_optimizer_buffers[_frame_index];
+                }
+                else if ((n.pipeline_id == Compute_Pipeline::LINEAR_BACKWARD_WEIGHT_ADAM_FP16 || n.pipeline_id == Compute_Pipeline::LINEAR_BACKWARD_WEIGHT_ADAM_COOPMAT_FP16) && b_idx == 5)
                 {
                     buf = dynamic_optimizer_buffers[_frame_index];
                 }
@@ -1774,7 +1844,11 @@ public:
                     return false;
                 }
                 auto buf = n.buffers[b_idx];
-                if (n.pipeline_id == Compute_Pipeline::ADAM_UPDATE && b_idx == 4)
+                if ((n.pipeline_id == Compute_Pipeline::ADAM_UPDATE || n.pipeline_id == Compute_Pipeline::ADAM_UPDATE_FP16) && b_idx == 4)
+                {
+                    buf = dynamic_optimizer_buffers[_frame_index];
+                }
+                else if ((n.pipeline_id == Compute_Pipeline::LINEAR_BACKWARD_WEIGHT_ADAM_FP16 || n.pipeline_id == Compute_Pipeline::LINEAR_BACKWARD_WEIGHT_ADAM_COOPMAT_FP16) && b_idx == 5)
                 {
                     buf = dynamic_optimizer_buffers[_frame_index];
                 }
@@ -1838,17 +1912,25 @@ public:
 
             for (const auto &task : _transfer_tasks)
             {
-                if (task.size == 0 || task.source_buffer == VK_NULL_HANDLE || task.destination_buffer == VK_NULL_HANDLE)
+                if (task.destination_buffer == VK_NULL_HANDLE || task.size == 0 ||
+                    (task.source_buffer != VK_NULL_HANDLE && task.source_buffer == task.destination_buffer && task.source_offset == task.destination_offset))
                 {
                     continue;
                 }
 
-                VkBufferCopy copy_region{
-                    .srcOffset = task.source_offset,
-                    .dstOffset = task.destination_offset,
-                    .size = task.size};
+                if (task.source_buffer == VK_NULL_HANDLE)
+                {
+                    vkCmdFillBuffer(transfer_cmd, task.destination_buffer, task.destination_offset, task.size, static_cast<uint32_t>(task.source_offset));
+                }
+                else
+                {
+                    VkBufferCopy copy_region{
+                        .srcOffset = task.source_offset,
+                        .dstOffset = task.destination_offset,
+                        .size = task.size};
 
-                vkCmdCopyBuffer(transfer_cmd, task.source_buffer, task.destination_buffer, 1, &copy_region);
+                    vkCmdCopyBuffer(transfer_cmd, task.source_buffer, task.destination_buffer, 1, &copy_region);
+                }
             }
 
             VkMemoryBarrier transfer_memory_barrier{
@@ -1977,17 +2059,25 @@ public:
 
             for (const auto &task : _transfer_tasks)
             {
-                if (task.size == 0 || task.source_buffer == VK_NULL_HANDLE || task.destination_buffer == VK_NULL_HANDLE)
+                if (task.destination_buffer == VK_NULL_HANDLE || task.size == 0 ||
+                    (task.source_buffer != VK_NULL_HANDLE && task.source_buffer == task.destination_buffer && task.source_offset == task.destination_offset))
                 {
                     continue;
                 }
 
-                VkBufferCopy copy_region{
-                    .srcOffset = task.source_offset,
-                    .dstOffset = task.destination_offset,
-                    .size = task.size};
+                if (task.source_buffer == VK_NULL_HANDLE)
+                {
+                    vkCmdFillBuffer(transfer_cmd, task.destination_buffer, task.destination_offset, task.size, static_cast<uint32_t>(task.source_offset));
+                }
+                else
+                {
+                    VkBufferCopy copy_region{
+                        .srcOffset = task.source_offset,
+                        .dstOffset = task.destination_offset,
+                        .size = task.size};
 
-                vkCmdCopyBuffer(transfer_cmd, task.source_buffer, task.destination_buffer, 1, &copy_region);
+                    vkCmdCopyBuffer(transfer_cmd, task.source_buffer, task.destination_buffer, 1, &copy_region);
+                }
             }
 
             VkMemoryBarrier transfer_memory_barrier{

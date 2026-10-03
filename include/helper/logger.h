@@ -27,7 +27,7 @@
 #define ENABLE_LOGGING 0
 #endif
 
-bool is_coop = false;
+inline bool is_coop = false;
 
 enum class Log_Level : std::uint8_t
 {

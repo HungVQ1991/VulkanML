@@ -91,6 +91,7 @@ public:
           stride(_stride),
           padding(_padding),
           execution_target(_execution_target),
+          is_forward_completed(false),
           weights(0, 0, _execution_target),
           biases(0, 0, _execution_target),
           weights_gradient_tensor(0, 0, _execution_target),
@@ -105,8 +106,7 @@ public:
           input_gradient_tensor_fp16(0, 0, _execution_target),
           output_gradient_tensor_fp16(0, 0, _execution_target),
           im2col_scratch(0, 0, _execution_target),
-          im2col_scratch_fp16(0, 0, _execution_target),
-          is_forward_completed(false)
+          im2col_scratch_fp16(0, 0, _execution_target)
     {
         output_height = (input_height + 2 * padding - kernel_size) / stride + 1;
         output_width = (input_width + 2 * padding - kernel_size) / stride + 1;

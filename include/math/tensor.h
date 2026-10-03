@@ -218,6 +218,20 @@ public:
         return result;
     }
 
+    void updateSlice(size_t axis, size_t start, const Tensor &source)
+    {
+        implementation->updateSlice(axis, start, *source.implementation);
+    }
+
+    Tensor gatherRows(const std::vector<int32_t> &indices) const
+    {
+        size_t S = indices.size();
+        size_t D = getColumns();
+        Tensor result(Shape{ S, D }, getDataType(), execution_target);
+        implementation->gatherRows(indices, *result.implementation);
+        return result;
+    }
+
     Tensor contiguous() const
     {
         if (implementation->isContiguous() && implementation->getByteOffset() == 0)
@@ -229,24 +243,38 @@ public:
         return result;
     }
 
-    void matmul(const Tensor &other, Tensor &output) const { implementation->matmul(*other.implementation, *output.implementation); }
-    void matdiv(const Tensor &other, Tensor &output) const { implementation->matdiv(*other.implementation, *output.implementation); }
-    void add(const Tensor &other, Tensor &output) const { implementation->add(*other.implementation, *output.implementation); }
-    void sub(const Tensor &other, Tensor &output) const { implementation->sub(*other.implementation, *output.implementation); }
-    void mulScalar(float scalar, Tensor &output) const { implementation->mulScalar(scalar, *output.implementation); }
-    void divScalar(float scalar, Tensor &output) const { implementation->divScalar(scalar, *output.implementation); }
-    void hadamardMul(const Tensor &other, Tensor &output) const { implementation->hadamardMul(*other.implementation, *output.implementation); }
-    void hadamardDiv(const Tensor &other, Tensor &output) const { implementation->hadamardDiv(*other.implementation, *output.implementation); }
-    void transpose(Tensor &output) const { implementation->transpose(*output.implementation); }
-    void inverse(Tensor &output) const { implementation->inverse(*output.implementation); }
-    void normalize(Tensor &output) const { implementation->normalize(*output.implementation); }
-    void relu(Tensor &output) const { implementation->relu(*output.implementation); }
-    void reluBackward(const Tensor &output_gradient, Tensor &input_gradient) const { implementation->reluBackward(*output_gradient.implementation, *input_gradient.implementation); }
-    void gelu(Tensor &output) const { implementation->gelu(*output.implementation); }
-    void geluBackward(const Tensor &output_gradient, Tensor &input_gradient) const { implementation->geluBackward(*output_gradient.implementation, *input_gradient.implementation); }
-    void softmax(Tensor &output) const { implementation->softmax(*output.implementation); }
-    void softmaxBackward(const Tensor &output_gradient, Tensor &input_gradient) const { implementation->softmaxBackward(*output_gradient.implementation, *input_gradient.implementation); }
-    void matmulAdd(const Tensor &other, const Tensor &biases, Tensor &output) const { implementation->matmulAdd(*other.implementation, *biases.implementation, *output.implementation); }
+    void ensureOutputTarget(Tensor &output) const
+    {
+        if (output.getExecutionTarget() != execution_target)
+        {
+            output = Tensor(execution_target);
+        }
+    }
+
+    void contiguous(Tensor &output) const
+    {
+        ensureOutputTarget(output);
+        implementation->contiguous(*output.implementation);
+    }
+
+    void matmul(const Tensor &other, Tensor &output) const { ensureOutputTarget(output); implementation->matmul(*other.implementation, *output.implementation); }
+    void matdiv(const Tensor &other, Tensor &output) const { ensureOutputTarget(output); implementation->matdiv(*other.implementation, *output.implementation); }
+    void add(const Tensor &other, Tensor &output) const { ensureOutputTarget(output); implementation->add(*other.implementation, *output.implementation); }
+    void sub(const Tensor &other, Tensor &output) const { ensureOutputTarget(output); implementation->sub(*other.implementation, *output.implementation); }
+    void mulScalar(float scalar, Tensor &output) const { ensureOutputTarget(output); implementation->mulScalar(scalar, *output.implementation); }
+    void divScalar(float scalar, Tensor &output) const { ensureOutputTarget(output); implementation->divScalar(scalar, *output.implementation); }
+    void hadamardMul(const Tensor &other, Tensor &output) const { ensureOutputTarget(output); implementation->hadamardMul(*other.implementation, *output.implementation); }
+    void hadamardDiv(const Tensor &other, Tensor &output) const { ensureOutputTarget(output); implementation->hadamardDiv(*other.implementation, *output.implementation); }
+    void transpose(Tensor &output) const { ensureOutputTarget(output); implementation->transpose(*output.implementation); }
+    void inverse(Tensor &output) const { ensureOutputTarget(output); implementation->inverse(*output.implementation); }
+    void normalize(Tensor &output) const { ensureOutputTarget(output); implementation->normalize(*output.implementation); }
+    void relu(Tensor &output) const { ensureOutputTarget(output); implementation->relu(*output.implementation); }
+    void reluBackward(const Tensor &output_gradient, Tensor &input_gradient) const { ensureOutputTarget(input_gradient); implementation->reluBackward(*output_gradient.implementation, *input_gradient.implementation); }
+    void gelu(Tensor &output) const { ensureOutputTarget(output); implementation->gelu(*output.implementation); }
+    void geluBackward(const Tensor &output_gradient, Tensor &input_gradient) const { ensureOutputTarget(input_gradient); implementation->geluBackward(*output_gradient.implementation, *input_gradient.implementation); }
+    void softmax(Tensor &output) const { ensureOutputTarget(output); implementation->softmax(*output.implementation); }
+    void softmaxBackward(const Tensor &output_gradient, Tensor &input_gradient) const { ensureOutputTarget(input_gradient); implementation->softmaxBackward(*output_gradient.implementation, *input_gradient.implementation); }
+    void matmulAdd(const Tensor &other, const Tensor &biases, Tensor &output) const { ensureOutputTarget(output); implementation->matmulAdd(*other.implementation, *biases.implementation, *output.implementation); }
 
     void sgdUpdate(const Tensor &gradient, float learning_rate, float max_gradient = 0.0F, float inv_scale = 1.0F)
     {
@@ -262,7 +290,8 @@ public:
                     float epsilon,
                     size_t timestep,
                     float max_gradient = 1.0F,
-                    float inv_scale = 1.0F)
+                    float inv_scale = 1.0F,
+                    float weight_decay = 0.0F)
     {
         implementation->adamUpdate(*gradient.implementation,
                                    *first_moment.implementation,
@@ -273,7 +302,8 @@ public:
                                    epsilon,
                                    timestep,
                                    max_gradient,
-                                   inv_scale);
+                                   inv_scale,
+                                   weight_decay);
     }
 
     void conv2d(const Tensor &weights, const Tensor &biases, Tensor &output,
@@ -357,19 +387,202 @@ public:
                                           *input_gradient.implementation, epsilon);
     }
 
+    void rmsNormForward(const Tensor &gamma, Tensor &inv_rms, Tensor &output, float epsilon = 1e-5f) const
+    {
+        ensureOutputTarget(inv_rms);
+        ensureOutputTarget(output);
+        implementation->rmsNormForward(*gamma.implementation, *inv_rms.implementation, *output.implementation, epsilon);
+    }
+
+    void rmsNormBackward(const Tensor &output_gradient, const Tensor &gamma, const Tensor &inv_rms,
+                         Tensor &gamma_gradient, Tensor &input_gradient, bool accumulate_gamma = false) const
+    {
+        ensureOutputTarget(gamma_gradient);
+        ensureOutputTarget(input_gradient);
+        implementation->rmsNormBackward(*output_gradient.implementation, *gamma.implementation, *inv_rms.implementation,
+                                        *gamma_gradient.implementation, *input_gradient.implementation, accumulate_gamma);
+    }
+
+    void applyRoPE(Tensor &output, uint32_t seq_len, uint32_t head_dim, int direction = 1, float base = 10000.0f, uint32_t num_heads = 1, uint32_t mode = 0) const
+    {
+        ensureOutputTarget(output);
+        implementation->applyRoPE(*output.implementation, seq_len, head_dim, direction, base, num_heads, mode);
+    }
+
+    void swigluForward(const Tensor &b, Tensor &output) const
+    {
+        ensureOutputTarget(output);
+        implementation->swigluForward(*b.implementation, *output.implementation);
+    }
+
+    void swigluBackward(const Tensor &output_gradient, const Tensor &b, Tensor &grad_a, Tensor &grad_b) const
+    {
+        ensureOutputTarget(grad_a);
+        ensureOutputTarget(grad_b);
+        implementation->swigluBackward(*output_gradient.implementation, *b.implementation, *grad_a.implementation, *grad_b.implementation);
+    }
+
+    void fusedSwiGLUForward(Tensor &output) const
+    {
+        ensureOutputTarget(output);
+        implementation->fusedSwiGLUForward(*output.implementation);
+    }
+
+    void fusedSwiGLUBackward(const Tensor &output_gradient, Tensor &input_gradient) const
+    {
+        ensureOutputTarget(input_gradient);
+        implementation->fusedSwiGLUBackward(*output_gradient.implementation, *input_gradient.implementation);
+    }
+
+    void flashAttentionForward(const Tensor &k, const Tensor &v, Tensor &output,
+                               uint32_t num_heads, uint32_t seq_len, uint32_t head_dim,
+                               bool is_causal = false, float scale = 0.0f,
+                               Tensor *l_stats = nullptr) const
+    {
+        ensureOutputTarget(output);
+        if (l_stats)
+        {
+            ensureOutputTarget(*l_stats);
+        }
+        implementation->flashAttentionForward(*k.implementation, *v.implementation, *output.implementation,
+                                              num_heads, seq_len, head_dim, is_causal, scale,
+                                              l_stats ? l_stats->implementation.get() : nullptr);
+    }
+
+    void flashAttentionBackward(const Tensor &k, const Tensor &v,
+                                const Tensor &o, const Tensor &do_grad,
+                                Tensor &dq, Tensor &dk, Tensor &dv,
+                                uint32_t num_heads, uint32_t seq_len, uint32_t head_dim,
+                                bool is_causal = false, float scale = 0.0f,
+                                const Tensor *l_stats = nullptr) const
+    {
+        ensureOutputTarget(dq);
+        ensureOutputTarget(dk);
+        ensureOutputTarget(dv);
+        implementation->flashAttentionBackward(*k.implementation, *v.implementation,
+                                               *o.implementation, *do_grad.implementation,
+                                               *dq.implementation, *dk.implementation, *dv.implementation,
+                                               num_heads, seq_len, head_dim, is_causal, scale,
+                                               l_stats ? l_stats->implementation.get() : nullptr);
+    }
+
+    void embeddingForward(const Tensor &indices, Tensor &output) const
+    {
+        ensureOutputTarget(output);
+        implementation->embeddingForward(*indices.implementation, *output.implementation);
+    }
+
+    Tensor embeddingForward(const Tensor &indices) const
+    {
+        Tensor result(execution_target);
+        embeddingForward(indices, result);
+        return result;
+    }
+
+    void embeddingForward(const std::vector<int32_t> &indices, Tensor &output) const
+    {
+        std::vector<float> idx_float(indices.size());
+        for (size_t i = 0; i < indices.size(); ++i) idx_float[i] = static_cast<float>(indices[i]);
+        Tensor idx_tensor(Shape{ indices.size() }, std::move(idx_float), execution_target);
+        embeddingForward(idx_tensor, output);
+    }
+
+    Tensor embeddingForward(const std::vector<int32_t> &indices) const
+    {
+        Tensor result(execution_target);
+        embeddingForward(indices, result);
+        return result;
+    }
+
+    void embeddingBackward(const Tensor &indices, const Tensor &output_gradient, Tensor &weight_gradient) const
+    {
+        ensureOutputTarget(weight_gradient);
+        implementation->embeddingBackward(*indices.implementation, *output_gradient.implementation, *weight_gradient.implementation);
+    }
+
+    void embeddingBackward(const std::vector<int32_t> &indices, const Tensor &output_gradient, Tensor &weight_gradient) const
+    {
+        std::vector<float> idx_float(indices.size());
+        for (size_t i = 0; i < indices.size(); ++i) idx_float[i] = static_cast<float>(indices[i]);
+        Tensor idx_tensor(Shape{ indices.size() }, std::move(idx_float), execution_target);
+        embeddingBackward(idx_tensor, output_gradient, weight_gradient);
+    }
+
+    void singleTokenAttentionForward(const Tensor &k, const Tensor &v, Tensor &output,
+                                     size_t num_heads, size_t head_dim, size_t total_seq_len) const
+    {
+        implementation->singleTokenAttentionForward(*k.implementation, *v.implementation, *output.implementation,
+                                                    num_heads, head_dim, total_seq_len);
+    }
+
+    Tensor singleTokenAttentionForward(const Tensor &k, const Tensor &v,
+                                       size_t num_heads, size_t head_dim, size_t total_seq_len) const
+    {
+        Tensor result(execution_target);
+        singleTokenAttentionForward(k, v, result, num_heads, head_dim, total_seq_len);
+        return result;
+    }
+
+    float fusedCrossEntropyLoss(const Tensor &targets, Tensor &d_logits, uint32_t valid_tokens = 0) const
+    {
+        if (d_logits.getExecutionTarget() != execution_target || d_logits.getDataType() != getDataType())
+        {
+            d_logits = Tensor(getShape(), getDataType(), execution_target);
+        }
+        return implementation->fusedCrossEntropyLoss(*targets.implementation, *d_logits.implementation, valid_tokens);
+    }
+
+    float fusedCrossEntropyLoss(const std::vector<int32_t> &targets, Tensor &d_logits, uint32_t valid_tokens = 0) const
+    {
+        if (d_logits.getExecutionTarget() != execution_target || d_logits.getDataType() != getDataType())
+        {
+            d_logits = Tensor(getShape(), getDataType(), execution_target);
+        }
+        size_t S = (getShape().getRank() == 3) ? (getShape()[0] * getShape()[1]) : getRows();
+        std::vector<float> tgt_float(S, -100.0f);
+        uint32_t counted_valid = 0;
+        size_t V = (getShape().getRank() == 3) ? getShape()[2] : getColumns();
+        for (size_t i = 0; i < std::min(S, targets.size()); ++i)
+        {
+            tgt_float[i] = static_cast<float>(targets[i]);
+            if (targets[i] >= 0 && static_cast<size_t>(targets[i]) < V)
+            {
+                counted_valid++;
+            }
+        }
+        uint32_t effective_valid = (valid_tokens > 0) ? valid_tokens : counted_valid;
+        Tensor tgt_tensor(Shape{ S }, std::move(tgt_float), execution_target);
+        return implementation->fusedCrossEntropyLoss(*tgt_tensor.implementation, *d_logits.implementation, effective_valid);
+    }
+
     void linearForward(const Tensor &weights, const Tensor &biases, Tensor &output) const
     {
+        ensureOutputTarget(output);
         implementation->linearForward(*weights.implementation, *biases.implementation, *output.implementation);
     }
 
     void linearBackwardInput(const Tensor &weights, Tensor &input_gradient) const
     {
+        ensureOutputTarget(input_gradient);
         implementation->linearBackwardInput(*weights.implementation, *input_gradient.implementation);
     }
 
-    void linearBackwardWeightBias(const Tensor &output_gradient, Tensor &weight_gradient, Tensor &bias_gradient) const
+    void linearBackwardWeightBias(const Tensor &output_gradient, Tensor &weight_gradient, Tensor &bias_gradient, bool accumulate = false) const
     {
-        implementation->linearBackwardWeightBias(*output_gradient.implementation, *weight_gradient.implementation, *bias_gradient.implementation);
+        ensureOutputTarget(weight_gradient);
+        ensureOutputTarget(bias_gradient);
+        implementation->linearBackwardWeightBias(*output_gradient.implementation, *weight_gradient.implementation, *bias_gradient.implementation, accumulate);
+    }
+
+    void linearBackwardWeightAdam(const Tensor &output_gradient, Tensor &weights, Tensor &first_moment, Tensor &second_moment, Tensor &bias_gradient,
+                                  float learning_rate, float beta1, float beta2, float epsilon, size_t timestep, float max_gradient = 1.0F, float inv_scale = 1.0F, float weight_decay = 0.0F) const
+    {
+        ensureOutputTarget(weights);
+        ensureOutputTarget(first_moment);
+        ensureOutputTarget(second_moment);
+        ensureOutputTarget(bias_gradient);
+        implementation->linearBackwardWeightAdam(*output_gradient.implementation, *weights.implementation, *first_moment.implementation, *second_moment.implementation, *bias_gradient.implementation,
+                                                 learning_rate, beta1, beta2, epsilon, timestep, max_gradient, inv_scale, weight_decay);
     }
 
     void batchNorm2dForward(const Tensor &gamma, const Tensor &beta,
@@ -547,15 +760,15 @@ public:
         return result;
     }
 
-    void concatenateCollumns(const Tensor &other, Tensor &output) const
+    void concatenateColumns(const Tensor &other, Tensor &output) const
     {
-        implementation->concatenateCollumns(*other.implementation, *output.implementation);
+        implementation->concatenateColumns(*other.implementation, *output.implementation);
     }
 
-    Tensor concatenateCollumns(const Tensor &other) const
+    Tensor concatenateColumns(const Tensor &other) const
     {
         Tensor result(execution_target);
-        concatenateCollumns(other, result);
+        concatenateColumns(other, result);
         return result;
     }
 
@@ -571,16 +784,16 @@ public:
         return result;
     }
 
-    void splitCollumns(size_t split_index, Tensor &result_left, Tensor &result_right) const
+    void splitColumns(size_t split_index, Tensor &result_left, Tensor &result_right) const
     {
-        implementation->splitCollumns(split_index, *result_left.implementation, *result_right.implementation);
+        implementation->splitColumns(split_index, *result_left.implementation, *result_right.implementation);
     }
 
-    std::pair<Tensor, Tensor> splitCollumns(size_t split_index) const
+    std::pair<Tensor, Tensor> splitColumns(size_t split_index) const
     {
         Tensor result_left(execution_target);
         Tensor result_right(execution_target);
-        splitCollumns(split_index, result_left, result_right);
+        splitColumns(split_index, result_left, result_right);
         return {std::move(result_left), std::move(result_right)};
     }
 
@@ -711,13 +924,28 @@ public:
 
     void fill(float value)
     {
-        std::vector<float> buffer(getTotalElements(), value);
-        uploadData(buffer);
+        implementation->fill(value);
     }
 
     void zero()
     {
-        fill(0.0f);
+        implementation->zero();
+    }
+
+    void invalidateFp16Cache() noexcept
+    {
+        if (implementation)
+        {
+            implementation->invalidateFp16Cache();
+        }
+    }
+
+    void prewarmFp16Cache()
+    {
+        if (implementation)
+        {
+            implementation->prewarmFp16Cache();
+        }
     }
 
     const Shape &getShape() const noexcept { return implementation->getShape(); }
@@ -730,9 +958,7 @@ public:
     size_t getColumns() const noexcept { return implementation->getColumns(); }
     size_t getRank() const noexcept { return implementation->getRank(); }
     size_t getRows() const noexcept { return implementation->getRows(); }
-    size_t getCols() const noexcept { return implementation->getColumns(); }
     Execution_Target getExecutionTarget() const noexcept { return execution_target; }
-    Execution_Target getTarget() const noexcept { return execution_target; }
     Data_Type getDataType() const noexcept { return implementation->getDataType(); }
     bool isEmpty() const noexcept { return implementation->isEmpty(); }
 
@@ -758,7 +984,4 @@ public:
             Execution_Engine::getInstance().getContext().executePendingTransfers();
         }
     }
-    void setTarget(Execution_Target new_target) { setExecutionTarget(new_target); }
 };
-
-using Matrix = Tensor;

@@ -17,20 +17,21 @@
 
 #include "engine/gpu_vector.h"
 #include "helper/logger.h"
+#include "helper/training_profiler.h"
 #include "math/tensor.h"
 
 struct Batch_Data
 {
-    Matrix *input_matrix = nullptr;
-    Matrix *target_matrix = nullptr;
+    Tensor *input_matrix = nullptr;
+    Tensor *target_matrix = nullptr;
     VkFence fence = VK_NULL_HANDLE;
 
-    Matrix *getInputMatrix() const noexcept { return input_matrix; }
-    Matrix *getTargetMatrix() const noexcept { return target_matrix; }
+    Tensor *getInputMatrix() const noexcept { return input_matrix; }
+    Tensor *getTargetMatrix() const noexcept { return target_matrix; }
     VkFence getFence() const noexcept { return fence; }
 
-    void setInputMatrix(Matrix *_matrix) noexcept { input_matrix = _matrix; }
-    void setTargetMatrix(Matrix *_matrix) noexcept { target_matrix = _matrix; }
+    void setInputMatrix(Tensor *_matrix) noexcept { input_matrix = _matrix; }
+    void setTargetMatrix(Tensor *_matrix) noexcept { target_matrix = _matrix; }
     void setFence(VkFence _fence) noexcept { fence = _fence; }
 };
 
@@ -43,8 +44,8 @@ private:
     {
         std::vector<float> host_inputs;
         std::vector<float> host_targets;
-        Matrix input_matrix;
-        Matrix target_matrix;
+        Tensor input_matrix;
+        Tensor target_matrix;
         VkFence fence = VK_NULL_HANDLE;
         std::atomic<bool> is_ready{false};
         bool is_fence_submitted = false;
@@ -116,7 +117,11 @@ private:
             {
                 if (slot.is_fence_submitted)
                 {
+                    auto start_time = std::chrono::high_resolution_clock::now();
                     vkWaitForFences(device, 1, &slot.fence, VK_TRUE, UINT64_MAX);
+                    auto end_time = std::chrono::high_resolution_clock::now();
+                    double time = std::chrono::duration<double, std::milli>(end_time - start_time).count();
+                    Step_Timings::getInstance().data_prep_ms += time;
                 }
                 vkDestroyFence(device, slot.fence, nullptr);
                 slot.fence = VK_NULL_HANDLE;
@@ -201,8 +206,8 @@ public:
         }
         for (auto &slot : buffer_slots)
         {
-            slot.input_matrix = Matrix(0, 0, execution_target);
-            slot.target_matrix = Matrix(0, 0, execution_target);
+            slot.input_matrix = Tensor(0, 0, execution_target);
+            slot.target_matrix = Tensor(0, 0, execution_target);
         }
     }
 
@@ -222,8 +227,8 @@ public:
         {
             buffer_slots[i].host_inputs.resize(batch_size * input_dimension, 0.0f);
             buffer_slots[i].host_targets.resize(batch_size * output_dimension, 0.0f);
-            buffer_slots[i].input_matrix = Matrix(batch_size, input_dimension, execution_target);
-            buffer_slots[i].target_matrix = Matrix(batch_size, output_dimension, execution_target);
+            buffer_slots[i].input_matrix = Tensor(batch_size, input_dimension, execution_target);
+            buffer_slots[i].target_matrix = Tensor(batch_size, output_dimension, execution_target);
         }
     }
 
@@ -287,7 +292,12 @@ public:
         {
             if (slot.is_fence_submitted)
             {
+                auto start_time = std::chrono::high_resolution_clock::now();
                 vkWaitForFences(device, 1, &slot.fence, VK_TRUE, UINT64_MAX);
+
+                auto end_time = std::chrono::high_resolution_clock::now();
+                double time = std::chrono::duration<double, std::milli>(end_time - start_time).count();
+                Step_Timings::getInstance().data_prep_ms += time;
             }
             vkResetFences(device, 1, &slot.fence);
             slot.is_fence_submitted = true;
@@ -306,21 +316,21 @@ public:
 
         try
         {
-            if (slot.input_matrix.getTarget() != execution_target)
+            if (slot.input_matrix.getExecutionTarget() != execution_target)
             {
                 slot.input_matrix.setExecutionTarget(execution_target);
             }
-            if (slot.input_matrix.getRows() != batch_size || slot.input_matrix.getCols() != input_dimension)
+            if (slot.input_matrix.getRows() != batch_size || slot.input_matrix.getColumns() != input_dimension)
             {
                 slot.input_matrix.initShape(batch_size, input_dimension);
             }
             slot.input_matrix.uploadData(slot.host_inputs);
 
-            if (slot.target_matrix.getTarget() != execution_target)
+            if (slot.target_matrix.getExecutionTarget() != execution_target)
             {
                 slot.target_matrix.setExecutionTarget(execution_target);
             }
-            if (slot.target_matrix.getRows() != batch_size || slot.target_matrix.getCols() != output_dimension)
+            if (slot.target_matrix.getRows() != batch_size || slot.target_matrix.getColumns() != output_dimension)
             {
                 slot.target_matrix.initShape(batch_size, output_dimension);
             }
@@ -337,7 +347,7 @@ public:
         uint64_t input_buffer_handle = 0;
         uint64_t target_buffer_handle = 0;
 
-        if (slot.input_matrix.getTarget() == Execution_Target::VULKAN_GPU)
+        if (slot.input_matrix.getExecutionTarget() == Execution_Target::VULKAN_GPU)
         {
             auto storage_handle = slot.input_matrix.getStorage();
             if (std::holds_alternative<std::shared_ptr<gpu::vector>>(storage_handle))
@@ -350,7 +360,7 @@ public:
             }
         }
 
-        if (slot.target_matrix.getTarget() == Execution_Target::VULKAN_GPU)
+        if (slot.target_matrix.getExecutionTarget() == Execution_Target::VULKAN_GPU)
         {
             auto storage_handle = slot.target_matrix.getStorage();
             if (std::holds_alternative<std::shared_ptr<gpu::vector>>(storage_handle))

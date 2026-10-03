@@ -71,6 +71,18 @@ enum Compute_Pipeline
     CONTIGUOUS,
     CONV2D_IM2COL_TRANSPOSED,
     CONV2D_BIAS_GRADIENT,
+    RMSNORM,
+    RMSNORM_BACKWARD,
+    RMSNORM_GAMMA_GRAD,
+    ROPE,
+    SWIGLU,
+    SWIGLU_BACKWARD,
+    FUSED_SWIGLU_FORWARD,
+    FUSED_SWIGLU_BACKWARD,
+    EMBEDDING_FORWARD,
+    EMBEDDING_BACKWARD,
+    ATTENTION_DECODE,
+    FUSED_CROSS_ENTROPY,
     CAST_FP32_TO_FP16,
     CAST_FP16_TO_FP32,
     CONV2D_FORWARD_PASS_FP16,
@@ -100,7 +112,41 @@ enum Compute_Pipeline
     CONV2D_WEIGHT_GRADIENT_FP16,
     MATMUL_COOPMAT_FP16,
     MATMUL_ADD_COOPMAT_FP16,
+    LINEAR_BACKWARD_INPUT_COOPMAT_FP16,
+    LINEAR_BACKWARD_WEIGHT_BIAS_COOPMAT_FP16,
     CONV2D_IM2COL_FP16,
+    RMSNORM_FP16,
+    RMSNORM_BACKWARD_FP16,
+    RMSNORM_GAMMA_GRAD_FP16,
+    ROPE_FP16,
+    SWIGLU_FP16,
+    SWIGLU_BACKWARD_FP16,
+    FUSED_SWIGLU_FORWARD_FP16,
+    FUSED_SWIGLU_BACKWARD_FP16,
+    FLASH_ATTENTION_FP16,
+    FLASH_ATTENTION_BACKWARD_FP16,
+    EMBEDDING_FORWARD_FP16,
+    ADD_FP16,
+    SUB_FP16,
+    MUL_SCALAR_FP16,
+    EMBEDDING_BACKWARD_FP16,
+    FUSED_CROSS_ENTROPY_FP16,
+    CONCATENATE_COLUMNS_FP16,
+    CONCATENATE_ROWS_FP16,
+    TRANSPOSE_FP16,
+    CONTIGUOUS_FP16,
+    SPLIT_COLUMNS_FP16,
+    SPLIT_ROWS_FP16,
+    HADAMARD_MUL_FP16,
+    HADAMARD_DIV_FP16,
+    SOFTMAX_FP16,
+    SOFTMAX_BACKWARD_FP16,
+    ATTENTION_DECODE_FP16,
+    GLOBAL_AVGPOOL_FORWARD_FP16,
+    GLOBAL_AVGPOOL_BACKWARD_FP16,
+    ADAM_UPDATE_FP16,
+    LINEAR_BACKWARD_WEIGHT_ADAM_FP16,
+    LINEAR_BACKWARD_WEIGHT_ADAM_COOPMAT_FP16,
     COMPUTE_PIPELINE_END
 };
 
@@ -108,7 +154,7 @@ class Vulkan_Network
 {
 private:
     const Vulkan_Context *context = nullptr;
-    std::string pipeline_folder = "compute_shader";
+    std::string pipeline_folder = "compute_shader/spv";
 
     VkDevice device = VK_NULL_HANDLE;
     VkDescriptorSetLayout descriptor_set_layout = VK_NULL_HANDLE;
@@ -192,7 +238,7 @@ private:
         VkPipelineShaderStageCreateInfo shader_stage_create_information{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
             .pNext = is_coop ? &required_subgroup_size_create_information : nullptr,
-            .flags = is_coop ? VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT : 0u,
+            .flags = is_coop ? static_cast<VkPipelineShaderStageCreateFlags>(VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT) : VkPipelineShaderStageCreateFlags{0},
             .stage = VK_SHADER_STAGE_COMPUTE_BIT,
             .module = shader_module,
             .pName = "main",
@@ -269,7 +315,12 @@ private:
 
             bool is_coop_pipeline = (pipeline_enum == Compute_Pipeline::MATMUL_COOPMAT_FP16 ||
                                      pipeline_enum == Compute_Pipeline::MATMUL_ADD_COOPMAT_FP16 ||
-                                     pipeline_enum == Compute_Pipeline::CONV2D_WEIGHT_GRADIENT_COOPMAT_FP16);
+                                     pipeline_enum == Compute_Pipeline::CONV2D_WEIGHT_GRADIENT_COOPMAT_FP16 ||
+                                     pipeline_enum == Compute_Pipeline::LINEAR_BACKWARD_INPUT_COOPMAT_FP16 ||
+                                     pipeline_enum == Compute_Pipeline::LINEAR_BACKWARD_WEIGHT_BIAS_COOPMAT_FP16 ||
+                                     pipeline_enum == Compute_Pipeline::LINEAR_BACKWARD_WEIGHT_ADAM_COOPMAT_FP16 ||
+                                     pipeline_enum == Compute_Pipeline::FLASH_ATTENTION_FP16 ||
+                                     pipeline_enum == Compute_Pipeline::FLASH_ATTENTION_BACKWARD_FP16);
             if (is_coop_pipeline && context != nullptr && !context->isCooperativeMatrixEnabled())
             {
                 Logger::logMessage("Vulkan_Network::createAllPipelines: Skipping cooperative matrix pipeline because device does not have cooperative matrix enabled",

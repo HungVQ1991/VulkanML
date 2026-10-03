@@ -61,6 +61,9 @@ private:
         case Cost_Type::HUBER:
             cost_function = std::make_unique<Huber_Cost>(1.0f, _execution_target);
             break;
+        case Cost_Type::FUSED_CCE:
+            cost_function = std::make_unique<Fused_Cross_Entropy>();
+            break;
         default:
             Logger::logMessage("Training_Context::createCostFunction: Unknown cost type",
                                Log_Level::LOG_ERROR,
@@ -373,6 +376,40 @@ public:
         case Layer_Type::GELU:
         {
             return std::make_unique<Gelu_Layer>(_execution_target);
+        }
+        case Layer_Type::RMSNORM:
+        {
+            uint32_t feature_count = 0;
+            float epsilon = 1e-5f;
+            _input_file_stream.read(reinterpret_cast<char *>(&feature_count), sizeof(feature_count));
+            _input_file_stream.read(reinterpret_cast<char *>(&epsilon), sizeof(epsilon));
+            return std::make_unique<RMSNorm_Layer>(feature_count, epsilon, _execution_target);
+        }
+        case Layer_Type::SWIGLU:
+        {
+            return std::make_unique<SwiGLU_Layer>(_execution_target);
+        }
+        case Layer_Type::EMBEDDING:
+        {
+            uint64_t vocab_size = 0;
+            uint64_t embedding_dim = 0;
+            _input_file_stream.read(reinterpret_cast<char *>(&vocab_size), sizeof(vocab_size));
+            _input_file_stream.read(reinterpret_cast<char *>(&embedding_dim), sizeof(embedding_dim));
+            return std::make_unique<Embedding_Layer>(vocab_size, embedding_dim, _execution_target);
+        }
+        case Layer_Type::TRANSFORMER_BLOCK:
+        {
+            uint64_t hidden_dim = 0;
+            uint64_t num_heads = 0;
+            uint64_t intermediate_dim = 0;
+            float rms_norm_eps = 1e-5f;
+            float rope_base = 10000.0f;
+            _input_file_stream.read(reinterpret_cast<char *>(&hidden_dim), sizeof(hidden_dim));
+            _input_file_stream.read(reinterpret_cast<char *>(&num_heads), sizeof(num_heads));
+            _input_file_stream.read(reinterpret_cast<char *>(&intermediate_dim), sizeof(intermediate_dim));
+            _input_file_stream.read(reinterpret_cast<char *>(&rms_norm_eps), sizeof(rms_norm_eps));
+            _input_file_stream.read(reinterpret_cast<char *>(&rope_base), sizeof(rope_base));
+            return std::make_unique<Transformer_Block>(hidden_dim, num_heads, intermediate_dim, rms_norm_eps, rope_base, _execution_target);
         }
         default:
             Logger::logMessage("Training_Context::constructLayerFromConfig: Unsupported layer type",

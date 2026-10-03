@@ -704,7 +704,7 @@ int main(int argc, char* argv[])
     std::cout << std::format("Validation Accuracy: {:.2f}% ({}/{})\n\n", accuracy, correct_count, evaluated_samples);
 
     const std::array<std::string_view, 6> class_names = { "stop", "left", "right", "up", "down", "noise" };
-    std::cout << "Confusion Matrix (Row: Ground Truth, Col: Prediction):\n";
+    std::cout << "Confusion Tensor (Row: Ground Truth, Col: Prediction):\n";
     std::cout << std::format("{:<8}", "");
     for (auto name : class_names)
     {

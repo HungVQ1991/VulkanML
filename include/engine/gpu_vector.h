@@ -12,6 +12,7 @@
 
 #include "data_type.h"
 #include "helper/logger.h"
+#include "helper/training_profiler.h"
 #include "vulkan_context.h"
 #include "vulkan_sub_allocator.h"
 
@@ -141,50 +142,90 @@ namespace gpu
                 throw std::runtime_error("Failed to end command buffer");
             }
 
-            VkFenceCreateInfo fence_create_information{
-                .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-                .pNext = nullptr,
-                .flags = 0};
-
-            VkFence fence = VK_NULL_HANDLE;
-            if (vkCreateFence(device, &fence_create_information, nullptr, &fence) != VK_SUCCESS)
+            if (context.isTimelineSemaphoreSupported())
             {
+                uint64_t signal_val = context.getNextTimelineValue();
+                VkSemaphore sem = context.getTimelineSemaphore();
+
+                VkTimelineSemaphoreSubmitInfo timeline_submit_info{
+                    .sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
+                    .pNext = nullptr,
+                    .waitSemaphoreValueCount = 0,
+                    .pWaitSemaphoreValues = nullptr,
+                    .signalSemaphoreValueCount = 1,
+                    .pSignalSemaphoreValues = &signal_val};
+
+                VkSubmitInfo submit_information{
+                    .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                    .pNext = &timeline_submit_info,
+                    .waitSemaphoreCount = 0,
+                    .pWaitSemaphores = nullptr,
+                    .pWaitDstStageMask = nullptr,
+                    .commandBufferCount = 1,
+                    .pCommandBuffers = &command_buffer,
+                    .signalSemaphoreCount = 1,
+                    .pSignalSemaphores = &sem};
+
+                if (vkQueueSubmit(compute_queue, 1, &submit_information, VK_NULL_HANDLE) != VK_SUCCESS)
+                {
+                    vkFreeCommandBuffers(device, command_pool, 1, &command_buffer);
+                    Logger::logMessage("gpu::vector::copyBuffer: Failed to submit copy command with timeline semaphore",
+                                       Log_Level::LOG_ERROR,
+                                       true,
+                                       0,
+                                       Log_Feature::MEMORY_TRANSFER);
+                    throw std::runtime_error("Failed to submit copy command");
+                }
+
+                context.waitTimelineSemaphore(signal_val);
                 vkFreeCommandBuffers(device, command_pool, 1, &command_buffer);
-                Logger::logMessage("gpu::vector::copyBuffer: Failed to create fence",
-                                   Log_Level::LOG_ERROR,
-                                   true,
-                                   0,
-                                   Log_Feature::SYNCHRONIZATION);
-                throw std::runtime_error("Failed to create fence");
             }
-
-            VkSubmitInfo submit_information{
-                .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-                .pNext = nullptr,
-                .waitSemaphoreCount = 0,
-                .pWaitSemaphores = nullptr,
-                .pWaitDstStageMask = nullptr,
-                .commandBufferCount = 1,
-                .pCommandBuffers = &command_buffer,
-                .signalSemaphoreCount = 0,
-                .pSignalSemaphores = nullptr};
-
-            if (vkQueueSubmit(compute_queue, 1, &submit_information, fence) != VK_SUCCESS)
+            else
             {
+                VkFenceCreateInfo fence_create_information{
+                    .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+                    .pNext = nullptr,
+                    .flags = 0};
+
+                VkFence fence = VK_NULL_HANDLE;
+                if (vkCreateFence(device, &fence_create_information, nullptr, &fence) != VK_SUCCESS)
+                {
+                    vkFreeCommandBuffers(device, command_pool, 1, &command_buffer);
+                    Logger::logMessage("gpu::vector::copyBuffer: Failed to create fence",
+                                       Log_Level::LOG_ERROR,
+                                       true,
+                                       0,
+                                       Log_Feature::SYNCHRONIZATION);
+                    throw std::runtime_error("Failed to create fence");
+                }
+
+                VkSubmitInfo submit_information{
+                    .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                    .pNext = nullptr,
+                    .waitSemaphoreCount = 0,
+                    .pWaitSemaphores = nullptr,
+                    .pWaitDstStageMask = nullptr,
+                    .commandBufferCount = 1,
+                    .pCommandBuffers = &command_buffer,
+                    .signalSemaphoreCount = 0,
+                    .pSignalSemaphores = nullptr};
+
+                if (vkQueueSubmit(compute_queue, 1, &submit_information, fence) != VK_SUCCESS)
+                {
+                    vkDestroyFence(device, fence, nullptr);
+                    vkFreeCommandBuffers(device, command_pool, 1, &command_buffer);
+                    Logger::logMessage("gpu::vector::copyBuffer: Failed to submit copy command to queue",
+                                       Log_Level::LOG_ERROR,
+                                       true,
+                                       0,
+                                       Log_Feature::MEMORY_TRANSFER);
+                    throw std::runtime_error("Failed to submit copy command");
+                }
+
+                vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
                 vkDestroyFence(device, fence, nullptr);
                 vkFreeCommandBuffers(device, command_pool, 1, &command_buffer);
-                Logger::logMessage("gpu::vector::copyBuffer: Failed to submit copy command to queue",
-                                   Log_Level::LOG_ERROR,
-                                   true,
-                                   0,
-                                   Log_Feature::MEMORY_TRANSFER);
-                throw std::runtime_error("Failed to submit copy command");
             }
-
-            vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
-
-            vkDestroyFence(device, fence, nullptr);
-            vkFreeCommandBuffers(device, command_pool, 1, &command_buffer);
         }
 
     public:
@@ -347,6 +388,11 @@ namespace gpu
                                    0,
                                    Log_Feature::MEMORY_ALLOCATION);
 
+                if (buffer != VK_NULL_HANDLE)
+                {
+                    context.removeTransferTasksForBuffer(buffer);
+                }
+
                 if (is_host_mapped && host_mapped_pointer != nullptr)
                 {
                     vkUnmapMemory(context.getDevice(), allocation.memory);
@@ -489,71 +535,14 @@ namespace gpu
             }
 
             context.flush();
-            if (context.getDevice() != VK_NULL_HANDLE && context.getComputeQueue() != VK_NULL_HANDLE)
-            {
-                vkQueueWaitIdle(context.getComputeQueue());
-            }
 
-            VkDevice device = context.getDevice();
             VkBuffer staging_buffer = VK_NULL_HANDLE;
-
-            VkBufferCreateInfo buffer_create_information{
-                .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-                .pNext = nullptr,
-                .flags = 0,
-                .size = buffer_size_in_bytes,
-                .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-                .queueFamilyIndexCount = 0,
-                .pQueueFamilyIndices = nullptr};
-
-            if (vkCreateBuffer(device, &buffer_create_information, nullptr, &staging_buffer) != VK_SUCCESS)
-            {
-                Logger::logMessage("gpu::vector::downloadRawData: Failed to create staging buffer",
-                                   Log_Level::LOG_ERROR,
-                                   true,
-                                   0,
-                                   Log_Feature::MEMORY_ALLOCATION | Log_Feature::MEMORY_TRANSFER);
-                throw std::runtime_error("gpu::vector::downloadRawData: Failed to create staging buffer");
-            }
-
-            VkMemoryRequirements memory_requirements;
-            vkGetBufferMemoryRequirements(device, staging_buffer, &memory_requirements);
-
-            Memory_Allocation staging_allocation = context.allocateMemory(memory_requirements, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-            if (vkBindBufferMemory(device, staging_buffer, staging_allocation.memory, staging_allocation.offset) != VK_SUCCESS)
-            {
-                vkDestroyBuffer(device, staging_buffer, nullptr);
-                context.deferDestruction(context.getCurrentFrame(), VK_NULL_HANDLE, staging_allocation);
-                Logger::logMessage("gpu::vector::downloadRawData: Failed to bind staging memory",
-                                   Log_Level::LOG_ERROR,
-                                   true,
-                                   0,
-                                   Log_Feature::MEMORY_ALLOCATION | Log_Feature::MEMORY_TRANSFER);
-                throw std::runtime_error("gpu::vector::downloadRawData: Failed to bind staging memory");
-            }
+            void *mapped_pointer = context.ensureReadbackStagingBuffer(buffer_size_in_bytes, staging_buffer);
 
             copyBuffer(buffer, staging_buffer, buffer_size_in_bytes);
 
-            void *mapped_pointer = nullptr;
-            if (vkMapMemory(device, staging_allocation.memory, staging_allocation.offset, buffer_size_in_bytes, 0, &mapped_pointer) != VK_SUCCESS)
-            {
-                vkDestroyBuffer(device, staging_buffer, nullptr);
-                context.deferDestruction(context.getCurrentFrame(), VK_NULL_HANDLE, staging_allocation);
-                Logger::logMessage("gpu::vector::downloadRawData: Failed to map staging memory",
-                                   Log_Level::LOG_ERROR,
-                                   true,
-                                   0,
-                                   Log_Feature::MEMORY_ALLOCATION | Log_Feature::MEMORY_TRANSFER);
-                throw std::runtime_error("gpu::vector::downloadRawData: Failed to map memory");
-            }
-
             size_t copy_bytes = std::min(size_in_bytes, buffer_size_in_bytes);
             std::memcpy(destination_pointer, mapped_pointer, copy_bytes);
-
-            vkUnmapMemory(device, staging_allocation.memory);
-            context.deferDestruction(context.getCurrentFrame(), staging_buffer, staging_allocation);
         }
 
         void downloadData(std::vector<float> &host_data) const

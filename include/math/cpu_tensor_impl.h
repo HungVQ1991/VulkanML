@@ -238,6 +238,98 @@ public:
                             Log_Level::LOG_DEBUG, true, 0, Log_Feature::TENSOR_INSPECTION);
     }
 
+    void updateSlice(size_t axis, size_t start, const Tensor_Impl &source) override
+    {
+        const auto &source_cpu = static_cast<const Cpu_Tensor_Impl &>(source);
+        if (axis >= shape.getRank())
+        {
+            throw std::invalid_argument("Cpu_Tensor_Impl::updateSlice: axis out of range");
+        }
+        size_t src_axis_len = source_cpu.shape[axis];
+        if (start + src_axis_len > shape[axis])
+        {
+            throw std::invalid_argument("Cpu_Tensor_Impl::updateSlice: slice range exceeds destination dimension");
+        }
+
+        size_t elem_size = getDataTypeSize(data_type);
+        size_t outer_count = 1;
+        for (size_t i = 0; i < axis; ++i) outer_count *= shape[i];
+        size_t inner_count = 1;
+        for (size_t i = axis + 1; i < shape.getRank(); ++i) inner_count *= shape[i];
+        size_t this_axis_len = shape[axis];
+        size_t copy_bytes = src_axis_len * inner_count * elem_size;
+
+        if (data_type == Data_Type::FLOAT16 && storage_buffer_fp16 && source_cpu.storage_buffer_fp16)
+        {
+            uint8_t *dst_base = reinterpret_cast<uint8_t *>(storage_buffer_fp16->data()) + byte_offset;
+            const uint8_t *src_base = reinterpret_cast<const uint8_t *>(source_cpu.storage_buffer_fp16->data()) + source_cpu.byte_offset;
+            for (size_t outer = 0; outer < outer_count; ++outer)
+            {
+                size_t dst_off = (outer * this_axis_len + start) * inner_count * elem_size;
+                size_t src_off = (outer * src_axis_len) * inner_count * elem_size;
+                std::memcpy(dst_base + dst_off, src_base + src_off, copy_bytes);
+            }
+        }
+        else if (storage_buffer && source_cpu.storage_buffer)
+        {
+            uint8_t *dst_base = reinterpret_cast<uint8_t *>(storage_buffer->data()) + byte_offset;
+            const uint8_t *src_base = reinterpret_cast<const uint8_t *>(source_cpu.storage_buffer->data()) + source_cpu.byte_offset;
+            for (size_t outer = 0; outer < outer_count; ++outer)
+            {
+                size_t dst_off = (outer * this_axis_len + start) * inner_count * elem_size;
+                size_t src_off = (outer * src_axis_len) * inner_count * elem_size;
+                std::memcpy(dst_base + dst_off, src_base + src_off, copy_bytes);
+            }
+        }
+    }
+
+    void gatherRows(const std::vector<int32_t> &indices, Tensor_Impl &output) const override
+    {
+        auto &out_cpu = static_cast<Cpu_Tensor_Impl &>(output);
+        size_t D = getColumns();
+        size_t elem_size = getDataTypeSize(data_type);
+        size_t S = indices.size();
+        out_cpu.setDataType(data_type);
+        out_cpu.reshape(Shape{ S, D });
+
+        if (data_type == Data_Type::FLOAT16)
+        {
+            if (!out_cpu.storage_buffer_fp16 || out_cpu.storage_buffer_fp16->size() != S * D)
+            {
+                out_cpu.storage_buffer_fp16 = std::make_shared<std::vector<float16_t>>(S * D);
+            }
+            out_cpu.storage_buffer.reset();
+        }
+        else
+        {
+            if (!out_cpu.storage_buffer || out_cpu.storage_buffer->size() != S * D)
+            {
+                out_cpu.storage_buffer = std::make_shared<std::vector<float>>(S * D);
+            }
+            out_cpu.storage_buffer_fp16.reset();
+        }
+
+        for (size_t s = 0; s < S; ++s)
+        {
+            int32_t row = indices[s];
+            if (row < 0 || static_cast<size_t>(row) >= shape[0]) row = 0;
+            size_t src_off = byte_offset + row * D * elem_size;
+            size_t dst_off = out_cpu.byte_offset + s * D * elem_size;
+            if (data_type == Data_Type::FLOAT16 && storage_buffer_fp16 && out_cpu.storage_buffer_fp16)
+            {
+                uint8_t *dst = reinterpret_cast<uint8_t *>(out_cpu.storage_buffer_fp16->data()) + dst_off;
+                const uint8_t *src = reinterpret_cast<const uint8_t *>(storage_buffer_fp16->data()) + src_off;
+                std::memcpy(dst, src, D * elem_size);
+            }
+            else if (storage_buffer && out_cpu.storage_buffer)
+            {
+                uint8_t *dst = reinterpret_cast<uint8_t *>(out_cpu.storage_buffer->data()) + dst_off;
+                const uint8_t *src = reinterpret_cast<const uint8_t *>(storage_buffer->data()) + src_off;
+                std::memcpy(dst, src, D * elem_size);
+            }
+        }
+    }
+
     void contiguous(Tensor_Impl &output) const override
     {
         auto &output_cpu = static_cast<Cpu_Tensor_Impl &>(output);
@@ -321,7 +413,7 @@ public:
 
         if (k_dim != k_other)
         {
-            throw std::invalid_argument("Matrix inner dimensions must match for multiplication");
+            throw std::invalid_argument("Tensor inner dimensions must match for multiplication");
         }
 
         bool broadcast_b = (b_other == 1 && b_dim > 1);
@@ -631,7 +723,7 @@ public:
             {
                 Logger::logMessage(Input_Format{"Cpu_Tensor_Impl::inverse: Singular matrix detected"},
                                    Log_Level::LOG_ERROR, true, 0, Log_Feature::DENSE_COMPUTE);
-                throw std::runtime_error("Matrix is singular");
+                throw std::runtime_error("Tensor is singular");
             }
 
             if (pivot_row != i)
@@ -873,7 +965,8 @@ public:
                     float epsilon,
                     size_t timestep,
                     float max_gradient = 1.0F,
-                    float inv_scale = 1.0F) override
+                    float inv_scale = 1.0F,
+                    float weight_decay = 0.0F) override
     {
         validateSameDimensions(gradient);
         validateSameDimensions(first_moment);
@@ -896,7 +989,15 @@ public:
 
             float m_hat = (*m_cpu.storage_buffer)[i] / bc1;
             float v_hat = (*v_cpu.storage_buffer)[i] / bc2;
-            (*storage_buffer)[i] -= learning_rate * (m_hat / (std::sqrt(v_hat) + epsilon));
+            float step_val = m_hat / (std::sqrt(v_hat) + epsilon);
+            if (weight_decay > 0.0F)
+            {
+                (*storage_buffer)[i] -= learning_rate * (step_val + weight_decay * (*storage_buffer)[i]);
+            }
+            else
+            {
+                (*storage_buffer)[i] -= learning_rate * step_val;
+            }
         }
 
         Logger::logMessage(Input_Format{"Cpu_Tensor_Impl::adamUpdate: step={}, lr={}, sample={}",
@@ -923,7 +1024,7 @@ public:
 
         if (k_dim != k_w)
         {
-            throw std::invalid_argument("Matrix inner dimensions must match for multiplication");
+            throw std::invalid_argument("Tensor inner dimensions must match for multiplication");
         }
 
         bool broadcast_w = (b_w == 1 && b_dim > 1);
@@ -1041,6 +1142,42 @@ public:
 
         iterateCoordinates([this, &host_data](size_t in_idx, size_t dst_idx)
                            { (*storage_buffer)[dst_idx] = host_data[in_idx]; });
+    }
+
+    void zero() override
+    {
+        if (data_type == Data_Type::FLOAT16)
+        {
+            if (storage_buffer_fp16)
+            {
+                std::fill(storage_buffer_fp16->begin(), storage_buffer_fp16->end(), 0.0f);
+            }
+        }
+        else
+        {
+            if (storage_buffer)
+            {
+                std::fill(storage_buffer->begin(), storage_buffer->end(), 0.0f);
+            }
+        }
+    }
+
+    void fill(float value) override
+    {
+        if (data_type == Data_Type::FLOAT16)
+        {
+            if (storage_buffer_fp16)
+            {
+                std::fill(storage_buffer_fp16->begin(), storage_buffer_fp16->end(), value);
+            }
+        }
+        else
+        {
+            if (storage_buffer)
+            {
+                std::fill(storage_buffer->begin(), storage_buffer->end(), value);
+            }
+        }
     }
 
     void conv2d(const Tensor_Impl &weights, const Tensor_Impl &biases, Tensor_Impl &output,
@@ -1514,7 +1651,7 @@ public:
         }
     }
 
-    void linearBackwardWeightBias(const Tensor_Impl &output_gradient, Tensor_Impl &weight_gradient, Tensor_Impl &bias_gradient) const override
+    void linearBackwardWeightBias(const Tensor_Impl &output_gradient, Tensor_Impl &weight_gradient, Tensor_Impl &bias_gradient, bool accumulate = false) const override
     {
         const auto &in_data = getData();
         const auto &out_grad_data = output_gradient.getData();
@@ -1527,8 +1664,11 @@ public:
 
         w_grad_cpu.reshape(in_dim, out_dim);
         b_grad_cpu.reshape(1, out_dim);
-        std::fill(w_grad_cpu.storage_buffer->begin(), w_grad_cpu.storage_buffer->end(), 0.0F);
-        std::fill(b_grad_cpu.storage_buffer->begin(), b_grad_cpu.storage_buffer->end(), 0.0F);
+        if (!accumulate)
+        {
+            std::fill(w_grad_cpu.storage_buffer->begin(), w_grad_cpu.storage_buffer->end(), 0.0F);
+            std::fill(b_grad_cpu.storage_buffer->begin(), b_grad_cpu.storage_buffer->end(), 0.0F);
+        }
 
         for (size_t i = 0; i < b_size; ++i)
         {
@@ -1542,6 +1682,14 @@ public:
                 }
             }
         }
+    }
+
+    void linearBackwardWeightAdam(const Tensor_Impl &output_gradient, Tensor_Impl &weights, Tensor_Impl &first_moment, Tensor_Impl &second_moment, Tensor_Impl &bias_gradient,
+                                  float learning_rate, float beta1, float beta2, float epsilon, size_t timestep, float max_gradient = 1.0F, float inv_scale = 1.0F, float weight_decay = 0.0F) override
+    {
+        Cpu_Tensor_Impl temp_w_grad(weights.getRows(), weights.getColumns());
+        linearBackwardWeightBias(output_gradient, temp_w_grad, bias_gradient, false);
+        weights.adamUpdate(temp_w_grad, first_moment, second_moment, learning_rate, beta1, beta2, epsilon, timestep, max_gradient, inv_scale, weight_decay);
     }
 
     void batchNorm2dForward(const Tensor_Impl &gamma, const Tensor_Impl &beta,
@@ -1763,7 +1911,7 @@ public:
         (*output_cpu.storage_buffer)[0] = loss;
     }
 
-    void concatenateCollumns(const Tensor_Impl &other, Tensor_Impl &output) const override
+    void concatenateColumns(const Tensor_Impl &other, Tensor_Impl &output) const override
     {
         const auto &a_data = getData();
         const auto &b_data = other.getData();
@@ -1771,10 +1919,10 @@ public:
 
         if (getRows() != other.getRows())
         {
-            Logger::logMessage(Input_Format{"Cpu_Tensor_Impl::concatenateCollumns: Row mismatch: {} vs {}",
+            Logger::logMessage(Input_Format{"Cpu_Tensor_Impl::concatenateColumns: Row mismatch: {} vs {}",
                                             getRows(), other.getRows()},
                                Log_Level::LOG_ERROR, true, 0, Log_Feature::TENSOR_INSPECTION);
-            throw std::invalid_argument("Row count mismatch in concatenateCollumns");
+            throw std::invalid_argument("Row count mismatch in concatenateColumns");
         }
 
         size_t cols_a = getColumns();
@@ -1810,11 +1958,11 @@ public:
         std::copy(b_data.begin(), b_data.end(), output_cpu.storage_buffer->begin() + a_data.size());
     }
 
-    void splitCollumns(size_t split_index, Tensor_Impl &result_left, Tensor_Impl &result_right) const override
+    void splitColumns(size_t split_index, Tensor_Impl &result_left, Tensor_Impl &result_right) const override
     {
         if (split_index == 0 || split_index >= getColumns())
         {
-            throw std::out_of_range("Split index out of range in splitCollumns");
+            throw std::out_of_range("Split index out of range in splitColumns");
         }
 
         const auto &a_data = getData();
@@ -1905,6 +2053,728 @@ public:
         return std::ref(*storage_buffer);
     }
 
+    void rmsNormForward(const Tensor_Impl &gamma, Tensor_Impl &inv_rms, Tensor_Impl &output, float epsilon) const override
+    {
+        size_t b_count = getRows();
+        size_t f_dim = getColumns();
+        const auto &in_data = getData();
+        const auto &gamma_data = gamma.getData();
+
+        auto &inv_rms_cpu = static_cast<Cpu_Tensor_Impl &>(inv_rms);
+        auto &out_cpu = static_cast<Cpu_Tensor_Impl &>(output);
+
+        inv_rms_cpu.reshape(b_count, 1);
+        out_cpu.reshape(b_count, f_dim);
+
+        for (size_t i = 0; i < b_count; ++i)
+        {
+            float sum_sq = 0.0f;
+            for (size_t j = 0; j < f_dim; ++j)
+            {
+                float val = in_data[i * f_dim + j];
+                sum_sq += val * val;
+            }
+            float mean_sq = sum_sq / static_cast<float>(f_dim);
+            float inv_val = 1.0f / std::sqrt(mean_sq + epsilon);
+            (*inv_rms_cpu.storage_buffer)[i] = inv_val;
+
+            for (size_t j = 0; j < f_dim; ++j)
+            {
+                (*out_cpu.storage_buffer)[i * f_dim + j] = in_data[i * f_dim + j] * inv_val * gamma_data[j];
+            }
+        }
+    }
+
+    void rmsNormBackward(const Tensor_Impl &output_gradient, const Tensor_Impl &gamma, const Tensor_Impl &inv_rms,
+                         Tensor_Impl &gamma_gradient, Tensor_Impl &input_gradient, bool accumulate_gamma = false) const override
+    {
+        size_t b_count = getRows();
+        size_t f_dim = getColumns();
+        const auto &in_data = getData();
+        const auto &out_grad = output_gradient.getData();
+        const auto &gamma_data = gamma.getData();
+        const auto &inv_rms_data = inv_rms.getData();
+
+        auto &g_grad_cpu = static_cast<Cpu_Tensor_Impl &>(gamma_gradient);
+        auto &in_grad_cpu = static_cast<Cpu_Tensor_Impl &>(input_gradient);
+
+        g_grad_cpu.reshape(1, f_dim);
+        in_grad_cpu.reshape(b_count, f_dim);
+
+        if (!accumulate_gamma)
+        {
+            std::fill(g_grad_cpu.storage_buffer->begin(), g_grad_cpu.storage_buffer->end(), 0.0f);
+        }
+
+        for (size_t j = 0; j < f_dim; ++j)
+        {
+            float sum_dg = 0.0f;
+            for (size_t i = 0; i < b_count; ++i)
+            {
+                sum_dg += out_grad[i * f_dim + j] * in_data[i * f_dim + j] * inv_rms_data[i];
+            }
+            (*g_grad_cpu.storage_buffer)[j] += sum_dg;
+        }
+
+        float inv_dim = 1.0f / static_cast<float>(f_dim);
+        for (size_t i = 0; i < b_count; ++i)
+        {
+            float inv_r = inv_rms_data[i];
+            float s = 0.0f;
+            for (size_t j = 0; j < f_dim; ++j)
+            {
+                float x_hat = in_data[i * f_dim + j] * inv_r;
+                s += out_grad[i * f_dim + j] * gamma_data[j] * x_hat;
+            }
+            for (size_t j = 0; j < f_dim; ++j)
+            {
+                float x_hat = in_data[i * f_dim + j] * inv_r;
+                float dx = inv_r * (out_grad[i * f_dim + j] * gamma_data[j] - x_hat * (s * inv_dim));
+                (*in_grad_cpu.storage_buffer)[i * f_dim + j] = dx;
+            }
+        }
+    }
+
+    void applyRoPE(Tensor_Impl &output, uint32_t seq_len, uint32_t head_dim, int direction = 1, float base = 10000.0f, uint32_t num_heads = 1, uint32_t mode = 0) const override
+    {
+        const auto &in_data = getData();
+        auto &out_cpu = static_cast<Cpu_Tensor_Impl &>(output);
+        if (mode == 1)
+        {
+            out_cpu.reshape(Shape{shape[0], num_heads, seq_len, head_dim});
+        }
+        else if (mode == 2)
+        {
+            out_cpu.reshape(Shape{shape[0], seq_len, num_heads, head_dim});
+        }
+        else
+        {
+            out_cpu.reshape(shape);
+        }
+
+        size_t total = total_elements;
+        size_t total_pairs = total / 2;
+        size_t D = head_dim;
+        size_t S = seq_len;
+        size_t H = num_heads;
+
+        for (size_t pair_id = 0; pair_id < total_pairs; ++pair_id)
+        {
+            size_t base_idx = pair_id * 2;
+            size_t c = base_idx % D;
+            size_t pair_idx = c / 2;
+            size_t token_pos = 0;
+            size_t in_idx = base_idx;
+            size_t out_idx = base_idx;
+
+            if (mode == 1)
+            {
+                token_pos = (base_idx / D) % S;
+                size_t h = (base_idx / (D * S)) % H;
+                size_t b = base_idx / (D * S * H);
+                in_idx = b * (S * H * D) + token_pos * (H * D) + h * D + c;
+                out_idx = base_idx;
+            }
+            else if (mode == 2)
+            {
+                token_pos = (base_idx / D) % S;
+                size_t h = (base_idx / (D * S)) % H;
+                size_t b = base_idx / (D * S * H);
+                in_idx = base_idx;
+                out_idx = b * (S * H * D) + token_pos * (H * D) + h * D + c;
+            }
+            else
+            {
+                token_pos = (base_idx / D) % S;
+                in_idx = base_idx;
+                out_idx = base_idx;
+            }
+
+            float theta = std::pow(base, -2.0f * static_cast<float>(pair_idx) / static_cast<float>(D));
+            float alpha = static_cast<float>(direction) * static_cast<float>(token_pos) * theta;
+            float cos_a = std::cos(alpha);
+            float sin_a = std::sin(alpha);
+
+            float x0 = in_data[in_idx];
+            float x1 = in_data[in_idx + 1];
+
+            (*out_cpu.storage_buffer)[out_idx]     = x0 * cos_a - x1 * sin_a;
+            (*out_cpu.storage_buffer)[out_idx + 1] = x0 * sin_a + x1 * cos_a;
+        }
+    }
+
+    void swigluForward(const Tensor_Impl &b, Tensor_Impl &output) const override
+    {
+        const auto &a_data = getData();
+        const auto &b_data = b.getData();
+        auto &out_cpu = static_cast<Cpu_Tensor_Impl &>(output);
+        out_cpu.reshape(shape);
+
+        size_t total = total_elements;
+        for (size_t idx = 0; idx < total; ++idx)
+        {
+            float a_val = a_data[idx];
+            float b_val = b_data[idx];
+            float sig_a = 1.0f / (1.0f + std::exp(-a_val));
+            (*out_cpu.storage_buffer)[idx] = (a_val * sig_a) * b_val;
+        }
+    }
+
+    void swigluBackward(const Tensor_Impl &output_gradient, const Tensor_Impl &b, Tensor_Impl &grad_a, Tensor_Impl &grad_b) const override
+    {
+        const auto &dy_data = output_gradient.getData();
+        const auto &a_data = getData();
+        const auto &b_data = b.getData();
+
+        auto &da_cpu = static_cast<Cpu_Tensor_Impl &>(grad_a);
+        auto &db_cpu = static_cast<Cpu_Tensor_Impl &>(grad_b);
+        da_cpu.reshape(shape);
+        db_cpu.reshape(shape);
+
+        size_t total = total_elements;
+        for (size_t idx = 0; idx < total; ++idx)
+        {
+            float dy = dy_data[idx];
+            float a_val = a_data[idx];
+            float b_val = b_data[idx];
+
+            float sig_a = 1.0f / (1.0f + std::exp(-a_val));
+            float silu_a = a_val * sig_a;
+            float d_silu_a = sig_a * (1.0f + a_val * (1.0f - sig_a));
+
+            (*db_cpu.storage_buffer)[idx] = dy * silu_a;
+            (*da_cpu.storage_buffer)[idx] = dy * b_val * d_silu_a;
+        }
+    }
+
+    void fusedSwiGLUForward(Tensor_Impl &output) const override
+    {
+        size_t rows = shape[0];
+        size_t total_cols = shape[1];
+        size_t half_dim = total_cols / 2;
+        auto &out_cpu = static_cast<Cpu_Tensor_Impl &>(output);
+        out_cpu.reshape(Shape{rows, half_dim});
+
+        const auto &in_data = getData();
+        for (size_t r = 0; r < rows; ++r)
+        {
+            for (size_t c = 0; c < half_dim; ++c)
+            {
+                float a = in_data[r * total_cols + c];
+                float b = in_data[r * total_cols + half_dim + c];
+                float sig_a = 1.0f / (1.0f + std::exp(-std::clamp(a, -85.0f, 85.0f)));
+                float silu_a = a * sig_a;
+                (*out_cpu.storage_buffer)[r * half_dim + c] = silu_a * b;
+            }
+        }
+    }
+
+    void fusedSwiGLUBackward(const Tensor_Impl &output_gradient, Tensor_Impl &input_gradient) const override
+    {
+        size_t rows = shape[0];
+        size_t total_cols = shape[1];
+        size_t half_dim = total_cols / 2;
+        auto &dx_cpu = static_cast<Cpu_Tensor_Impl &>(input_gradient);
+        dx_cpu.reshape(Shape{rows, total_cols});
+
+        const auto &in_data = getData();
+        const auto &dy_data = output_gradient.getData();
+        for (size_t r = 0; r < rows; ++r)
+        {
+            for (size_t c = 0; c < half_dim; ++c)
+            {
+                float dy = dy_data[r * half_dim + c];
+                float a = in_data[r * total_cols + c];
+                float b = in_data[r * total_cols + half_dim + c];
+                float sig_a = 1.0f / (1.0f + std::exp(-std::clamp(a, -85.0f, 85.0f)));
+                float silu_a = a * sig_a;
+                float d_silu_a = sig_a * (1.0f + a * (1.0f - sig_a));
+
+                (*dx_cpu.storage_buffer)[r * total_cols + c] = dy * b * d_silu_a;
+                (*dx_cpu.storage_buffer)[r * total_cols + half_dim + c] = dy * silu_a;
+            }
+        }
+    }
+
+    void flashAttentionForward(const Tensor_Impl &k, const Tensor_Impl &v, Tensor_Impl &output,
+                               uint32_t num_heads, uint32_t seq_len, uint32_t head_dim,
+                               bool is_causal = false, float scale = 0.0f,
+                               Tensor_Impl *l_stats = nullptr) const override
+    {
+        const auto &q_data = getData();
+        const auto &k_data = k.getData();
+        const auto &v_data = v.getData();
+
+        auto &out_cpu = static_cast<Cpu_Tensor_Impl &>(output);
+        out_cpu.reshape(shape);
+
+        if (scale <= 0.0f)
+        {
+            scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
+        }
+
+        size_t total_elements_per_head = static_cast<size_t>(seq_len) * head_dim;
+        size_t total_heads = (total_elements_per_head > 0) ? (total_elements / total_elements_per_head) : num_heads;
+
+        Cpu_Tensor_Impl *l_cpu = nullptr;
+        if (l_stats)
+        {
+            l_stats->setDataType(Data_Type::FLOAT32);
+            l_stats->reshape(Shape{ total_heads, seq_len });
+            l_cpu = static_cast<Cpu_Tensor_Impl *>(l_stats);
+            if (!l_cpu->storage_buffer || l_cpu->storage_buffer->size() != total_heads * seq_len)
+            {
+                l_cpu->storage_buffer = std::make_shared<std::vector<float>>(total_heads * seq_len, 0.0f);
+            }
+        }
+
+        for (size_t h = 0; h < total_heads; ++h)
+        {
+            size_t head_offset = h * total_elements_per_head;
+
+            for (size_t i = 0; i < seq_len; ++i)
+            {
+                std::vector<float> scores(seq_len, -1e20f);
+                float max_score = -1e20f;
+
+                size_t max_j = is_causal ? (i + 1) : seq_len;
+                for (size_t j = 0; j < max_j; ++j)
+                {
+                    float dot = 0.0f;
+                    for (size_t d = 0; d < head_dim; ++d)
+                    {
+                        dot += q_data[head_offset + i * head_dim + d] * k_data[head_offset + j * head_dim + d];
+                    }
+                    scores[j] = dot * scale;
+                    if (scores[j] > max_score)
+                    {
+                        max_score = scores[j];
+                    }
+                }
+
+                float sum_exp = 0.0f;
+                for (size_t j = 0; j < max_j; ++j)
+                {
+                    scores[j] = std::exp(scores[j] - max_score);
+                    sum_exp += scores[j];
+                }
+                float inv_sum = (sum_exp > 0.0f) ? (1.0f / sum_exp) : 0.0f;
+
+                if (l_cpu)
+                {
+                    float logsumexp = (sum_exp > 0.0f) ? (max_score + std::log(sum_exp)) : -1e20f;
+                    (*l_cpu->storage_buffer)[h * seq_len + i] = logsumexp;
+                }
+
+                for (size_t d = 0; d < head_dim; ++d)
+                {
+                    float out_val = 0.0f;
+                    for (size_t j = 0; j < max_j; ++j)
+                    {
+                        out_val += (scores[j] * inv_sum) * v_data[head_offset + j * head_dim + d];
+                    }
+                    (*out_cpu.storage_buffer)[head_offset + i * head_dim + d] = out_val;
+                }
+            }
+        }
+    }
+
+    void flashAttentionBackward(const Tensor_Impl &k, const Tensor_Impl &v,
+                                const Tensor_Impl &o, const Tensor_Impl &do_grad,
+                                Tensor_Impl &dq, Tensor_Impl &dk, Tensor_Impl &dv,
+                                uint32_t num_heads, uint32_t seq_len, uint32_t head_dim,
+                                bool is_causal = false, float scale = 0.0f,
+                                const Tensor_Impl *l_stats = nullptr) const override
+    {
+        const auto &q_data = getData();
+        const auto &k_data = k.getData();
+        const auto &v_data = v.getData();
+        const auto &o_data = o.getData();
+        const auto &do_data = do_grad.getData();
+
+        auto &dq_cpu = static_cast<Cpu_Tensor_Impl &>(dq);
+        auto &dk_cpu = static_cast<Cpu_Tensor_Impl &>(dk);
+        auto &dv_cpu = static_cast<Cpu_Tensor_Impl &>(dv);
+
+        dq_cpu.reshape(shape);
+        dk_cpu.reshape(k.getShape());
+        dv_cpu.reshape(v.getShape());
+
+        std::fill(dq_cpu.storage_buffer->begin(), dq_cpu.storage_buffer->end(), 0.0f);
+        std::fill(dk_cpu.storage_buffer->begin(), dk_cpu.storage_buffer->end(), 0.0f);
+        std::fill(dv_cpu.storage_buffer->begin(), dv_cpu.storage_buffer->end(), 0.0f);
+
+        if (scale <= 0.0f)
+        {
+            scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
+        }
+
+        size_t total_elements_per_head = static_cast<size_t>(seq_len) * head_dim;
+        size_t total_heads = (total_elements_per_head > 0) ? (total_elements / total_elements_per_head) : num_heads;
+
+        std::vector<float> l_data_cache;
+        if (l_stats)
+        {
+            l_data_cache = l_stats->getData();
+        }
+
+        for (size_t h = 0; h < total_heads; ++h)
+        {
+            size_t head_offset = h * total_elements_per_head;
+
+            for (size_t i = 0; i < seq_len; ++i)
+            {
+                std::vector<float> p(seq_len, 0.0f);
+                size_t max_j = is_causal ? (i + 1) : seq_len;
+
+                if (l_stats != nullptr && !l_data_cache.empty())
+                {
+                    float l_i = l_data_cache[h * seq_len + i];
+                    for (size_t j = 0; j < max_j; ++j)
+                    {
+                        float dot = 0.0f;
+                        for (size_t d = 0; d < head_dim; ++d)
+                        {
+                            dot += q_data[head_offset + i * head_dim + d] * k_data[head_offset + j * head_dim + d];
+                        }
+                        p[j] = std::exp(dot * scale - l_i);
+                    }
+                }
+                else
+                {
+                    float max_score = -1e20f;
+                    for (size_t j = 0; j < max_j; ++j)
+                    {
+                        float dot = 0.0f;
+                        for (size_t d = 0; d < head_dim; ++d)
+                        {
+                            dot += q_data[head_offset + i * head_dim + d] * k_data[head_offset + j * head_dim + d];
+                        }
+                        p[j] = dot * scale;
+                        if (p[j] > max_score)
+                        {
+                            max_score = p[j];
+                        }
+                    }
+
+                    float sum_exp = 0.0f;
+                    for (size_t j = 0; j < max_j; ++j)
+                    {
+                        p[j] = std::exp(p[j] - max_score);
+                        sum_exp += p[j];
+                    }
+                    float inv_sum = (sum_exp > 0.0f) ? (1.0f / sum_exp) : 0.0f;
+                    for (size_t j = 0; j < max_j; ++j)
+                    {
+                        p[j] *= inv_sum;
+                    }
+                }
+
+                float di = 0.0f;
+                for (size_t d = 0; d < head_dim; ++d)
+                {
+                    di += do_data[head_offset + i * head_dim + d] * o_data[head_offset + i * head_dim + d];
+                }
+
+                for (size_t j = 0; j < max_j; ++j)
+                {
+                    float dp = 0.0f;
+                    for (size_t d = 0; d < head_dim; ++d)
+                    {
+                        dp += do_data[head_offset + i * head_dim + d] * v_data[head_offset + j * head_dim + d];
+                    }
+
+                    float ds = p[j] * (dp - di) * scale;
+
+                    for (size_t d = 0; d < head_dim; ++d)
+                    {
+                        (*dq_cpu.storage_buffer)[head_offset + i * head_dim + d] += ds * k_data[head_offset + j * head_dim + d];
+                    }
+
+                    for (size_t d = 0; d < head_dim; ++d)
+                    {
+                        (*dk_cpu.storage_buffer)[head_offset + j * head_dim + d] += ds * q_data[head_offset + i * head_dim + d];
+                    }
+
+                    for (size_t d = 0; d < head_dim; ++d)
+                    {
+                        (*dv_cpu.storage_buffer)[head_offset + j * head_dim + d] += p[j] * do_data[head_offset + i * head_dim + d];
+                    }
+                }
+            }
+        }
+    }
+
+    void embeddingForward(const Tensor_Impl &indices, Tensor_Impl &output) const override
+    {
+        size_t S = indices.getTotalElements();
+        size_t D = getColumns();
+        size_t V = shape[0];
+        output.setDataType(data_type);
+        if (indices.getShape().getRank() == 2)
+        {
+            output.reshape(Shape{ indices.getShape()[0], indices.getShape()[1], D });
+        }
+        else
+        {
+            output.reshape(Shape{ S, D });
+        }
+
+        auto &out_cpu = static_cast<Cpu_Tensor_Impl &>(output);
+        if (data_type == Data_Type::FLOAT16)
+        {
+            if (!out_cpu.storage_buffer_fp16 || out_cpu.storage_buffer_fp16->size() != S * D)
+            {
+                out_cpu.storage_buffer_fp16 = std::make_shared<std::vector<float16_t>>(S * D, float16_t(0.0f));
+            }
+            out_cpu.storage_buffer.reset();
+        }
+        else
+        {
+            if (!out_cpu.storage_buffer || out_cpu.storage_buffer->size() != S * D)
+            {
+                out_cpu.storage_buffer = std::make_shared<std::vector<float>>(S * D, 0.0f);
+            }
+            out_cpu.storage_buffer_fp16.reset();
+        }
+
+        const auto &indices_data = indices.getData();
+        const auto &weight_data = getData();
+
+        for (size_t s = 0; s < S; ++s)
+        {
+            int row = static_cast<int>(std::round(indices_data[s]));
+            if (row >= 0 && static_cast<size_t>(row) < V)
+            {
+                if (data_type == Data_Type::FLOAT16)
+                {
+                    std::memcpy(out_cpu.storage_buffer_fp16->data() + s * D,
+                                storage_buffer_fp16->data() + row * D,
+                                D * sizeof(float16_t));
+                }
+                else
+                {
+                    std::memcpy(out_cpu.storage_buffer->data() + s * D,
+                                weight_data.data() + row * D,
+                                D * sizeof(float));
+                }
+            }
+            else
+            {
+                if (data_type == Data_Type::FLOAT16)
+                {
+                    std::memset(out_cpu.storage_buffer_fp16->data() + s * D, 0, D * sizeof(float16_t));
+                }
+                else
+                {
+                    std::memset(out_cpu.storage_buffer->data() + s * D, 0, D * sizeof(float));
+                }
+            }
+        }
+    }
+
+    void embeddingBackward(const Tensor_Impl &indices, const Tensor_Impl &output_gradient, Tensor_Impl &weight_gradient) const override
+    {
+        size_t S = indices.getTotalElements();
+        size_t D = getColumns();
+        size_t V = shape[0];
+
+        auto &w_grad_cpu = static_cast<Cpu_Tensor_Impl &>(weight_gradient);
+        if (!w_grad_cpu.storage_buffer || w_grad_cpu.storage_buffer->size() != V * D)
+        {
+            w_grad_cpu.storage_buffer = std::make_shared<std::vector<float>>(V * D, 0.0f);
+        }
+
+        const auto &indices_data = indices.getData();
+        const auto &grad_out_data = output_gradient.getData();
+
+        for (size_t s = 0; s < S; ++s)
+        {
+            int row = static_cast<int>(std::round(indices_data[s]));
+            if (row >= 0 && static_cast<size_t>(row) < V)
+            {
+                for (size_t d = 0; d < D; ++d)
+                {
+                    (*w_grad_cpu.storage_buffer)[row * D + d] += grad_out_data[s * D + d];
+                }
+            }
+        }
+    }
+
+    void singleTokenAttentionForward(const Tensor_Impl &k, const Tensor_Impl &v, Tensor_Impl &output,
+                                     size_t num_heads, size_t head_dim, size_t total_seq_len) const override
+    {
+        output.setDataType(data_type);
+        output.reshape(Shape{ 1, num_heads, 1, head_dim });
+
+        auto &out_cpu = static_cast<Cpu_Tensor_Impl &>(output);
+        if (!out_cpu.storage_buffer || out_cpu.storage_buffer->size() != num_heads * head_dim)
+        {
+            out_cpu.storage_buffer = std::make_shared<std::vector<float>>(num_heads * head_dim, 0.0f);
+        }
+
+        const auto &q_data = getData();
+        const auto &k_data = k.getData();
+        const auto &v_data = v.getData();
+        float scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
+
+        std::vector<float> scores(total_seq_len);
+
+        for (size_t h = 0; h < num_heads; ++h)
+        {
+            const float *q_h = q_data.data() + h * head_dim;
+            const float *k_h = k_data.data() + h * total_seq_len * head_dim;
+            const float *v_h = v_data.data() + h * total_seq_len * head_dim;
+            float *out_h = out_cpu.storage_buffer->data() + h * head_dim;
+
+            float max_score = -1e20f;
+            for (size_t t = 0; t < total_seq_len; ++t)
+            {
+                float dot = 0.0f;
+                for (size_t i = 0; i < head_dim; ++i)
+                {
+                    dot += q_h[i] * k_h[t * head_dim + i];
+                }
+                scores[t] = dot * scale;
+                if (scores[t] > max_score) max_score = scores[t];
+            }
+
+            float sum_exp = 0.0f;
+            for (size_t t = 0; t < total_seq_len; ++t)
+            {
+                scores[t] = std::exp(scores[t] - max_score);
+                sum_exp += scores[t];
+            }
+            float inv_sum = (sum_exp > 0.0f) ? (1.0f / sum_exp) : 0.0f;
+            for (size_t t = 0; t < total_seq_len; ++t)
+            {
+                scores[t] *= inv_sum;
+            }
+
+            for (size_t i = 0; i < head_dim; ++i)
+            {
+                float val = 0.0f;
+                for (size_t t = 0; t < total_seq_len; ++t)
+                {
+                    val += scores[t] * v_h[t * head_dim + i];
+                }
+                out_h[i] = val;
+            }
+        }
+    }
+
+    float fusedCrossEntropyLoss(const Tensor_Impl &targets, Tensor_Impl &d_logits, uint32_t valid_tokens = 0) const override
+    {
+        size_t total_tokens = (shape.getRank() == 3) ? (shape[0] * shape[1]) : getRows();
+        size_t V = (shape.getRank() == 3) ? shape[2] : getColumns();
+
+        d_logits.setDataType(data_type);
+        d_logits.reshape(shape);
+
+        if (total_tokens == 0 || V == 0)
+        {
+            return 0.0f;
+        }
+
+        const auto &logits_data = getData();
+        const auto &targets_data = targets.getData();
+        auto &grad_data = static_cast<Cpu_Tensor_Impl &>(d_logits).storage_buffer;
+        if (!grad_data || grad_data->size() < total_tokens * V)
+        {
+            grad_data = std::make_shared<std::vector<float>>(total_tokens * V, 0.0f);
+        }
+        else
+        {
+            std::fill(grad_data->begin(), grad_data->begin() + total_tokens * V, 0.0f);
+        }
+
+        if (valid_tokens == 0)
+        {
+            for (size_t s = 0; s < total_tokens; ++s)
+            {
+                if (s < targets_data.size())
+                {
+                    int32_t target = static_cast<int32_t>(std::round(targets_data[s]));
+                    if (target >= 0 && static_cast<size_t>(target) < V)
+                    {
+                        ++valid_tokens;
+                    }
+                }
+            }
+        }
+
+        if (valid_tokens == 0)
+        {
+            return 0.0f;
+        }
+
+        float scale = 1.0f / static_cast<float>(valid_tokens);
+        float total_loss = 0.0f;
+
+        for (size_t s = 0; s < total_tokens; ++s)
+        {
+            int32_t target = (s < targets_data.size()) ? static_cast<int32_t>(std::round(targets_data[s])) : -100;
+            if (target < 0 || static_cast<size_t>(target) >= V)
+            {
+                continue;
+            }
+
+            const float *row_logits = logits_data.data() + s * V;
+            float *row_grad = grad_data->data() + s * V;
+
+            float max_val = -1e20f;
+            for (size_t v = 0; v < V; ++v)
+            {
+                float val = row_logits[v];
+                if (!std::isnan(val) && !std::isinf(val))
+                {
+                    max_val = std::max(max_val, val);
+                }
+            }
+
+            float sum_exp = 0.0f;
+            for (size_t v = 0; v < V; ++v)
+            {
+                float val = row_logits[v];
+                if (!std::isnan(val) && !std::isinf(val))
+                {
+                    sum_exp += std::exp(val - max_val);
+                }
+            }
+
+            float lse = max_val + std::log(std::max(sum_exp, 1e-12f));
+            float target_logit = row_logits[target];
+            float token_loss = lse - target_logit;
+            total_loss += token_loss;
+
+            float inv_sum = (sum_exp > 0.0f) ? (1.0f / sum_exp) : 0.0f;
+            for (size_t v = 0; v < V; ++v)
+            {
+                float logit_val = row_logits[v];
+                float prob = 0.0f;
+                if (!std::isnan(logit_val) && !std::isinf(logit_val))
+                {
+                    prob = std::exp(logit_val - max_val) * inv_sum;
+                }
+                float delta = (v == static_cast<size_t>(target)) ? 1.0f : 0.0f;
+                row_grad[v] = (prob - delta) * scale;
+            }
+        }
+
+        if (data_type == Data_Type::FLOAT16)
+        {
+            auto &d_logits_cpu = static_cast<Cpu_Tensor_Impl &>(d_logits);
+            if (!d_logits_cpu.storage_buffer_fp16 || d_logits_cpu.storage_buffer_fp16->size() < total_tokens * V)
+            {
+                d_logits_cpu.storage_buffer_fp16 = std::make_shared<std::vector<float16_t>>(total_tokens * V);
+            }
+            convertFp32ToFp16(grad_data->data(), d_logits_cpu.storage_buffer_fp16->data(), total_tokens * V);
+            d_logits_cpu.storage_buffer.reset();
+        }
+
+        return total_loss * scale;
+    }
+
     Storage_Handle getStorage() const override { return std::cref(getData()); }
     const std::shared_ptr<std::vector<float16_t>> &getStorageBufferFp16() const noexcept { return storage_buffer_fp16; }
     std::shared_ptr<std::vector<float16_t>> &getStorageBufferFp16() noexcept { return storage_buffer_fp16; }
@@ -1913,7 +2783,4 @@ public:
     bool isEmpty() const noexcept override { return (data_type == Data_Type::FLOAT16) ? (!storage_buffer_fp16 || storage_buffer_fp16->empty()) : (!storage_buffer || storage_buffer->empty()); }
 
     void setStorageBufferFp16(std::shared_ptr<std::vector<float16_t>> _buf) noexcept { storage_buffer_fp16 = std::move(_buf); }
-    void setStorageBuffer(std::shared_ptr<std::vector<float>> _storage_buffer) noexcept { storage_buffer = std::move(_storage_buffer); }
 };
-
-using Cpu_Matrix_Impl = Cpu_Tensor_Impl;

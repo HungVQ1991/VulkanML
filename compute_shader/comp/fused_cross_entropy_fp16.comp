@@ -1,0 +1,102 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer LogitsBuffer { float16_t logits_data[]; };
+layout(std430, binding = 1) readonly buffer TargetsBuffer { float targets_data[]; };
+layout(std430, binding = 2) writeonly buffer GradLogitsBuffer { float16_t grad_logits_data[]; };
+layout(std430, binding = 3) writeonly buffer LossesBuffer { float losses_data[]; };
+
+layout(push_constant) uniform Constants {
+    uint seq_len;
+    uint vocab_size;
+    uint valid_tokens;
+} pc;
+
+shared float s_reduce[256];
+
+void main() {
+    uint s = gl_WorkGroupID.x;
+    if (s >= pc.seq_len) return;
+
+    uint tid = gl_LocalInvocationID.x;
+    uint V = pc.vocab_size;
+    uint row_offset = s * V;
+
+    // 1. Find row maximum for numerical stability
+    float thread_max = -1e20;
+    for (uint v = tid; v < V; v += gl_WorkGroupSize.x) {
+        float val = float(logits_data[row_offset + v]);
+        if (!isnan(val) && !isinf(val)) {
+            thread_max = max(thread_max, val);
+        }
+    }
+    s_reduce[tid] = thread_max;
+    barrier();
+
+    for (uint stride = 128; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            s_reduce[tid] = max(s_reduce[tid], s_reduce[tid + stride]);
+        }
+        barrier();
+    }
+    float row_max = s_reduce[0];
+    barrier();
+
+    // 2. Compute sum of exponentials: sum(exp(z - row_max))
+    float thread_sum = 0.0;
+    for (uint v = tid; v < V; v += gl_WorkGroupSize.x) {
+        float val = float(logits_data[row_offset + v]);
+        if (!isnan(val) && !isinf(val)) {
+            thread_sum += exp(val - row_max);
+        }
+    }
+    s_reduce[tid] = thread_sum;
+    barrier();
+
+    for (uint stride = 128; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            s_reduce[tid] += s_reduce[tid + stride];
+        }
+        barrier();
+    }
+    float row_sum = s_reduce[0];
+    barrier();
+
+    // 3. Compute Log-Sum-Exp and token cross-entropy loss
+    float lse = row_max + log(max(row_sum, 1e-12));
+    int target = int(round(targets_data[s]));
+    bool is_valid = (target >= 0 && uint(target) < V);
+
+    if (tid == 0) {
+        if (is_valid) {
+            float target_logit = float(logits_data[row_offset + uint(target)]);
+            losses_data[s] = lse - target_logit;
+        } else {
+            losses_data[s] = 0.0;
+        }
+    }
+
+    // 4. Compute gradient: d_logits = (prob - delta) / valid_tokens
+    float inv_sum = (row_sum > 0.0) ? (1.0 / row_sum) : 0.0;
+    float scale = (pc.valid_tokens > 0) ? (1.0 / float(pc.valid_tokens)) : 0.0;
+
+    for (uint v = tid; v < V; v += gl_WorkGroupSize.x) {
+        uint idx = row_offset + v;
+        if (is_valid) {
+            float logit_val = float(logits_data[idx]);
+            float prob = 0.0;
+            if (!isnan(logit_val) && !isinf(logit_val)) {
+                prob = exp(logit_val - row_max) * inv_sum;
+            }
+            float delta = (v == uint(target)) ? 1.0 : 0.0;
+            float g = (prob - delta) * scale;
+            if (isnan(g) || isinf(g)) g = 0.0;
+            grad_logits_data[idx] = float16_t(clamp(g, -65504.0, 65504.0));
+        } else {
+            grad_logits_data[idx] = float16_t(0.0);
+        }
+    }
+}

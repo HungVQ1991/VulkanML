@@ -339,7 +339,4 @@ public:
         }
     }
     void setIsForwardCompleted(bool _is_completed) noexcept { is_forward_completed = _is_completed; }
-    void setIsTraining(bool _is_training) noexcept { is_training = _is_training; }
 };
-
-using Res_Net_20 = Res_Net_20_Layer;

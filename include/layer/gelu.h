@@ -155,7 +155,4 @@ public:
         output_tensor.setExecutionTarget(_new_execution_target);
         input_gradient_tensor.setExecutionTarget(_new_execution_target);
     }
-    void setIsForwardCompleted(bool _is_completed) noexcept { is_forward_completed = _is_completed; }
 };
-
-using GeLU = Gelu_Layer;

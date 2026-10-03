@@ -31,8 +31,8 @@ public:
           input_gradient_tensor(0, 0, _execution_target),
           input_fp32(0, 0, _execution_target),
           is_fused_with_loss(_is_fused_with_loss),
-          execution_target(_execution_target),
-          is_forward_completed(false)
+          is_forward_completed(false),
+          execution_target(_execution_target)
     {
     }
 
@@ -167,7 +167,4 @@ public:
         input_gradient_tensor.setExecutionTarget(_new_execution_target);
     }
     void setIsForwardCompleted(bool _is_completed) noexcept { is_forward_completed = _is_completed; }
-    void setFusedWithLoss(bool _is_fused_with_loss) noexcept { is_fused_with_loss = _is_fused_with_loss; }
 };
-
-using Softmax = Softmax_Layer;

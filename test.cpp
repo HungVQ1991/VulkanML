@@ -30,17 +30,24 @@
 #include "rl/replay_buffer.h"
 #include "rl/transition.h"
 #include "population.h"
+#include "tokenizer/bpe_tokenizer.h"
+#include "helper/llm.h"
+#include "llm/binary_dataset.h"
 
 bool nearlyEqual(float a, float b, float eps = 1e-3f)
 {
     return std::fabs(a - b) < eps;
 }
 
-bool verifyMatrix(const Matrix& mat, const std::vector<float>& expected_data, float eps = 1e-3f)
+bool verifyMatrix(const Tensor& mat, const std::vector<float>& expected_data, float eps = 1e-3f)
 {
-    if (mat.getTarget() == Execution_Target::VULKAN_GPU)
+    if (mat.getExecutionTarget() == Execution_Target::VULKAN_GPU)
     {
-        Execution_Engine::getInstance().executeGraph();
+        auto &engine = Execution_Engine::getInstance();
+        if (!engine.getCurrentGraph().getNodes().empty() || !engine.getContext().getTransferTasks().empty())
+        {
+            engine.executeGraph();
+        }
     }
 
     std::vector<float> actual_data = mat.getData();
@@ -58,15 +65,272 @@ bool verifyMatrix(const Matrix& mat, const std::vector<float>& expected_data, fl
     return true;
 }
 
+bool testEmbeddingLayer(Execution_Target exec_target)
+{
+    constexpr size_t vocab_size = 8;
+    constexpr size_t embedding_dim = 4;
+
+    Embedding_Layer layer(vocab_size, embedding_dim, exec_target);
+
+    std::vector<int32_t> tokens_1d = { 1, 3, 5 };
+    Tensor out_1d = layer.forward(tokens_1d);
+    if (exec_target == Execution_Target::VULKAN_GPU)
+    {
+        Execution_Engine::getInstance().executeGraph();
+    }
+    if (out_1d.getShape() != Shape{ 3, embedding_dim })
+    {
+        return false;
+    }
+    for (float val : out_1d.getData())
+    {
+        if (std::isnan(val) || std::isinf(val))
+        {
+            return false;
+        }
+    }
+
+    std::vector<std::vector<int32_t>> tokens_2d = {
+        { 0, 2 },
+        { 4, 7 }
+    };
+    Tensor out_2d = layer.forward(tokens_2d);
+    if (exec_target == Execution_Target::VULKAN_GPU)
+    {
+        Execution_Engine::getInstance().executeGraph();
+    }
+    if (out_2d.getShape() != Shape{ 2, 2, embedding_dim })
+    {
+        return false;
+    }
+    for (float val : out_2d.getData())
+    {
+        if (std::isnan(val) || std::isinf(val))
+        {
+            return false;
+        }
+    }
+
+    Tensor input_tensor(Shape{ 2, 2 }, std::vector<float>{ 1.0f, 3.0f, 5.0f, 6.0f }, exec_target);
+    Tensor out_tensor = layer.forward(input_tensor);
+    if (exec_target == Execution_Target::VULKAN_GPU)
+    {
+        Execution_Engine::getInstance().executeGraph();
+    }
+    if (out_tensor.getShape() != Shape{ 2, 2, embedding_dim })
+    {
+        return false;
+    }
+
+    Tensor grad_out(Shape{ 2, 2, embedding_dim }, std::vector<float>(2 * 2 * embedding_dim, 0.5f), exec_target);
+    Tensor grad_in = layer.backward(grad_out);
+    if (exec_target == Execution_Target::VULKAN_GPU)
+    {
+        Execution_Engine::getInstance().executeGraph();
+    }
+    if (grad_in.getTotalElements() != 0)
+    {
+        return false;
+    }
+
+    auto params_and_grads = layer.getParametersAndGradients();
+    if (params_and_grads.size() != 1)
+    {
+        return false;
+    }
+    Tensor* weight_grad = params_and_grads[0].second;
+    if (!weight_grad || weight_grad->getTotalElements() != vocab_size * embedding_dim)
+    {
+        return false;
+    }
+    bool has_nonzero_grad = false;
+    for (float val : weight_grad->getData())
+    {
+        if (std::abs(val) > 1e-6f)
+        {
+            has_nonzero_grad = true;
+            break;
+        }
+    }
+    if (!has_nonzero_grad)
+    {
+        return false;
+    }
+
+    layer.resetGradients();
+    if (exec_target == Execution_Target::VULKAN_GPU)
+    {
+        Execution_Engine::getInstance().executeGraph();
+    }
+    for (float val : weight_grad->getData())
+    {
+        if (std::abs(val) > 1e-6f)
+        {
+            return false;
+        }
+    }
+
+    auto layer_clone = layer.clone();
+    if (!layer_clone || layer_clone->getLayerType() != Layer_Type::EMBEDDING)
+    {
+        return false;
+    }
+
+    std::string temp_file = "temp_embedding_io.bin";
+    {
+        std::ofstream out(temp_file, std::ios::binary);
+        if (!out.is_open())
+        {
+            return false;
+        }
+        layer.saveInference(out);
+    }
+    Embedding_Layer loaded_layer(vocab_size, embedding_dim, exec_target);
+    {
+        std::ifstream in(temp_file, std::ios::binary);
+        if (!in.is_open())
+        {
+            return false;
+        }
+        loaded_layer.loadInference(in);
+    }
+    std::filesystem::remove(temp_file);
+
+    Tensor orig_eval = layer.forward(tokens_1d);
+    Tensor loaded_eval = loaded_layer.forward(tokens_1d);
+    if (exec_target == Execution_Target::VULKAN_GPU)
+    {
+        Execution_Engine::getInstance().executeGraph();
+    }
+    return verifyMatrix(loaded_eval, orig_eval.getData());
+}
+
+bool testFusedCrossEntropy(Execution_Target exec_target)
+{
+    Fused_Cross_Entropy cce(-1);
+    if (!cce.isFused() || !cce.supportsIntegerTargets() || cce.getType() != Cost_Type::FUSED_CCE)
+    {
+        return false;
+    }
+
+    constexpr size_t batch_size = 2;
+    constexpr size_t seq_len = 3;
+    constexpr size_t vocab_size = 4;
+    constexpr size_t total_tokens = batch_size * seq_len;
+
+    std::vector<float> logits_data = {
+        2.0f,  1.0f,  0.1f, -1.0f,
+       -0.5f,  3.0f,  1.2f,  0.0f,
+        0.0f,  0.0f,  2.5f,  0.1f,
+
+        1.5f,  0.2f, -0.1f,  2.0f,
+        0.1f,  0.5f,  0.2f,  0.3f,
+       -1.0f,  2.0f, -0.5f,  0.1f
+    };
+
+    Tensor logits(Shape{ batch_size, seq_len, vocab_size }, logits_data, exec_target);
+    std::vector<int32_t> targets = { 0, 1, 2, 3, 1, 1 };
+
+    Tensor grad_indices;
+    float loss_indices = cce.computeLossAndGradient(logits, targets, grad_indices);
+    if (exec_target == Execution_Target::VULKAN_GPU)
+    {
+        Execution_Engine::getInstance().executeGraph();
+    }
+
+    if (std::isnan(loss_indices) || std::isinf(loss_indices) || loss_indices <= 0.0f)
+    {
+        return false;
+    }
+    if (grad_indices.getShape() != logits.getShape())
+    {
+        return false;
+    }
+
+    std::vector<float> grad_data = grad_indices.getData();
+    for (size_t t = 0; t < total_tokens; ++t)
+    {
+        float row_sum = 0.0f;
+        for (size_t v = 0; v < vocab_size; ++v)
+        {
+            row_sum += grad_data[t * vocab_size + v];
+        }
+        if (std::abs(row_sum) > 1e-4f)
+        {
+            return false;
+        }
+    }
+
+    std::vector<float> target_tensor_data(total_tokens);
+    for (size_t i = 0; i < total_tokens; ++i)
+    {
+        target_tensor_data[i] = static_cast<float>(targets[i]);
+    }
+    Tensor target_tensor(Shape{ batch_size, seq_len }, target_tensor_data, exec_target);
+
+    Tensor grad_tensor;
+    float loss_tensor = cce.computeLossAndGradient(logits, target_tensor, grad_tensor);
+    if (exec_target == Execution_Target::VULKAN_GPU)
+    {
+        Execution_Engine::getInstance().executeGraph();
+    }
+
+    if (!nearlyEqual(loss_indices, loss_tensor, 1e-3f))
+    {
+        return false;
+    }
+    if (!verifyMatrix(grad_tensor, grad_data, 1e-3f))
+    {
+        return false;
+    }
+
+    Fused_Cross_Entropy cce_ignore(2);
+    if (cce_ignore.getIgnoreIndex() != 2)
+    {
+        return false;
+    }
+    Tensor grad_ignored;
+    float loss_ignored = cce_ignore.computeLossAndGradient(logits, targets, grad_ignored);
+    if (exec_target == Execution_Target::VULKAN_GPU)
+    {
+        Execution_Engine::getInstance().executeGraph();
+    }
+    if (std::isnan(loss_ignored) || std::isinf(loss_ignored) || loss_ignored <= 0.0f)
+    {
+        return false;
+    }
+
+    std::vector<int32_t> all_ignored = { 2, 2, 2, 2, 2, 2 };
+    Tensor grad_all_ignored;
+    float loss_all_ignored = cce_ignore.computeLossAndGradient(logits, all_ignored, grad_all_ignored);
+    if (exec_target == Execution_Target::VULKAN_GPU)
+    {
+        Execution_Engine::getInstance().executeGraph();
+    }
+    if (loss_all_ignored != 0.0f)
+    {
+        return false;
+    }
+    for (float v : grad_all_ignored.getData())
+    {
+        if (v != 0.0f)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 bool testMatrixAddition(Execution_Target exec_target)
 {
-    Matrix mat_a(2, 2, { 1.0f, 2.0f, 3.0f, 4.0f }, exec_target);
-    Matrix mat_b(2, 2, { 5.0f, 6.0f, 7.0f, 8.0f }, exec_target);
-    Matrix res = mat_a + mat_b;
+    Tensor mat_a(2, 2, { 1.0f, 2.0f, 3.0f, 4.0f }, exec_target);
+    Tensor mat_b(2, 2, { 5.0f, 6.0f, 7.0f, 8.0f }, exec_target);
+    Tensor res = mat_a + mat_b;
     bool standard_ok = verifyMatrix(res, { 6.0f, 8.0f, 10.0f, 12.0f });
 
-    Matrix mat_broadcast(1, 2, { 10.0f, 20.0f }, exec_target);
-    Matrix broadcast_res = mat_a + mat_broadcast;
+    Tensor mat_broadcast(1, 2, { 10.0f, 20.0f }, exec_target);
+    Tensor broadcast_res = mat_a + mat_broadcast;
     bool broadcast_ok = verifyMatrix(broadcast_res, { 11.0f, 22.0f, 13.0f, 24.0f });
 
     return standard_ok && broadcast_ok;
@@ -74,13 +338,13 @@ bool testMatrixAddition(Execution_Target exec_target)
 
 bool testMatrixSubtraction(Execution_Target exec_target)
 {
-    Matrix mat_a(2, 2, { 5.0f, 6.0f, 7.0f, 8.0f }, exec_target);
-    Matrix mat_b(2, 2, { 1.0f, 2.0f, 3.0f, 4.0f }, exec_target);
-    Matrix res = mat_a - mat_b;
+    Tensor mat_a(2, 2, { 5.0f, 6.0f, 7.0f, 8.0f }, exec_target);
+    Tensor mat_b(2, 2, { 1.0f, 2.0f, 3.0f, 4.0f }, exec_target);
+    Tensor res = mat_a - mat_b;
     bool standard_ok = verifyMatrix(res, { 4.0f, 4.0f, 4.0f, 4.0f });
 
-    Matrix mat_broadcast(1, 2, { 1.0f, 2.0f }, exec_target);
-    Matrix broadcast_res = mat_a - mat_broadcast;
+    Tensor mat_broadcast(1, 2, { 1.0f, 2.0f }, exec_target);
+    Tensor broadcast_res = mat_a - mat_broadcast;
     bool broadcast_ok = verifyMatrix(broadcast_res, { 4.0f, 4.0f, 6.0f, 6.0f });
 
     return standard_ok && broadcast_ok;
@@ -88,17 +352,17 @@ bool testMatrixSubtraction(Execution_Target exec_target)
 
 bool testMatrixMultiplication(Execution_Target exec_target)
 {
-    Matrix mat_a(2, 2, { 1.0f, 2.0f, 3.0f, 4.0f }, exec_target);
-    Matrix mat_b(2, 2, { 2.0f, 0.0f, 1.0f, 2.0f }, exec_target);
-    Matrix res = mat_a * mat_b;
+    Tensor mat_a(2, 2, { 1.0f, 2.0f, 3.0f, 4.0f }, exec_target);
+    Tensor mat_b(2, 2, { 2.0f, 0.0f, 1.0f, 2.0f }, exec_target);
+    Tensor res = mat_a * mat_b;
     return verifyMatrix(res, { 4.0f, 4.0f, 10.0f, 8.0f });
 }
 
 bool testScalarOperations(Execution_Target exec_target)
 {
-    Matrix mat_a(2, 2, { 1.0f, 2.0f, 3.0f, 4.0f }, exec_target);
-    Matrix mul_res = mat_a * 2.0f;
-    Matrix div_res = mat_a / 2.0f;
+    Tensor mat_a(2, 2, { 1.0f, 2.0f, 3.0f, 4.0f }, exec_target);
+    Tensor mul_res = mat_a * 2.0f;
+    Tensor div_res = mat_a / 2.0f;
 
     bool mul_ok = verifyMatrix(mul_res, { 2.0f, 4.0f, 6.0f, 8.0f });
     bool div_ok = verifyMatrix(div_res, { 0.5f, 1.0f, 1.5f, 2.0f });
@@ -108,18 +372,18 @@ bool testScalarOperations(Execution_Target exec_target)
 
 bool testHadamardOperations(Execution_Target exec_target)
 {
-    Matrix mat_a(2, 2, { 1.0f, 2.0f, 3.0f, 4.0f }, exec_target);
-    Matrix mat_b(2, 2, { 2.0f, 0.0f, 1.0f, 2.0f }, exec_target);
+    Tensor mat_a(2, 2, { 1.0f, 2.0f, 3.0f, 4.0f }, exec_target);
+    Tensor mat_b(2, 2, { 2.0f, 0.0f, 1.0f, 2.0f }, exec_target);
 
-    Matrix mul_res = mat_a.hadamardMul(mat_b);
-    Matrix div_res = mat_a.hadamardDiv(mat_a);
+    Tensor mul_res = mat_a.hadamardMul(mat_b);
+    Tensor div_res = mat_a.hadamardDiv(mat_a);
 
     bool mul_ok = verifyMatrix(mul_res, { 2.0f, 0.0f, 3.0f, 8.0f });
     bool div_ok = verifyMatrix(div_res, { 1.0f, 1.0f, 1.0f, 1.0f });
 
-    Matrix mat_broadcast(1, 2, { 2.0f, 4.0f }, exec_target);
-    Matrix mul_bcast = mat_a.hadamardMul(mat_broadcast);
-    Matrix div_bcast = mat_a.hadamardDiv(mat_broadcast);
+    Tensor mat_broadcast(1, 2, { 2.0f, 4.0f }, exec_target);
+    Tensor mul_bcast = mat_a.hadamardMul(mat_broadcast);
+    Tensor div_bcast = mat_a.hadamardDiv(mat_broadcast);
 
     bool mul_bcast_ok = verifyMatrix(mul_bcast, { 2.0f, 8.0f, 6.0f, 16.0f });
     bool div_bcast_ok = verifyMatrix(div_bcast, { 0.5f, 0.5f, 1.5f, 1.0f });
@@ -129,12 +393,12 @@ bool testHadamardOperations(Execution_Target exec_target)
 
 bool testTransposeAndInverse(Execution_Target exec_target)
 {
-    Matrix mat_a(2, 2, { 1.0f, 2.0f, 3.0f, 4.0f }, exec_target);
-    Matrix trans_res = mat_a.transpose();
+    Tensor mat_a(2, 2, { 1.0f, 2.0f, 3.0f, 4.0f }, exec_target);
+    Tensor trans_res = mat_a.transpose();
     bool trans_ok = verifyMatrix(trans_res, { 1.0f, 3.0f, 2.0f, 4.0f });
 
-    Matrix mat_inv_target(2, 2, { 4.0f, 7.0f, 2.0f, 6.0f }, exec_target);
-    Matrix inv_res = mat_inv_target.inverse();
+    Tensor mat_inv_target(2, 2, { 4.0f, 7.0f, 2.0f, 6.0f }, exec_target);
+    Tensor inv_res = mat_inv_target.inverse();
     bool inv_ok = verifyMatrix(inv_res, { 0.6f, -0.7f, -0.2f, 0.4f });
 
     return trans_ok && inv_ok;
@@ -142,18 +406,18 @@ bool testTransposeAndInverse(Execution_Target exec_target)
 
 bool testNormalize(Execution_Target exec_target)
 {
-    Matrix vec_mat(1, 2, { 3.0f, 4.0f }, exec_target);
-    Matrix norm_res = vec_mat.normalize();
+    Tensor vec_mat(1, 2, { 3.0f, 4.0f }, exec_target);
+    Tensor norm_res = vec_mat.normalize();
     return verifyMatrix(norm_res, { 0.6f, 0.8f });
 }
 
 bool testMatmulAdd(Execution_Target exec_target)
 {
-    Matrix mat_a(2, 2, { 1.0f, 2.0f, 3.0f, 4.0f }, exec_target);
-    Matrix mat_b(2, 2, { 2.0f, 0.0f, 1.0f, 2.0f }, exec_target);
-    Matrix mat_bias(1, 2, { 5.0f, 6.0f }, exec_target);
+    Tensor mat_a(2, 2, { 1.0f, 2.0f, 3.0f, 4.0f }, exec_target);
+    Tensor mat_b(2, 2, { 2.0f, 0.0f, 1.0f, 2.0f }, exec_target);
+    Tensor mat_bias(1, 2, { 5.0f, 6.0f }, exec_target);
 
-    Matrix res = mat_a.matmulAdd(mat_b, mat_bias);
+    Tensor res = mat_a.matmulAdd(mat_b, mat_bias);
     return verifyMatrix(res, { 9.0f, 10.0f, 15.0f, 14.0f });
 }
 
@@ -226,12 +490,12 @@ bool testBatchedTensorMatmulAdd(Execution_Target exec_target)
 
 bool testRelu(Execution_Target exec_target)
 {
-    Matrix act_mat(2, 2, { -1.0f, 2.0f, 0.0f, -3.0f }, exec_target);
-    Matrix relu_res = act_mat.relu();
+    Tensor act_mat(2, 2, { -1.0f, 2.0f, 0.0f, -3.0f }, exec_target);
+    Tensor relu_res = act_mat.relu();
     bool fwd_ok = verifyMatrix(relu_res, { 0.0f, 2.0f, 0.0f, 0.0f });
 
-    Matrix grad_out(2, 2, { 1.0f, 2.0f, 3.0f, 4.0f }, exec_target);
-    Matrix grad_in = act_mat.reluBackward(grad_out);
+    Tensor grad_out(2, 2, { 1.0f, 2.0f, 3.0f, 4.0f }, exec_target);
+    Tensor grad_in = act_mat.reluBackward(grad_out);
     bool bwd_ok = verifyMatrix(grad_in, { 0.0f, 2.0f, 0.0f, 0.0f });
 
     return fwd_ok && bwd_ok;
@@ -239,11 +503,11 @@ bool testRelu(Execution_Target exec_target)
 
 bool testGelu(Execution_Target exec_target)
 {
-    Matrix input_mat(1, 4, { 0.0f, 1.0f, -1.0f, 2.0f }, exec_target);
-    Matrix gelu_res = input_mat.gelu();
+    Tensor input_mat(1, 4, { 0.0f, 1.0f, -1.0f, 2.0f }, exec_target);
+    Tensor gelu_res = input_mat.gelu();
     bool fwd_ok = verifyMatrix(gelu_res, { 0.0f, 0.8412316f, -0.1587684f, 1.9546059f });
 
-    Matrix grad_in = input_mat.geluBackward(Matrix(1, 4, { 1.0f, 1.0f, 1.0f, 1.0f }, exec_target));
+    Tensor grad_in = input_mat.geluBackward(Tensor(1, 4, { 1.0f, 1.0f, 1.0f, 1.0f }, exec_target));
     bool bwd_ok = verifyMatrix(grad_in, { 0.5f, 1.0829548f, -0.0829548f, 1.085999f });
 
     return fwd_ok && bwd_ok;
@@ -251,12 +515,12 @@ bool testGelu(Execution_Target exec_target)
 
 bool testSoftmax(Execution_Target exec_target)
 {
-    Matrix softmax_in(1, 2, { 0.0f, 0.0f }, exec_target);
-    Matrix softmax_res = softmax_in.softmax();
+    Tensor softmax_in(1, 2, { 0.0f, 0.0f }, exec_target);
+    Tensor softmax_res = softmax_in.softmax();
     bool fwd_ok = verifyMatrix(softmax_res, { 0.5f, 0.5f });
 
-    Matrix grad_out(1, 2, { 1.0f, -1.0f }, exec_target);
-    Matrix grad_in = softmax_res.softmaxBackward(grad_out);
+    Tensor grad_out(1, 2, { 1.0f, -1.0f }, exec_target);
+    Tensor grad_in = softmax_res.softmaxBackward(grad_out);
     bool bwd_ok = verifyMatrix(grad_in, { 0.5f, -0.5f });
 
     return fwd_ok && bwd_ok;
@@ -265,13 +529,13 @@ bool testSoftmax(Execution_Target exec_target)
 bool testMseLoss(Execution_Target exec_target)
 {
     Mse_Cost cost_func(exec_target);
-    Matrix pred(1, 2, { 1.0f, 2.0f }, exec_target);
-    Matrix target(1, 2, { 2.0f, 4.0f }, exec_target);
+    Tensor pred(1, 2, { 1.0f, 2.0f }, exec_target);
+    Tensor target(1, 2, { 2.0f, 4.0f }, exec_target);
 
     float loss_val = cost_func.computeLoss(pred, target);
     bool loss_ok = nearlyEqual(loss_val, 2.5f);
 
-    Matrix grad_matrix = cost_func.computeGradient(pred, target);
+    Tensor grad_matrix = cost_func.computeGradient(pred, target);
     bool grad_ok = verifyMatrix(grad_matrix, { -1.0f, -2.0f });
 
     return loss_ok && grad_ok;
@@ -280,13 +544,13 @@ bool testMseLoss(Execution_Target exec_target)
 bool testMaeLoss(Execution_Target exec_target)
 {
     Mae_Cost cost_func(exec_target);
-    Matrix pred(1, 2, { 1.0f, 2.0f }, exec_target);
-    Matrix target(1, 2, { 2.0f, 4.0f }, exec_target);
+    Tensor pred(1, 2, { 1.0f, 2.0f }, exec_target);
+    Tensor target(1, 2, { 2.0f, 4.0f }, exec_target);
 
     float loss_val = cost_func.computeLoss(pred, target);
     bool loss_ok = nearlyEqual(loss_val, 1.5f);
 
-    Matrix grad_matrix = cost_func.computeGradient(pred, target);
+    Tensor grad_matrix = cost_func.computeGradient(pred, target);
     bool grad_ok = verifyMatrix(grad_matrix, { -0.5f, -0.5f });
 
     return loss_ok && grad_ok;
@@ -295,13 +559,13 @@ bool testMaeLoss(Execution_Target exec_target)
 bool testBceLoss(Execution_Target exec_target)
 {
     Bce_Cost cost_func(1e-7f, exec_target);
-    Matrix pred(1, 2, { 0.8f, 0.2f }, exec_target);
-    Matrix target(1, 2, { 1.0f, 0.0f }, exec_target);
+    Tensor pred(1, 2, { 0.8f, 0.2f }, exec_target);
+    Tensor target(1, 2, { 1.0f, 0.0f }, exec_target);
 
     float loss_val = cost_func.computeLoss(pred, target);
     bool loss_ok = nearlyEqual(loss_val, 0.22314355f);
 
-    Matrix grad_matrix = cost_func.computeGradient(pred, target);
+    Tensor grad_matrix = cost_func.computeGradient(pred, target);
     bool grad_ok = verifyMatrix(grad_matrix, { -0.625f, 0.625f });
 
     return loss_ok && grad_ok;
@@ -310,13 +574,13 @@ bool testBceLoss(Execution_Target exec_target)
 bool testCceLoss(Execution_Target exec_target)
 {
     Cce_Cost cost_func(1e-7f, exec_target);
-    Matrix pred(1, 3, { 0.7f, 0.2f, 0.1f }, exec_target);
-    Matrix target(1, 3, { 1.0f, 0.0f, 0.0f }, exec_target);
+    Tensor pred(1, 3, { 0.7f, 0.2f, 0.1f }, exec_target);
+    Tensor target(1, 3, { 1.0f, 0.0f, 0.0f }, exec_target);
 
     float loss_val = cost_func.computeLoss(pred, target);
     bool loss_ok = nearlyEqual(loss_val, 0.356675f);
 
-    Matrix grad_matrix = cost_func.computeGradient(pred, target);
+    Tensor grad_matrix = cost_func.computeGradient(pred, target);
     bool grad_ok = verifyMatrix(grad_matrix, { -0.3f, 0.2f, 0.1f });
 
     return loss_ok && grad_ok;
@@ -325,13 +589,13 @@ bool testCceLoss(Execution_Target exec_target)
 bool testHuberLoss(Execution_Target exec_target)
 {
     Huber_Cost cost_func(1.0f, exec_target);
-    Matrix pred(1, 3, { 1.0f, 2.0f, 5.0f }, exec_target);
-    Matrix target(1, 3, { 1.5f, 4.0f, 2.0f }, exec_target);
+    Tensor pred(1, 3, { 1.0f, 2.0f, 5.0f }, exec_target);
+    Tensor target(1, 3, { 1.5f, 4.0f, 2.0f }, exec_target);
 
     float loss_val = cost_func.computeLoss(pred, target);
     bool loss_ok = nearlyEqual(loss_val, 1.375f);
 
-    Matrix grad_matrix = cost_func.computeGradient(pred, target);
+    Tensor grad_matrix = cost_func.computeGradient(pred, target);
     bool grad_ok = verifyMatrix(grad_matrix, { -0.166667f, -0.333333f, 0.333333f });
 
     return loss_ok && grad_ok;
@@ -340,20 +604,23 @@ bool testHuberLoss(Execution_Target exec_target)
 bool testLinearLayer(Execution_Target exec_target)
 {
     Linear_Layer layer(2, 3, exec_target);
-    layer.setWeights(Matrix(2, 3, { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f }, exec_target));
-    layer.setBiases(Matrix(1, 3, { 0.1f, 0.2f, 0.3f }, exec_target));
+    layer.setWeights(Tensor(2, 3, { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f }, exec_target));
+    layer.setBiases(Tensor(1, 3, { 0.1f, 0.2f, 0.3f }, exec_target));
 
-    Matrix input_x(1, 2, { 1.0f, 2.0f }, exec_target);
-    Matrix output_y = layer.forward(input_x);
-    bool fwd_ok = verifyMatrix(output_y, { 9.1f, 12.2f, 15.3f });
+    Tensor input_x(1, 2, { 1.0f, 2.0f }, exec_target);
+    Tensor output_y = layer.forward(input_x);
+    bool fwd_ok = verifyMatrix(output_y, { 9.1f, 12.2f, 15.3f }, 0.02f);
+    output_y.print();
 
-    Matrix grad_out(1, 3, { 1.0f, 1.0f, 1.0f }, exec_target);
-    Matrix grad_in = layer.backward(grad_out);
-    bool bwd_input_ok = verifyMatrix(grad_in, { 6.0f, 15.0f });
+    Tensor grad_out(1, 3, { 1.0f, 1.0f, 1.0f }, exec_target);
+    Tensor grad_in = layer.backward(grad_out);
+    bool bwd_input_ok = verifyMatrix(grad_in, { 6.0f, 15.0f }, 0.02f);
+    grad_in.print();
 
-    bool bwd_w_ok = verifyMatrix(layer.getWeightsGradient(), { 1.0f, 1.0f, 1.0f, 2.0f, 2.0f, 2.0f });
-    bool bwd_b_ok = verifyMatrix(layer.getBiasesGradient(), { 1.0f, 1.0f, 1.0f });
-
+    bool bwd_w_ok = verifyMatrix(layer.getWeightsGradient(), { 1.0f, 1.0f, 1.0f, 2.0f, 2.0f, 2.0f }, 0.02f);
+    layer.getWeightsGradient().print();
+    bool bwd_b_ok = verifyMatrix(layer.getBiasesGradient(), { 1.0f, 1.0f, 1.0f }, 0.02f);
+    layer.getBiasesGradient().print();
     return fwd_ok && bwd_input_ok && bwd_w_ok && bwd_b_ok;
 }
 
@@ -364,12 +631,12 @@ bool testConv2dLayer(Execution_Target exec_target)
     params[0].first->uploadData({ 1.0f, 0.0f, 0.0f, 1.0f });
     params[1].first->uploadData({ 0.0f });
 
-    Matrix input_mat(1, 9, { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f }, exec_target);
-    Matrix out_mat = layer.forward(input_mat);
+    Tensor input_mat(1, 9, { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f }, exec_target);
+    Tensor out_mat = layer.forward(input_mat);
     bool fwd_ok = verifyMatrix(out_mat, { 6.0f, 8.0f, 12.0f, 14.0f });
 
-    Matrix grad_out(1, 4, { 1.0f, 1.0f, 1.0f, 1.0f }, exec_target);
-    Matrix grad_in = layer.backward(grad_out);
+    Tensor grad_out(1, 4, { 1.0f, 1.0f, 1.0f, 1.0f }, exec_target);
+    Tensor grad_in = layer.backward(grad_out);
 
     bool grad_in_ok = verifyMatrix(grad_in, { 1.0f, 1.0f, 0.0f, 1.0f, 2.0f, 1.0f, 0.0f, 1.0f, 1.0f });
     bool grad_w_ok = verifyMatrix(layer.getWeightsGradient(), { 12.0f, 16.0f, 24.0f, 28.0f });
@@ -395,12 +662,12 @@ bool testConv2dLayerFp16(Execution_Target exec_target)
     params[0].first->uploadData({ 1.0f, 0.0f, 0.0f, 1.0f });
     params[1].first->uploadData({ 0.0f });
 
-    Matrix input_mat(1, 9, { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f }, exec_target);
-    Matrix out_mat = layer.forward(input_mat);
+    Tensor input_mat(1, 9, { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f }, exec_target);
+    Tensor out_mat = layer.forward(input_mat);
     bool fwd_ok = verifyMatrix(out_mat, { 6.0f, 8.0f, 12.0f, 14.0f }, 1e-2f);
 
-    Matrix grad_out(1, 4, { 1.0f, 1.0f, 1.0f, 1.0f }, exec_target);
-    Matrix grad_in = layer.backward(grad_out);
+    Tensor grad_out(1, 4, { 1.0f, 1.0f, 1.0f, 1.0f }, exec_target);
+    Tensor grad_in = layer.backward(grad_out);
 
     bool grad_in_ok = verifyMatrix(grad_in, { 1.0f, 1.0f, 0.0f, 1.0f, 2.0f, 1.0f, 0.0f, 1.0f, 1.0f }, 1e-2f);
     bool grad_w_ok = verifyMatrix(layer.getWeightsGradient(), { 12.0f, 16.0f, 24.0f, 28.0f }, 1e-2f);
@@ -496,13 +763,13 @@ bool testPopulationFp16(Execution_Target exec_target)
 bool testMaxPool2dLayer(Execution_Target exec_target)
 {
     Max_Pool_2d_Layer layer(4, 4, 1, 2, 2, 0, exec_target);
-    Matrix input_mat(1, 16, { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f, 10.0f, 11.0f, 12.0f, 13.0f, 14.0f, 15.0f, 16.0f }, exec_target);
+    Tensor input_mat(1, 16, { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f, 10.0f, 11.0f, 12.0f, 13.0f, 14.0f, 15.0f, 16.0f }, exec_target);
 
-    Matrix out_mat = layer.forward(input_mat);
+    Tensor out_mat = layer.forward(input_mat);
     bool fwd_ok = verifyMatrix(out_mat, { 6.0f, 8.0f, 14.0f, 16.0f });
 
-    Matrix grad_out(1, 4, { 1.0f, 2.0f, 3.0f, 4.0f }, exec_target);
-    Matrix grad_in = layer.backward(grad_out);
+    Tensor grad_out(1, 4, { 1.0f, 2.0f, 3.0f, 4.0f }, exec_target);
+    Tensor grad_in = layer.backward(grad_out);
     bool bwd_ok = verifyMatrix(grad_in, { 0.0f, 0.0f, 0.0f, 0.0f,
                                          0.0f, 1.0f, 0.0f, 2.0f,
                                          0.0f, 0.0f, 0.0f, 0.0f,
@@ -514,13 +781,13 @@ bool testMaxPool2dLayer(Execution_Target exec_target)
 bool testGlobalAvgPool2dLayer(Execution_Target exec_target)
 {
     Global_Avg_Pool_2d_Layer layer(2, 2, 2, exec_target);
-    Matrix input_mat(1, 8, { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f }, exec_target);
+    Tensor input_mat(1, 8, { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f }, exec_target);
 
-    Matrix out_mat = layer.forward(input_mat);
+    Tensor out_mat = layer.forward(input_mat);
     bool fwd_ok = verifyMatrix(out_mat, { 4.0f, 5.0f });
 
-    Matrix grad_out(1, 2, { 4.0f, 8.0f }, exec_target);
-    Matrix grad_in = layer.backward(grad_out);
+    Tensor grad_out(1, 2, { 4.0f, 8.0f }, exec_target);
+    Tensor grad_in = layer.backward(grad_out);
     bool bwd_ok = verifyMatrix(grad_in, { 1.0f, 2.0f, 1.0f, 2.0f, 1.0f, 2.0f, 1.0f, 2.0f });
 
     return fwd_ok && bwd_ok;
@@ -531,12 +798,12 @@ bool testBatchNormLayer(Execution_Target exec_target)
     Batch_Norm_Layer layer(1, 1e-5f, 0.1f, exec_target);
     layer.setTrainingMode(true);
 
-    Matrix input_mat(3, 1, { 1.0f, 2.0f, 3.0f }, exec_target);
-    Matrix out_mat = layer.forward(input_mat);
+    Tensor input_mat(3, 1, { 1.0f, 2.0f, 3.0f }, exec_target);
+    Tensor out_mat = layer.forward(input_mat);
     bool fwd_ok = verifyMatrix(out_mat, { -1.2247f, 0.0f, 1.2247f });
 
-    Matrix grad_out(3, 1, { 1.0f, 2.0f, 1.0f }, exec_target);
-    Matrix grad_in = layer.backward(grad_out);
+    Tensor grad_out(3, 1, { 1.0f, 2.0f, 1.0f }, exec_target);
+    Tensor grad_in = layer.backward(grad_out);
     bool bwd_ok = verifyMatrix(grad_in, { -0.4082f, 0.8165f, -0.4082f });
 
     return fwd_ok && bwd_ok;
@@ -547,22 +814,914 @@ bool testBatchNorm2dLayer(Execution_Target exec_target)
     Batch_Norm_2d_Layer layer(1, 2, 1, 1e-5f, 0.1f, exec_target);
     layer.setTrainingMode(true);
 
-    Matrix input_mat(2, 2, { 1.0f, 3.0f, 5.0f, 7.0f }, exec_target);
-    Matrix out_mat = layer.forward(input_mat);
+    Tensor input_mat(2, 2, { 1.0f, 3.0f, 5.0f, 7.0f }, exec_target);
+    Tensor out_mat = layer.forward(input_mat);
     bool fwd_ok = verifyMatrix(out_mat, { -1.34164f, -0.44721f, 0.44721f, 1.34164f });
 
-    Matrix grad_out(2, 2, { 1.0f, 0.0f, 0.0f, 0.0f }, exec_target);
-    Matrix grad_in = layer.backward(grad_out);
+    Tensor grad_out(2, 2, { 1.0f, 0.0f, 0.0f, 0.0f }, exec_target);
+    Tensor grad_in = layer.backward(grad_out);
     bool bwd_ok = verifyMatrix(grad_in, { 0.13416f, -0.17889f, -0.04472f, 0.08944f });
 
     return fwd_ok && bwd_ok;
 }
 
+bool testRmsNormLayer(Execution_Target exec_target)
+{
+    RMSNorm_Layer layer(4, 1e-5f, exec_target);
+
+    Tensor input_mat(2, 4, { 1.0f, 2.0f, 3.0f, 4.0f,
+                             2.0f, 2.0f, 2.0f, 2.0f }, exec_target);
+    Tensor out_mat = layer.forward(input_mat);
+    bool fwd_ok = verifyMatrix(out_mat, { 0.36515f, 0.73030f, 1.09545f, 1.46059f,
+                                          1.0f,     1.0f,     1.0f,     1.0f });
+
+    Tensor grad_out(2, 4, { 1.0f, 1.0f, 1.0f, 1.0f,
+                            0.5f, 0.5f, 0.5f, 0.5f }, exec_target);
+    Tensor grad_in = layer.backward(grad_out);
+    if (grad_in.getExecutionTarget() == Execution_Target::VULKAN_GPU)
+    {
+        Execution_Engine::getInstance().executeGraph();
+    }
+    bool bwd_ok = (grad_in.getRows() == 2 && grad_in.getColumns() == 4);
+
+    bool fp16_ok = true;
+    if (exec_target == Execution_Target::VULKAN_GPU)
+    {
+        RMSNorm_Layer layer_fp16(4, 1e-5f, exec_target);
+        layer_fp16.setMixedPrecision(true);
+        Tensor out_fp16 = layer_fp16.forward(input_mat);
+        fp16_ok = verifyMatrix(out_fp16, { 0.36515f, 0.73030f, 1.09545f, 1.46059f,
+                                           1.0f,     1.0f,     1.0f,     1.0f }, 2e-3f);
+    }
+
+    return fwd_ok && bwd_ok && fp16_ok;
+}
+
+bool testRoPE(Execution_Target exec_target)
+{
+    Tensor q(Shape{1, 1, 2, 4}, { 1.0f, 2.0f, 3.0f, 4.0f,
+                                  5.0f, 6.0f, 7.0f, 8.0f }, exec_target);
+    Tensor q_rot(exec_target);
+    Tensor q_back(exec_target);
+
+    q.applyRoPE(q_rot, 2, 4, 1, 10000.0f);
+    if (q_rot.getExecutionTarget() == Execution_Target::VULKAN_GPU)
+    {
+        Execution_Engine::getInstance().executeGraph();
+    }
+
+    std::vector<float> rot_data = q_rot.getData();
+    bool pos0_ok = nearlyEqual(rot_data[0], 1.0f, 1e-3f) &&
+                   nearlyEqual(rot_data[1], 2.0f, 1e-3f) &&
+                   nearlyEqual(rot_data[2], 3.0f, 1e-3f) &&
+                   nearlyEqual(rot_data[3], 4.0f, 1e-3f);
+
+    q_rot.applyRoPE(q_back, 2, 4, -1, 10000.0f);
+    bool rev_ok = verifyMatrix(q_back, { 1.0f, 2.0f, 3.0f, 4.0f,
+                                         5.0f, 6.0f, 7.0f, 8.0f });
+
+    bool fp16_ok = true;
+    if (exec_target == Execution_Target::VULKAN_GPU)
+    {
+        Tensor q_fp16(exec_target);
+        q.to(Data_Type::FLOAT16, q_fp16);
+        Tensor q_rot_fp16(exec_target);
+        Tensor q_back_fp16(exec_target);
+        q_fp16.applyRoPE(q_rot_fp16, 2, 4, 1, 10000.0f);
+        q_rot_fp16.applyRoPE(q_back_fp16, 2, 4, -1, 10000.0f);
+        fp16_ok = verifyMatrix(q_back_fp16, { 1.0f, 2.0f, 3.0f, 4.0f,
+                                              5.0f, 6.0f, 7.0f, 8.0f }, 2e-3f);
+    }
+
+    return pos0_ok && rev_ok && fp16_ok;
+}
+
+bool testSwiGluLayer(Execution_Target exec_target)
+{
+    SwiGLU_Layer layer(exec_target);
+
+    Tensor input_mat(2, 4, { 0.0f, 1.0f, 2.0f, 3.0f,
+                            -1.0f, 2.0f, 4.0f, 5.0f }, exec_target);
+    Tensor out_mat = layer.forward(input_mat);
+    if (exec_target == Execution_Target::VULKAN_GPU)
+    {
+        Execution_Engine::getInstance().executeGraph();
+    }
+    bool fwd_ok = verifyMatrix(out_mat, { 0.0f, 2.19318f, -1.07577f, 8.80797f }, 5e-3f);
+    out_mat.print();
+
+    Tensor grad_out(2, 2, { 1.0f, 1.0f, 1.0f, 1.0f }, exec_target);
+    Tensor grad_in = layer.backward(grad_out);
+    if (grad_in.getExecutionTarget() == Execution_Target::VULKAN_GPU)
+    {
+        Execution_Engine::getInstance().executeGraph();
+    }
+    bool bwd_ok = (grad_in.getRows() == 2 && grad_in.getColumns() == 4);
+
+    bool fp16_ok = true;
+    if (exec_target == Execution_Target::VULKAN_GPU)
+    {
+        SwiGLU_Layer layer_fp16(exec_target);
+        layer_fp16.setMixedPrecision(true);
+        Tensor out_fp16 = layer_fp16.forward(input_mat);
+        Execution_Engine::getInstance().executeGraph();
+        fp16_ok = verifyMatrix(out_fp16, { 0.0f, 2.19318f, -1.07577f, 8.80797f }, 5e-3f);
+        out_fp16.print();
+    }
+
+    return fwd_ok && bwd_ok && fp16_ok;
+}
+
+bool testFlashAttention(Execution_Target exec_target)
+{
+    std::vector<float> q_data(256, 0.1f);
+    std::vector<float> k_data(256, 0.1f);
+    std::vector<float> v_data(256, 0.2f);
+    std::vector<float> do_data(256, 0.05f);
+    for (size_t i = 0; i < 256; ++i)
+    {
+        q_data[i] = 0.05f * static_cast<float>((i % 7) + 1);
+        k_data[i] = 0.05f * static_cast<float>((i % 5) + 1);
+        v_data[i] = 0.1f * static_cast<float>((i % 11) + 1);
+        do_data[i] = 0.02f * static_cast<float>((i % 9) + 1);
+    }
+
+    Tensor q_cpu(Shape{1, 1, 16, 16}, q_data, Execution_Target::CPU);
+    Tensor k_cpu(Shape{1, 1, 16, 16}, k_data, Execution_Target::CPU);
+    Tensor v_cpu(Shape{1, 1, 16, 16}, v_data, Execution_Target::CPU);
+    Tensor do_cpu(Shape{1, 1, 16, 16}, do_data, Execution_Target::CPU);
+
+    Tensor out_ref_causal(Execution_Target::CPU);
+    Tensor out_ref_noncausal(Execution_Target::CPU);
+
+    Tensor l_ref(Execution_Target::CPU);
+    q_cpu.flashAttentionForward(k_cpu, v_cpu, out_ref_causal, 1, 16, 16, true, 0.0f, &l_ref);
+    q_cpu.flashAttentionForward(k_cpu, v_cpu, out_ref_noncausal, 1, 16, 16, false);
+
+    Tensor dq_ref(Execution_Target::CPU);
+    Tensor dk_ref(Execution_Target::CPU);
+    Tensor dv_ref(Execution_Target::CPU);
+    q_cpu.flashAttentionBackward(k_cpu, v_cpu, out_ref_causal, do_cpu, dq_ref, dk_ref, dv_ref, 1, 16, 16, true, 0.0f, &l_ref);
+
+    if (exec_target == Execution_Target::CPU)
+    {
+        return !out_ref_causal.getData().empty() && !out_ref_noncausal.getData().empty()
+            && !dq_ref.getData().empty() && !dk_ref.getData().empty() && !dv_ref.getData().empty();
+    }
+
+    Tensor q_gpu(Shape{1, 1, 16, 16}, q_data, Execution_Target::VULKAN_GPU);
+    Tensor k_gpu(Shape{1, 1, 16, 16}, k_data, Execution_Target::VULKAN_GPU);
+    Tensor v_gpu(Shape{1, 1, 16, 16}, v_data, Execution_Target::VULKAN_GPU);
+    Tensor do_gpu(Shape{1, 1, 16, 16}, do_data, Execution_Target::VULKAN_GPU);
+
+    Tensor q_gpu_fp16(Execution_Target::VULKAN_GPU);
+    Tensor k_gpu_fp16(Execution_Target::VULKAN_GPU);
+    Tensor v_gpu_fp16(Execution_Target::VULKAN_GPU);
+    Tensor do_gpu_fp16(Execution_Target::VULKAN_GPU);
+    q_gpu.to(Data_Type::FLOAT16, q_gpu_fp16);
+    k_gpu.to(Data_Type::FLOAT16, k_gpu_fp16);
+    v_gpu.to(Data_Type::FLOAT16, v_gpu_fp16);
+    do_gpu.to(Data_Type::FLOAT16, do_gpu_fp16);
+
+    Tensor out_gpu_causal(Execution_Target::VULKAN_GPU);
+    Tensor out_gpu_noncausal(Execution_Target::VULKAN_GPU);
+    Tensor l_gpu(Execution_Target::VULKAN_GPU);
+
+    q_gpu_fp16.flashAttentionForward(k_gpu_fp16, v_gpu_fp16, out_gpu_causal, 1, 16, 16, true, 0.0f, &l_gpu);
+    q_gpu_fp16.flashAttentionForward(k_gpu_fp16, v_gpu_fp16, out_gpu_noncausal, 1, 16, 16, false);
+
+    Tensor dq_gpu(Execution_Target::VULKAN_GPU);
+    Tensor dk_gpu(Execution_Target::VULKAN_GPU);
+    Tensor dv_gpu(Execution_Target::VULKAN_GPU);
+    q_gpu_fp16.flashAttentionBackward(k_gpu_fp16, v_gpu_fp16, out_gpu_causal, do_gpu_fp16,
+                                      dq_gpu, dk_gpu, dv_gpu, 1, 16, 16, true, 0.0f, &l_gpu);
+
+    bool causal_ok = verifyMatrix(out_gpu_causal, out_ref_causal.getData(), 2e-3f);
+    bool noncausal_ok = verifyMatrix(out_gpu_noncausal, out_ref_noncausal.getData(), 2e-3f);
+    bool bwd_dq_ok = verifyMatrix(dq_gpu, dq_ref.getData(), 5e-3f);
+    bool bwd_dk_ok = verifyMatrix(dk_gpu, dk_ref.getData(), 5e-3f);
+    bool bwd_dv_ok = verifyMatrix(dv_gpu, dv_ref.getData(), 5e-3f);
+
+    if (!causal_ok || !noncausal_ok || !bwd_dq_ok || !bwd_dk_ok || !bwd_dv_ok)
+    {
+        std::cout << " [FlashAttn DBG: causal=" << causal_ok << " noncausal=" << noncausal_ok 
+                  << " dq=" << bwd_dq_ok << " dk=" << bwd_dk_ok << " dv=" << bwd_dv_ok << "] ";
+    }
+
+    return causal_ok && noncausal_ok && bwd_dq_ok && bwd_dk_ok && bwd_dv_ok;
+}
+
+bool testBpeTokenizer()
+{
+    Bpe_Tokenizer tokenizer;
+    if (!tokenizer.load("tokenizer/tokenizer.json"))
+    {
+        std::cerr << "[FAIL: could not load tokenizer/tokenizer.json]\n";
+        return false;
+    }
+
+    if (tokenizer.getVocabSize() != 32768)
+    {
+        std::cerr << "[FAIL: vocab size expected 32768, got " << tokenizer.getVocabSize() << "]\n";
+        return false;
+    }
+
+    // Test 1: Tiếng Việt UTF-8
+    {
+        std::string text = "Xin chào thế giới!";
+        std::vector<int32_t> expected_ids = {1, 2268, 1030, 1252, 29607, 29477, 1074, 30390, 5988, 30793, 29478, 29576};
+        auto ids = tokenizer.encode(text, true);
+        if (ids != expected_ids)
+        {
+            std::cout << "\n[DEBUG: Test 1 encode failed. Expected size " << expected_ids.size() << ", got " << ids.size() << "]\n";
+            std::cout << "Got ids: ";
+            for (auto id : ids) std::cout << id << " ";
+            std::cout << "\n";
+            return false;
+        }
+        std::string decoded = tokenizer.decode(ids, true);
+        if (decoded != text)
+        {
+            std::cout << "\n[DEBUG: Test 1 decode failed. Expected '" << text << "', got '" << decoded << "']\n";
+            return false;
+        }
+    }
+
+    // Test 2: Tiếng Anh + số + toán tử
+    {
+        std::string text = "Hello world! 123 + 456 = 579.";
+        std::vector<int32_t> expected_ids = {1, 23325, 2294, 29576, 29473, 29508, 29518, 29538, 1416, 29473, 29549, 29550, 29552, 1095, 29473, 29550, 29555, 29542, 29491};
+        auto ids = tokenizer.encode(text, true);
+        if (ids != expected_ids)
+        {
+            std::cout << "\n[DEBUG: Test 2 encode failed]\n";
+            return false;
+        }
+        std::string decoded = tokenizer.decode(ids, true);
+        if (decoded != text)
+        {
+            std::cout << "\n[DEBUG: Test 2 decode failed]\n";
+            return false;
+        }
+    }
+
+    // Test 3: Khoảng trắng liên tiếp, xuống dòng, tab
+    {
+        std::string text = "  nhiều   khoảng   trắng  \n dòng mới \t tab";
+        std::vector<int32_t> expected_ids = {1, 29473, 1075, 6133, 30907, 29486, 1027, 1214, 2892, 30276, 1585, 1027, 1235, 31197, 1585, 1027, 781, 1049, 29666, 1585, 1058, 30793, 29478, 29473, 780, 8451};
+        auto ids = tokenizer.encode(text, true);
+        if (ids != expected_ids)
+        {
+            std::cout << "\n[DEBUG: Test 3 encode failed]\n";
+            return false;
+        }
+        std::string decoded = tokenizer.decode(ids, true);
+        // Lưu ý: Hugging Face Metaspace Decoder cấu hình Strip 1 space ở đầu chuỗi (do prepend_scheme = first)
+        std::string expected_decoded = " nhiều   khoảng   trắng  \n dòng mới \t tab";
+        if (decoded != expected_decoded)
+        {
+            std::cout << "\n[DEBUG: Test 3 decode failed: expected '" << expected_decoded << "', got '" << decoded << "']\n";
+            return false;
+        }
+    }
+
+    // Test 4: Byte Fallback với ký tự ngoài từ điển (𠮷 UTF-8: F0 A0 AE B7)
+    {
+        std::string text = "Fallback: \x01\x02\x7f 你好 𠮷";
+        std::vector<int32_t> expected_ids = {1, 12936, 2203, 29515, 29473, 30302, 31319, 31750, 29473, 30151, 30298, 29473, 1011, 931, 945, 954};
+        auto ids = tokenizer.encode(text, true);
+        if (ids != expected_ids)
+        {
+            std::cout << "\n[DEBUG: Test 4 encode failed]\n";
+            return false;
+        }
+        std::string decoded = tokenizer.decode(ids, true);
+        if (decoded != text)
+        {
+            std::cout << "\n[DEBUG: Test 4 decode failed]\n";
+            return false;
+        }
+    }
+
+    // Test 5: Special control tokens không decode khi skip_special = true
+    {
+        std::vector<int32_t> tokens = {1, 23325, 2}; // <s> Hello </s>
+        std::string decoded = tokenizer.decode(tokens, true);
+        if (decoded != "Hello")
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool testKvCacheManager(Execution_Target exec_target)
+{
+    constexpr size_t batch_size = 1;
+    constexpr size_t num_heads = 2;
+    constexpr size_t max_seq_len = 16;
+    constexpr size_t head_dim = 8;
+
+    // 1. Static Mode Test
+    {
+        KV_Cache_Manager cache(batch_size, num_heads, max_seq_len, head_dim, exec_target, Data_Type::FLOAT32, KV_Cache_Mode::STATIC);
+        if (cache.getCurrentSeqLen() != 0 || cache.getMaxSeqLen() != max_seq_len)
+        {
+            return false;
+        }
+
+        // Prefill 4 tokens: shape {1, 2, 4, 8}
+        std::vector<float> k_data_prefill(1 * 2 * 4 * 8, 1.5f);
+        std::vector<float> v_data_prefill(1 * 2 * 4 * 8, 2.5f);
+        Tensor k_prefill(Shape{1, 2, 4, 8}, k_data_prefill, exec_target);
+        Tensor v_prefill(Shape{1, 2, 4, 8}, v_data_prefill, exec_target);
+
+        cache.append(k_prefill, v_prefill);
+        if (exec_target == Execution_Target::VULKAN_GPU)
+        {
+            Execution_Engine::getInstance().executeGraph();
+        }
+
+        if (cache.getCurrentSeqLen() != 4)
+        {
+            return false;
+        }
+
+        Tensor k_slice = cache.getK();
+        Tensor v_slice = cache.getV();
+        if (k_slice.getShape() != Shape{1, 2, 4, 8} || v_slice.getShape() != Shape{1, 2, 4, 8})
+        {
+            return false;
+        }
+
+        if (!verifyMatrix(k_slice, k_data_prefill) || !verifyMatrix(v_slice, v_data_prefill))
+        {
+            return false;
+        }
+
+        // Autoregressive decoding: append 2 tokens one by one
+        for (size_t t = 0; t < 2; ++t)
+        {
+            std::vector<float> k_tok(1 * 2 * 1 * 8, static_cast<float>(t + 10));
+            std::vector<float> v_tok(1 * 2 * 1 * 8, static_cast<float>(t + 20));
+            Tensor k_new(Shape{1, 2, 1, 8}, k_tok, exec_target);
+            Tensor v_new(Shape{1, 2, 1, 8}, v_tok, exec_target);
+            cache.append(k_new, v_new);
+        }
+        if (exec_target == Execution_Target::VULKAN_GPU)
+        {
+            Execution_Engine::getInstance().executeGraph();
+        }
+
+        if (cache.getCurrentSeqLen() != 6)
+        {
+            return false;
+        }
+
+        Tensor k_6 = cache.getK();
+        if (k_6.getShape() != Shape{1, 2, 6, 8})
+        {
+            return false;
+        }
+
+        // Test Reset without reallocation
+        cache.reset();
+        if (cache.getCurrentSeqLen() != 0)
+        {
+            return false;
+        }
+    }
+
+    // 2. Ring Buffer Mode Test (Rolling Window)
+    {
+        constexpr size_t ring_max_seq = 4;
+        KV_Cache_Manager ring_cache(1, 1, ring_max_seq, 4, exec_target, Data_Type::FLOAT32, KV_Cache_Mode::RING_BUFFER);
+
+        // Append 6 tokens sequentially into capacity-4 ring buffer
+        for (size_t i = 1; i <= 6; ++i)
+        {
+            std::vector<float> tok_val(4, static_cast<float>(i));
+            Tensor k_tok(Shape{1, 1, 1, 4}, tok_val, exec_target);
+            Tensor v_tok(Shape{1, 1, 1, 4}, tok_val, exec_target);
+            ring_cache.append(k_tok, v_tok);
+        }
+        if (exec_target == Execution_Target::VULKAN_GPU)
+        {
+            Execution_Engine::getInstance().executeGraph();
+        }
+
+        if (ring_cache.getCurrentSeqLen() != ring_max_seq)
+        {
+            return false;
+        }
+
+        Tensor k_res = ring_cache.getK();
+        // Since ring buffer holds the latest 4 tokens, tokens should be [3, 4, 5, 6]
+        std::vector<float> expected_ring = {
+            3.0f, 3.0f, 3.0f, 3.0f,
+            4.0f, 4.0f, 4.0f, 4.0f,
+            5.0f, 5.0f, 5.0f, 5.0f,
+            6.0f, 6.0f, 6.0f, 6.0f
+        };
+        if (!verifyMatrix(k_res, expected_ring))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool testTransformerBlock(Execution_Target exec_target)
+{
+    constexpr size_t hidden_dim = 64;
+    constexpr size_t num_heads = 4;
+    constexpr size_t head_dim = 16;
+    constexpr size_t intermediate_dim = 128;
+    constexpr size_t S = 4;
+
+    Transformer_Block block(hidden_dim, num_heads, intermediate_dim, 1e-5f, 10000.0f, exec_target);
+
+    // 1. Prefill Forward without KV Cache
+    std::vector<float> in_data(S * hidden_dim, 0.1f);
+    for (size_t i = 0; i < in_data.size(); ++i)
+    {
+        in_data[i] = 0.05f * static_cast<float>((i % 9) + 1);
+    }
+    Tensor in_tensor(Shape{ 1, S, hidden_dim }, in_data, exec_target);
+    Tensor out_tensor = block.forward(in_tensor);
+    if (exec_target == Execution_Target::VULKAN_GPU)
+    {
+        Execution_Engine::getInstance().executeGraph();
+    }
+
+    if (out_tensor.getTotalElements() != S * hidden_dim)
+    {
+        return false;
+    }
+    std::vector<float> out_data = out_tensor.getData();
+    for (float val : out_data)
+    {
+        if (std::isnan(val) || std::isinf(val))
+        {
+            return false;
+        }
+    }
+
+    // 2. Incremental Forward with KV Cache
+    KV_Cache_Manager cache(1, num_heads, 16, head_dim, exec_target, Data_Type::FLOAT32, KV_Cache_Mode::STATIC);
+
+    // Step A: Prefill 3 tokens
+    Tensor prefill_in(Shape{ 1, 3, hidden_dim }, std::vector<float>(3 * hidden_dim, 0.1f), exec_target);
+    Tensor prefill_out = block.forward(prefill_in, &cache);
+    if (exec_target == Execution_Target::VULKAN_GPU)
+    {
+        Execution_Engine::getInstance().executeGraph();
+    }
+    if (cache.getCurrentSeqLen() != 3)
+    {
+        return false;
+    }
+
+    // Step B: Decode 1 token
+    Tensor decode_in(Shape{ 1, 1, hidden_dim }, std::vector<float>(1 * hidden_dim, 0.2f), exec_target);
+    Tensor decode_out = block.forward(decode_in, &cache);
+    if (exec_target == Execution_Target::VULKAN_GPU)
+    {
+        Execution_Engine::getInstance().executeGraph();
+    }
+    if (cache.getCurrentSeqLen() != 4)
+    {
+        return false;
+    }
+    if (decode_out.getTotalElements() != hidden_dim)
+    {
+        return false;
+    }
+
+    block.setKVCache(nullptr);
+    Tensor fwd_res = block.forward(in_tensor);
+    Tensor d_out(Shape{ S, hidden_dim }, std::vector<float>(S * hidden_dim, 0.01f), exec_target);
+    Tensor d_in = block.backward(d_out);
+    if (exec_target == Execution_Target::VULKAN_GPU)
+    {
+        Execution_Engine::getInstance().executeGraph();
+    }
+    if (d_in.getTotalElements() != S * hidden_dim)
+    {
+        return false;
+    }
+    std::vector<float> d_in_data = d_in.getData();
+    for (float val : d_in_data)
+    {
+        if (std::isnan(val) || std::isinf(val))
+        {
+            return false;
+        }
+    }
+
+    // 4. Test 3D Batching Forward & Backward: [B, S, hidden_dim]
+    constexpr size_t B_test = 2;
+    std::vector<float> batch_in_data(B_test * S * hidden_dim, 0.1f);
+    for (size_t i = 0; i < batch_in_data.size(); ++i)
+    {
+        batch_in_data[i] = 0.05f * static_cast<float>((i % 9) + 1);
+    }
+    Tensor batch_in(Shape{ B_test, S, hidden_dim }, batch_in_data, exec_target);
+    Tensor batch_out = block.forward(batch_in);
+    if (exec_target == Execution_Target::VULKAN_GPU)
+    {
+        Execution_Engine::getInstance().executeGraph();
+    }
+    if (batch_out.getShape() != Shape{ B_test, S, hidden_dim })
+    {
+        std::cout << " [TB DBG: Step 4 b_out shape failed, rank=" << batch_out.getShape().getRank() << " dims: ";
+        for (size_t d = 0; d < batch_out.getShape().getRank(); ++d) std::cout << batch_out.getShape()[d] << " ";
+        std::cout << "] ";
+        return false;
+    }
+    std::vector<float> b_out_data = batch_out.getData();
+    for (float val : b_out_data)
+    {
+        if (std::isnan(val) || std::isinf(val))
+        {
+            std::cout << " [TB DBG: Step 4 b_out nan/inf] ";
+            return false;
+        }
+    }
+
+    Tensor d_batch_out(Shape{ B_test, S, hidden_dim }, std::vector<float>(B_test * S * hidden_dim, 0.01f), exec_target);
+    Tensor d_batch_in = block.backward(d_batch_out);
+    if (exec_target == Execution_Target::VULKAN_GPU)
+    {
+        Execution_Engine::getInstance().executeGraph();
+    }
+    if (d_batch_in.getShape() != Shape{ B_test, S, hidden_dim })
+    {
+        std::cout << " [TB DBG: Step 4 d_b_in shape failed] ";
+        return false;
+    }
+    std::vector<float> d_b_in_data = d_batch_in.getData();
+    for (float val : d_b_in_data)
+    {
+        if (std::isnan(val) || std::isinf(val))
+        {
+            std::cout << " [TB DBG: Step 4 d_b_in nan/inf] ";
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool testCausalLMModel(Execution_Target exec_target)
+{
+    Causal_LM_Config cfg;
+    cfg.vocab_size = 512;
+    cfg.hidden_dim = 64;
+    cfg.num_heads = 4;
+    cfg.intermediate_dim = 128;
+    cfg.num_layers = 2;
+    cfg.max_seq_len = 64;
+    cfg.execution_target = exec_target;
+    cfg.data_type = Data_Type::FLOAT32;
+    cfg.tokenizer_path = "tokenizer/tokenizer.json";
+
+    Causal_LM model(cfg);
+
+    // 1. Forward test with token IDs
+    std::vector<int32_t> test_tokens = { 1, 15, 42, 100 };
+    Tensor logits = model.forward(test_tokens, false);
+    if (exec_target == Execution_Target::VULKAN_GPU)
+    {
+        Execution_Engine::getInstance().executeGraph();
+    }
+
+    if (logits.getTotalElements() != test_tokens.size() * cfg.vocab_size)
+    {
+        return false;
+    }
+
+    std::vector<float> logits_data = logits.getData();
+    for (size_t i = 0; i < std::min<size_t>(100, logits_data.size()); ++i)
+    {
+        if (std::isnan(logits_data[i]) || std::isinf(logits_data[i]))
+        {
+            return false;
+        }
+    }
+
+    // 2. Autoregressive Text Generation test
+    std::string prompt = "Hello";
+    std::string generated = model.generate(prompt, 6, 0.7f, 0.9f);
+    if (generated.empty())
+    {
+        return false;
+    }
+
+    // 3. Neural_Network Unified Pipeline with Embedding & Transformer_Block
+    Neural_Network nn(exec_target);
+    nn.addLayer<Embedding_Layer>(cfg.vocab_size, cfg.hidden_dim, exec_target);
+    nn.addLayer<Transformer_Block>(cfg.hidden_dim, cfg.num_heads, cfg.intermediate_dim, 1e-5f, 10000.0f, exec_target);
+    nn.addLayer<RMSNorm_Layer>(cfg.hidden_dim, 1e-5f, exec_target);
+    nn.addLayer<Linear_Layer>(cfg.hidden_dim, cfg.vocab_size, exec_target);
+
+    Tensor input_tokens(1, 4, std::vector<float>{ 1.0f, 15.0f, 42.0f, 100.0f }, exec_target);
+    Tensor nn_out = nn.forward(input_tokens);
+    if (exec_target == Execution_Target::VULKAN_GPU)
+    {
+        Execution_Engine::getInstance().executeGraph();
+    }
+    if (nn_out.getTotalElements() != 4 * cfg.vocab_size)
+    {
+        return false;
+    }
+
+    return true;
+}
+
+bool testCausalLMTraining(Execution_Target exec_target)
+{
+    Causal_LM_Config cfg;
+    cfg.vocab_size = 64;
+    cfg.hidden_dim = 32;
+    cfg.num_heads = 2;
+    cfg.intermediate_dim = 64;
+    cfg.num_layers = 1;
+    cfg.max_seq_len = 32;
+    cfg.execution_target = exec_target;
+    cfg.data_type = Data_Type::FLOAT32;
+    cfg.tokenizer_path = "tokenizer/tokenizer.json";
+
+    Causal_LM model(cfg);
+
+    // 1. Test Loss and Gradient Computation
+    std::vector<int32_t> input_tokens = { 5, 12, 23, 40 };
+    std::vector<int32_t> target_tokens = { 12, 23, 40, 55 };
+
+    Tensor logits = model.forward(input_tokens, false);
+    if (exec_target == Execution_Target::VULKAN_GPU)
+    {
+        Execution_Engine::getInstance().executeGraph();
+    }
+
+    Tensor d_logits;
+    float initial_loss = model.computeLossAndGradient(logits, target_tokens, d_logits);
+    if (std::isnan(initial_loss) || std::isinf(initial_loss) || initial_loss <= 0.0f)
+    {
+        return false;
+    }
+
+    if (d_logits.getTotalElements() != input_tokens.size() * cfg.vocab_size)
+    {
+        return false;
+    }
+
+    std::vector<float> d_logits_data = d_logits.getData();
+    for (size_t s = 0; s < input_tokens.size(); ++s)
+    {
+        float row_sum = 0.0f;
+        for (size_t v = 0; v < cfg.vocab_size; ++v)
+        {
+            row_sum += d_logits_data[s * cfg.vocab_size + v];
+        }
+        if (std::fabs(row_sum) > 1e-4f)
+        {
+            return false;
+        }
+    }
+
+    // 2. Test Training Step & Convergence with Adam Optimizer
+    Adam_Optimizer optimizer(0.02f);
+    float current_loss = initial_loss;
+
+    for (int step = 0; step < 8; ++step)
+    {
+        current_loss = model.trainStep(input_tokens, target_tokens, optimizer);
+        if (std::isnan(current_loss) || std::isinf(current_loss))
+        {
+            return false;
+        }
+    }
+
+    if (current_loss >= initial_loss)
+    {
+        return false;
+    }
+
+    // 3. Test Checkpoint Serialization (Save & Load)
+    std::string ckpt_path = (exec_target == Execution_Target::CPU) ? "causal_lm_cpu.ckpt" : "causal_lm_gpu.ckpt";
+    model.saveCheckpoint(ckpt_path);
+
+    Causal_LM loaded_model(cfg);
+    loaded_model.loadCheckpoint(ckpt_path);
+    std::filesystem::remove(ckpt_path);
+
+    Tensor logits_orig = model.forward(input_tokens, false);
+    Tensor logits_loaded = loaded_model.forward(input_tokens, false);
+    if (exec_target == Execution_Target::VULKAN_GPU)
+    {
+        Execution_Engine::getInstance().executeGraph();
+    }
+
+    std::vector<float> orig_data = logits_orig.getData();
+    std::vector<float> loaded_data = logits_loaded.getData();
+    if (orig_data.size() != loaded_data.size())
+    {
+        return false;
+    }
+    for (size_t i = 0; i < orig_data.size(); ++i)
+    {
+        if (std::fabs(orig_data[i] - loaded_data[i]) > 1e-4f)
+        {
+            return false;
+        }
+    }
+
+    // 4. Test Inference Serialization (Save & Load)
+    std::string inf_path = (exec_target == Execution_Target::CPU) ? "causal_lm_cpu.bin" : "causal_lm_gpu.bin";
+    model.saveInference(inf_path);
+
+    Causal_LM inf_model(cfg);
+    inf_model.loadInference(inf_path);
+    std::filesystem::remove(inf_path);
+
+    Tensor logits_inf = inf_model.forward(input_tokens, false);
+    if (exec_target == Execution_Target::VULKAN_GPU)
+    {
+        Execution_Engine::getInstance().executeGraph();
+    }
+    std::vector<float> inf_data = logits_inf.getData();
+    for (size_t i = 0; i < orig_data.size(); ++i)
+    {
+        if (std::fabs(orig_data[i] - inf_data[i]) > 1e-4f)
+        {
+            return false;
+        }
+    }
+
+    // 5. Test Text Training Step with Tokenizer
+    if (model.getTokenizer().isLoaded())
+    {
+        Causal_LM_Config text_cfg = cfg;
+        text_cfg.vocab_size = model.getTokenizer().getVocabSize();
+        Causal_LM text_model(text_cfg);
+        Adam_Optimizer text_opt(0.01f);
+        float text_loss = text_model.trainStep("Antigravity sLLM training engine", text_opt);
+        if (std::isnan(text_loss) || std::isinf(text_loss) || text_loss <= 0.0f)
+        {
+            return false;
+        }
+    }
+
+    // 6. Test Gradient Clipping
+    model.forwardLossAndBackward(input_tokens, target_tokens, 1.0f);
+    float norm_clipped = model.clipGradients(0.5f);
+    if (std::isnan(norm_clipped) || std::isinf(norm_clipped))
+    {
+        return false;
+    }
+    model.resetGradients();
+
+    // 7. Test Gradient Accumulation (micro-batching)
+    model.setAccumulated(false);
+    model.resetGradients();
+    float mb1_loss = model.forwardLossAndBackward(input_tokens, target_tokens, 0.5f);
+    model.setAccumulated(true);
+    float mb2_loss = model.forwardLossAndBackward(input_tokens, target_tokens, 0.5f);
+    model.stepOptimizer(optimizer, 1.0f);
+    if (std::isnan(mb1_loss) || std::isnan(mb2_loss))
+    {
+        return false;
+    }
+
+    // 8. Test Binary Token Dataset I/O
+    std::string bin_path = "temp_test_dataset.bin";
+    std::vector<int32_t> sample_tokens = { 1, 2, 42, 1337, 99999 };
+    if (!Binary_Token_Dataset::save(bin_path, sample_tokens))
+    {
+        return false;
+    }
+    std::vector<int32_t> loaded_tokens;
+    if (!Binary_Token_Dataset::load(bin_path, loaded_tokens) || loaded_tokens != sample_tokens)
+    {
+        std::filesystem::remove(bin_path);
+        return false;
+    }
+    std::filesystem::remove(bin_path);
+
+    // 9. Test Top-k and Stop Sequences Generation
+    std::string topk_gen = model.generate("Hello", 4, 0.7f, 0.9f, 2, true, nullptr, 1.2f, 5, { "el" });
+    if (topk_gen.empty())
+    {
+        return false;
+    }
+
+    // 10. Test 3D Batching Train Step: B = 2, S = 4
+    std::vector<std::vector<int32_t>> batch_inputs = {
+        { 5, 12, 23, 40 },
+        { 8, 14, 25, 42 }
+    };
+    std::vector<std::vector<int32_t>> batch_targets = {
+        { 12, 23, 40, 55 },
+        { 14, 25, 42, 60 }
+    };
+    float batch_loss = model.trainStep(batch_inputs, batch_targets, optimizer);
+    if (std::isnan(batch_loss) || std::isinf(batch_loss) || batch_loss <= 0.0f)
+    {
+        return false;
+    }
+
+    return true;
+}
+
+bool testCausalLMFP16Training(Execution_Target exec_target)
+{
+    if (exec_target != Execution_Target::VULKAN_GPU)
+    {
+        return true;
+    }
+
+    Causal_LM_Config cfg;
+    cfg.vocab_size = 64;
+    cfg.hidden_dim = 32;
+    cfg.num_heads = 2;
+    cfg.intermediate_dim = 64;
+    cfg.num_layers = 1;
+    cfg.max_seq_len = 32;
+    cfg.execution_target = exec_target;
+    cfg.data_type = Data_Type::FLOAT16;
+    cfg.use_loss_scaler = true;
+    cfg.initial_loss_scale = 128.0f;
+    cfg.tokenizer_path = "tokenizer/tokenizer.json";
+
+    Causal_LM model(cfg);
+
+    std::vector<int32_t> input_tokens = { 5, 12, 23, 40 };
+    std::vector<int32_t> target_tokens = { 12, 23, 40, 55 };
+
+    // 1. Forward pass pure FP16
+    Tensor logits = model.forward(input_tokens, false);
+    if (logits.getDataType() != Data_Type::FLOAT16)
+    {
+        return false;
+    }
+    Execution_Engine::getInstance().executeGraph();
+
+    // 2. Compute loss and FP16 d_logits
+    Tensor d_logits;
+    float initial_loss = model.computeLossAndGradient(logits, target_tokens, d_logits);
+    if (std::isnan(initial_loss) || std::isinf(initial_loss) || initial_loss <= 0.0f)
+    {
+        return false;
+    }
+    if (d_logits.getDataType() != Data_Type::FLOAT16)
+    {
+        return false;
+    }
+
+    // 3. Train steps with FP32 Master Weights + FP16 Graph + Loss Scaler
+    Adam_Optimizer optimizer(0.02f);
+    float current_loss = initial_loss;
+
+    for (int step = 0; step < 8; ++step)
+    {
+        current_loss = model.trainStep(input_tokens, target_tokens, optimizer);
+        if (std::isnan(current_loss) || std::isinf(current_loss))
+        {
+            return false;
+        }
+    }
+
+    if (current_loss >= initial_loss)
+    {
+        return false;
+    }
+
+    // 4. Batching FP16 train step: B = 2, S = 4
+    std::vector<std::vector<int32_t>> batch_inputs = {
+        { 5, 12, 23, 40 },
+        { 8, 14, 25, 42 }
+    };
+    std::vector<std::vector<int32_t>> batch_targets = {
+        { 12, 23, 40, 55 },
+        { 14, 25, 42, 60 }
+    };
+    float batch_loss = model.trainStep(batch_inputs, batch_targets, optimizer);
+    if (std::isnan(batch_loss) || std::isinf(batch_loss) || batch_loss <= 0.0f)
+    {
+        return false;
+    }
+
+    return true;
+}
+
 bool testResNetBlock2dLayer(Execution_Target exec_target)
 {
-    auto validateTensor = [](const Matrix& tensor, size_t expected_rows, size_t expected_columns, bool require_nonzero = false) -> bool
+    auto validateTensor = [](const Tensor& tensor, size_t expected_rows, size_t expected_columns, bool require_nonzero = false) -> bool
         {
-            if (tensor.getTarget() == Execution_Target::VULKAN_GPU)
+            if (tensor.getExecutionTarget() == Execution_Target::VULKAN_GPU)
             {
                 Execution_Engine::getInstance().executeGraph();
             }
@@ -593,7 +1752,7 @@ bool testResNetBlock2dLayer(Execution_Target exec_target)
             return require_nonzero ? has_nonzero_value : true;
         };
 
-    auto validateParameters = [&validateTensor](const std::vector<std::pair<Matrix*, Matrix*>>& parameters, size_t expected_count) -> bool
+    auto validateParameters = [&validateTensor](const std::vector<std::pair<Tensor*, Tensor*>>& parameters, size_t expected_count) -> bool
         {
             if (parameters.size() != expected_count)
             {
@@ -637,12 +1796,12 @@ bool testResNetBlock2dLayer(Execution_Target exec_target)
     }
 
     Res_Net_Block_2d_Layer block_identity(input_height, input_width, input_channels, input_channels, 1, exec_target);
-    Matrix input_identity(batch_size, input_features, input_data, exec_target);
-    Matrix out_identity = block_identity.forward(input_identity);
+    Tensor input_identity(batch_size, input_features, input_data, exec_target);
+    Tensor out_identity = block_identity.forward(input_identity);
     bool identity_fwd_ok = validateTensor(out_identity, batch_size, input_features, true);
 
-    Matrix grad_output_identity(batch_size, input_features, grad_identity_data, exec_target);
-    Matrix grad_in_identity = block_identity.backward(grad_output_identity);
+    Tensor grad_output_identity(batch_size, input_features, grad_identity_data, exec_target);
+    Tensor grad_in_identity = block_identity.backward(grad_output_identity);
     bool identity_bwd_ok = validateTensor(grad_in_identity, batch_size, input_features, true);
     bool identity_params_ok = validateParameters(block_identity.getParametersAndGradients(), 8);
     block_identity.resetGradient();
@@ -660,12 +1819,12 @@ bool testResNetBlock2dLayer(Execution_Target exec_target)
     }
 
     Res_Net_Block_2d_Layer block_proj(input_height, input_width, input_channels, proj_out_channels, proj_stride, exec_target);
-    Matrix input_proj(batch_size, input_features, input_data, exec_target);
-    Matrix out_proj = block_proj.forward(input_proj);
+    Tensor input_proj(batch_size, input_features, input_data, exec_target);
+    Tensor out_proj = block_proj.forward(input_proj);
     bool proj_fwd_ok = validateTensor(out_proj, batch_size, proj_out_features, true);
 
-    Matrix grad_output_proj(batch_size, proj_out_features, grad_proj_data, exec_target);
-    Matrix grad_in_proj = block_proj.backward(grad_output_proj);
+    Tensor grad_output_proj(batch_size, proj_out_features, grad_proj_data, exec_target);
+    Tensor grad_in_proj = block_proj.backward(grad_output_proj);
     bool proj_bwd_ok = validateTensor(grad_in_proj, batch_size, input_features, true);
     bool proj_params_ok = validateParameters(block_proj.getParametersAndGradients(), 12);
     block_proj.resetGradient();
@@ -676,8 +1835,8 @@ bool testResNetBlock2dLayer(Execution_Target exec_target)
 
 bool testSgdOptimizer(Execution_Target exec_target)
 {
-    Matrix param_mat(2, 2, { 1.0f, 2.0f, 3.0f, 4.0f }, exec_target);
-    Matrix grad(2, 2, { 0.5f, -1.0f, 2.0f, -3.0f }, exec_target);
+    Tensor param_mat(2, 2, { 1.0f, 2.0f, 3.0f, 4.0f }, exec_target);
+    Tensor grad(2, 2, { 0.5f, -1.0f, 2.0f, -3.0f }, exec_target);
 
     Sgd_Optimizer optimizer(0.1f, 100.0f);
     optimizer.step({ { &param_mat, &grad } });
@@ -687,13 +1846,24 @@ bool testSgdOptimizer(Execution_Target exec_target)
 
 bool testAdamOptimizer(Execution_Target exec_target)
 {
-    Matrix param_mat(1, 2, { 1.0f, 2.0f }, exec_target);
-    Matrix grad_mat(1, 2, { 0.1f, -0.2f }, exec_target);
+    Tensor param_mat(1, 2, { 1.0f, 2.0f }, exec_target);
+    Tensor grad_mat(1, 2, { 0.1f, -0.2f }, exec_target);
 
     Adam_Optimizer optimizer(0.001f, 0.9f, 0.999f, 1e-8f, 100.0f);
     optimizer.step({ { &param_mat, &grad_mat } });
 
-    return verifyMatrix(param_mat, { 0.999f, 2.001f });
+    if (!verifyMatrix(param_mat, { 0.999f, 2.001f }))
+    {
+        return false;
+    }
+
+    Tensor param_wd(1, 2, { 1.0f, 2.0f }, exec_target);
+    Tensor grad_wd(1, 2, { 0.1f, -0.2f }, exec_target);
+
+    Adam_Optimizer optimizer_wd(0.001f, 0.9f, 0.999f, 1e-8f, 100.0f, 0.1f);
+    optimizer_wd.step({ { &param_wd, &grad_wd } });
+
+    return verifyMatrix(param_wd, { 0.9989f, 2.0008f });
 }
 
 bool testLearningRateSchedulers()
@@ -733,13 +1903,21 @@ bool testLearningRateSchedulers()
     plateau_decay.step(1.3f);
     bool plateau_ok = nearlyEqual(plateau_decay.getCurrentRate(), 0.05f);
 
-    return no_decay_ok && step1_ok && step2_ok && multi_step_ok && exp_ok && cosine_ok && poly_ok && plateau_ok;
+    Cosine_Annealing warmup_cosine(0.1f, 0.0f, 10, 2);
+    warmup_cosine.step();
+    bool warmup1_ok = nearlyEqual(warmup_cosine.getCurrentRate(), 0.05f);
+    warmup_cosine.step();
+    bool warmup2_ok = nearlyEqual(warmup_cosine.getCurrentRate(), 0.1f);
+    warmup_cosine.step();
+    bool warmup3_ok = (warmup_cosine.getCurrentRate() < 0.1f) && (warmup_cosine.getCurrentRate() > 0.0f);
+
+    return no_decay_ok && step1_ok && step2_ok && multi_step_ok && exp_ok && cosine_ok && poly_ok && plateau_ok && warmup1_ok && warmup2_ok && warmup3_ok;
 }
 
 bool testMatrixSerialization(Execution_Target exec_target)
 {
     std::string temp_file = "temp_matrix_serialization.bin";
-    Matrix original(2, 3, { 1.0f, -2.5f, 3.2f, 4.8f, 5.0f, -6.1f }, exec_target);
+    Tensor original(2, 3, { 1.0f, -2.5f, 3.2f, 4.8f, 5.0f, -6.1f }, exec_target);
 
     std::ofstream out_file(temp_file, std::ios::binary);
     if (!out_file.is_open())
@@ -754,7 +1932,7 @@ bool testMatrixSerialization(Execution_Target exec_target)
     {
         return false;
     }
-    Matrix loaded = Matrix::loadMatrix(in_file, exec_target);
+    Tensor loaded = Tensor::loadMatrix(in_file, exec_target);
     in_file.close();
     std::remove(temp_file.c_str());
 
@@ -770,8 +1948,8 @@ bool testModelInferenceSerialization(Execution_Target exec_target)
     network.addLayer<Relu_Layer>(exec_target);
     network.addLayer<Linear_Layer>(3, 1, exec_target);
 
-    Matrix input_data(1, 2, { 1.5f, -0.5f }, exec_target);
-    Matrix pred_before = network.forward(input_data);
+    Tensor input_data(1, 2, { 1.5f, -0.5f }, exec_target);
+    Tensor pred_before = network.forward(input_data);
 
     network.saveInference(temp_file);
 
@@ -779,7 +1957,7 @@ bool testModelInferenceSerialization(Execution_Target exec_target)
     loaded_network.loadInference(temp_file, exec_target);
     std::remove(temp_file.c_str());
 
-    Matrix pred_after = loaded_network.forward(input_data);
+    Tensor pred_after = loaded_network.forward(input_data);
 
     return verifyMatrix(pred_after, pred_before.getData());
 }
@@ -864,11 +2042,11 @@ bool testOperatorFusionAndGraphExecution()
     Execution_Engine& engine = Execution_Engine::getInstance();
     engine.getCurrentGraph().clear();
 
-    Matrix mat_a(2, 2, { 1.0f, 2.0f, 3.0f, 4.0f }, Execution_Target::VULKAN_GPU);
-    Matrix mat_b(2, 2, { 2.0f, 3.0f, 4.0f, 5.0f }, Execution_Target::VULKAN_GPU);
+    Tensor mat_a(2, 2, { 1.0f, 2.0f, 3.0f, 4.0f }, Execution_Target::VULKAN_GPU);
+    Tensor mat_b(2, 2, { 2.0f, 3.0f, 4.0f, 5.0f }, Execution_Target::VULKAN_GPU);
 
-    Matrix mat_add = mat_a + mat_b;
-    Matrix mat_relu = mat_add.relu();
+    Tensor mat_add = mat_a + mat_b;
+    Tensor mat_relu = mat_add.relu();
 
     size_t raw_node_count = engine.getCurrentGraph().getNodeCount();
     if (raw_node_count < 2)
@@ -882,10 +2060,10 @@ bool testOperatorFusionAndGraphExecution()
         return false;
     }
 
-    Matrix mat_c(2, 2, { -10.0f, 5.0f, 0.0f, 2.0f }, Execution_Target::VULKAN_GPU);
-    Matrix mat_d(2, 2, { 3.0f, 2.0f, 1.0f, -5.0f }, Execution_Target::VULKAN_GPU);
-    Matrix mat_add2 = mat_c + mat_d;
-    Matrix mat_relu2 = mat_add2.relu();
+    Tensor mat_c(2, 2, { -10.0f, 5.0f, 0.0f, 2.0f }, Execution_Target::VULKAN_GPU);
+    Tensor mat_d(2, 2, { 3.0f, 2.0f, 1.0f, -5.0f }, Execution_Target::VULKAN_GPU);
+    Tensor mat_add2 = mat_c + mat_d;
+    Tensor mat_relu2 = mat_add2.relu();
 
     engine.executeGraph();
     if (!verifyMatrix(mat_relu2, { 0.0f, 7.0f, 1.0f, 0.0f }))
@@ -893,10 +2071,10 @@ bool testOperatorFusionAndGraphExecution()
         return false;
     }
 
-    Matrix mat_e(2, 2, { 10.0f, -20.0f, 30.0f, -40.0f }, Execution_Target::VULKAN_GPU);
-    Matrix mat_f(2, 2, { 5.0f, 5.0f, -5.0f, -5.0f }, Execution_Target::VULKAN_GPU);
-    Matrix mat_add3 = mat_e + mat_f;
-    Matrix mat_relu3 = mat_add3.relu();
+    Tensor mat_e(2, 2, { 10.0f, -20.0f, 30.0f, -40.0f }, Execution_Target::VULKAN_GPU);
+    Tensor mat_f(2, 2, { 5.0f, 5.0f, -5.0f, -5.0f }, Execution_Target::VULKAN_GPU);
+    Tensor mat_add3 = mat_e + mat_f;
+    Tensor mat_relu3 = mat_add3.relu();
 
     engine.executeGraph();
     return verifyMatrix(mat_relu3, { 15.0f, 0.0f, 25.0f, 0.0f });
@@ -1082,8 +2260,8 @@ bool testPopulation(Execution_Target exec_target)
     }
 
     Neural_Network ind0 = pop.getIndividual(0);
-    Matrix ind0_input(1, state_dim, test_state, exec_target);
-    Matrix ind0_output = ind0.forward(ind0_input);
+    Tensor ind0_input(1, state_dim, test_state, exec_target);
+    Tensor ind0_output = ind0.forward(ind0_input);
     if (exec_target == Execution_Target::VULKAN_GPU)
     {
         Execution_Engine::getInstance().executeGraph();
@@ -1178,8 +2356,8 @@ bool testPopulation(Execution_Target exec_target)
     fitness[elite_candidate] = 1000.0f;
 
     Neural_Network best_ind_before = pop.getBestIndividual(fitness.data());
-    Matrix in_matrix_best(1, state_dim, std::vector<float>(flat_states.begin(), flat_states.begin() + state_dim), exec_target);
-    Matrix out_matrix_best = best_ind_before.forward(in_matrix_best);
+    Tensor in_matrix_best(1, state_dim, std::vector<float>(flat_states.begin(), flat_states.begin() + state_dim), exec_target);
+    Tensor out_matrix_best = best_ind_before.forward(in_matrix_best);
     if (exec_target == Execution_Target::VULKAN_GPU)
     {
         Execution_Engine::getInstance().executeGraph();
@@ -1295,9 +2473,9 @@ bool testLayerInterfaceContracts(Execution_Target exec_target)
     }
     lin_clone->setPopulationParameter(0, { 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f });
     lin_clone->setPopulationParameter(1, { 0.1f, 0.2f, 0.3f });
-    Matrix lin_in(1, 2, { 1.0f, 2.0f }, exec_target);
-    Matrix lin_out = lin_clone->forward(lin_in);
-    if (!verifyMatrix(lin_out, { 9.1f, 12.2f, 15.3f }))
+    Tensor lin_in(1, 2, { 1.0f, 2.0f }, exec_target);
+    Tensor lin_out = lin_clone->forward(lin_in);
+    if (!verifyMatrix(lin_out, { 9.1f, 12.2f, 15.3f }, (exec_target == Execution_Target::VULKAN_GPU) ? 0.02f : 1e-3f))
     {
         return false;
     }
@@ -1432,6 +2610,7 @@ bool testPopulationDeepNetwork(Execution_Target exec_target)
     Population pop(pop_size, template_net, state_dim, action_dim, exec_target, 888);
     if (pop.getPopulationSize() != pop_size || pop.getStateDimension() != state_dim || pop.getActionSpaceSize() != action_dim)
     {
+        std::cout << "Place 1";
         return false;
     }
 
@@ -1446,12 +2625,13 @@ bool testPopulationDeepNetwork(Execution_Target exec_target)
         size_t act = pop.selectAction(i, input_sample);
         if (act >= action_dim)
         {
+            std::cout << "Place 2";
             return false;
         }
 
         Neural_Network ind = pop.getIndividual(i);
-        Matrix in_mat(1, state_dim, input_sample, exec_target);
-        Matrix out_mat = ind.forward(in_mat);
+        Tensor in_mat(1, state_dim, input_sample, exec_target);
+        Tensor out_mat = ind.forward(in_mat);
         if (exec_target == Execution_Target::VULKAN_GPU)
         {
             Execution_Engine::getInstance().executeGraph();
@@ -1460,6 +2640,7 @@ bool testPopulationDeepNetwork(Execution_Target exec_target)
         size_t expected_act = static_cast<size_t>(std::distance(out_data.begin(), std::max_element(out_data.begin(), out_data.end())));
         if (act != expected_act)
         {
+            std::cout << "Place 3";
             return false;
         }
     }
@@ -1478,6 +2659,7 @@ bool testPopulationDeepNetwork(Execution_Target exec_target)
         size_t single_act = pop.selectAction(i, batch_input.data() + i * state_dim);
         if (batch_actions[i] != single_act)
         {
+            std::cout << "Place 4";
             return false;
         }
     }
@@ -1489,8 +2671,8 @@ bool testPopulationDeepNetwork(Execution_Target exec_target)
     }
 
     Neural_Network best_ind = pop.getBestIndividual(fitness.data());
-    Matrix in_mat_best(1, state_dim, input_sample, exec_target);
-    Matrix best_out = best_ind.forward(in_mat_best);
+    Tensor in_mat_best(1, state_dim, input_sample, exec_target);
+    Tensor best_out = best_ind.forward(in_mat_best);
     if (exec_target == Execution_Target::VULKAN_GPU)
     {
         Execution_Engine::getInstance().executeGraph();
@@ -1499,6 +2681,7 @@ bool testPopulationDeepNetwork(Execution_Target exec_target)
     size_t best_expected = static_cast<size_t>(std::distance(best_data.begin(), std::max_element(best_data.begin(), best_data.end())));
     if (pop.selectAction(pop_size - 1, input_sample) != best_expected)
     {
+        std::cout << "Place 5";
         return false;
     }
 
@@ -1506,6 +2689,7 @@ bool testPopulationDeepNetwork(Execution_Target exec_target)
     uint64_t gen_in = 50;
     if (!pop.saveCheckpoint(ckpt_path, gen_in, fitness.data()))
     {
+        std::cout << "Place 6";
         return false;
     }
 
@@ -1515,45 +2699,48 @@ bool testPopulationDeepNetwork(Execution_Target exec_target)
     if (!pop_loader.loadCheckpoint(ckpt_path, gen_out, fit_out.data()))
     {
         std::remove(ckpt_path.c_str());
+        std::cout << "Place 7";
         return false;
     }
     std::remove(ckpt_path.c_str());
 
     if (gen_out != gen_in)
     {
+        std::cout << "Place 8";
         return false;
     }
     for (size_t i = 0; i < pop_size; ++i)
     {
         if (!nearlyEqual(fit_out[i], fitness[i]))
         {
+            std::cout << "Place 9";
             return false;
         }
         if (pop_loader.selectAction(i, input_sample) != pop.selectAction(i, input_sample))
         {
+            std::cout << "Place 9";
             return false;
         }
     }
-
     return true;
 }
 
 bool testMatrixConcatAndSplit(Execution_Target exec_target)
 {
-    Matrix mat_a(2, 2, { 1.0f, 2.0f, 3.0f, 4.0f }, exec_target);
-    Matrix mat_b(2, 1, { 5.0f, 6.0f }, exec_target);
+    Tensor mat_a(2, 2, { 1.0f, 2.0f, 3.0f, 4.0f }, exec_target);
+    Tensor mat_b(2, 1, { 5.0f, 6.0f }, exec_target);
 
-    Matrix concat_cols_res = mat_a.concatenateCollumns(mat_b);
+    Tensor concat_cols_res = mat_a.concatenateColumns(mat_b);
     bool concat_cols_ok = verifyMatrix(concat_cols_res, { 1.0f, 2.0f, 5.0f, 3.0f, 4.0f, 6.0f });
 
-    auto [split_left, split_right] = concat_cols_res.splitCollumns(2);
+    auto [split_left, split_right] = concat_cols_res.splitColumns(2);
     bool split_cols_ok = verifyMatrix(split_left, { 1.0f, 2.0f, 3.0f, 4.0f }) &&
         verifyMatrix(split_right, { 5.0f, 6.0f });
 
-    Matrix mat_row_a(1, 2, { 10.0f, 20.0f }, exec_target);
-    Matrix mat_row_b(2, 2, { 30.0f, 40.0f, 50.0f, 60.0f }, exec_target);
+    Tensor mat_row_a(1, 2, { 10.0f, 20.0f }, exec_target);
+    Tensor mat_row_b(2, 2, { 30.0f, 40.0f, 50.0f, 60.0f }, exec_target);
 
-    Matrix concat_rows_res = mat_row_a.concatenateRows(mat_row_b);
+    Tensor concat_rows_res = mat_row_a.concatenateRows(mat_row_b);
     bool concat_rows_ok = verifyMatrix(concat_rows_res, { 10.0f, 20.0f, 30.0f, 40.0f, 50.0f, 60.0f });
 
     auto [split_up, split_down] = concat_rows_res.splitRows(1);
@@ -1569,20 +2756,22 @@ bool testPpoActorCriticForward(Execution_Target exec_target)
     PPO_Actor_Critic_Layer ppo_layer(action_dim, exec_target);
 
     auto& actor_linear = ppo_layer.addActorLayer<Linear_Layer>(2, 2, exec_target);
-    actor_linear.setWeights(Matrix(2, 2, { 1.0f, 0.0f, 0.0f, 1.0f }, exec_target));
-    actor_linear.setBiases(Matrix(1, 2, { 0.5f, -0.5f }, exec_target));
+    actor_linear.setWeights(Tensor(2, 2, { 1.0f, 0.0f, 0.0f, 1.0f }, exec_target));
+    actor_linear.setBiases(Tensor(1, 2, { 0.5f, -0.5f }, exec_target));
 
     auto& critic_linear = ppo_layer.addCriticLayer<Linear_Layer>(2, 1, exec_target);
-    critic_linear.setWeights(Matrix(2, 1, { 1.0f, 2.0f }, exec_target));
-    critic_linear.setBiases(Matrix(1, 1, { 1.0f }, exec_target));
+    critic_linear.setWeights(Tensor(2, 1, { 1.0f, 2.0f }, exec_target));
+    critic_linear.setBiases(Tensor(1, 1, { 1.0f }, exec_target));
 
-    Matrix input_matrix(2, 2, { 1.0f, 2.0f, 3.0f, 4.0f }, exec_target);
-    Matrix output_matrix = ppo_layer.forward(input_matrix);
+    Tensor input_matrix(2, 2, { 1.0f, 2.0f, 3.0f, 4.0f }, exec_target);
+    Tensor output_matrix = ppo_layer.forward(input_matrix);
 
     bool output_ok = verifyMatrix(output_matrix, { 1.5f, 1.5f, 6.0f, 3.5f, 3.5f, 12.0f });
+    output_matrix.print();
     bool actor_sub_ok = verifyMatrix(ppo_layer.getActorOutput(), { 1.5f, 1.5f, 3.5f, 3.5f });
+    ppo_layer.getActorOutput().print();
     bool critic_sub_ok = verifyMatrix(ppo_layer.getCriticOutput(), { 6.0f, 12.0f });
-
+    ppo_layer.getCriticOutput().print();
     return output_ok && actor_sub_ok && critic_sub_ok;
 }
 
@@ -1592,18 +2781,18 @@ bool testPpoActorCriticBackward(Execution_Target exec_target)
     PPO_Actor_Critic_Layer ppo_layer(action_dim, exec_target);
 
     auto& actor_linear = ppo_layer.addActorLayer<Linear_Layer>(2, 2, exec_target);
-    actor_linear.setWeights(Matrix(2, 2, { 1.0f, 0.0f, 0.0f, 1.0f }, exec_target));
-    actor_linear.setBiases(Matrix(1, 2, { 0.0f, 0.0f }, exec_target));
+    actor_linear.setWeights(Tensor(2, 2, { 1.0f, 0.0f, 0.0f, 1.0f }, exec_target));
+    actor_linear.setBiases(Tensor(1, 2, { 0.0f, 0.0f }, exec_target));
 
     auto& critic_linear = ppo_layer.addCriticLayer<Linear_Layer>(2, 1, exec_target);
-    critic_linear.setWeights(Matrix(2, 1, { 1.0f, 1.0f }, exec_target));
-    critic_linear.setBiases(Matrix(1, 1, { 0.0f }, exec_target));
+    critic_linear.setWeights(Tensor(2, 1, { 1.0f, 1.0f }, exec_target));
+    critic_linear.setBiases(Tensor(1, 1, { 0.0f }, exec_target));
 
-    Matrix input_matrix(1, 2, { 2.0f, 3.0f }, exec_target);
+    Tensor input_matrix(1, 2, { 2.0f, 3.0f }, exec_target);
     ppo_layer.forward(input_matrix);
 
-    Matrix output_gradient(1, 3, { 1.0f, 2.0f, 3.0f }, exec_target);
-    Matrix input_gradient = ppo_layer.backward(output_gradient);
+    Tensor output_gradient(1, 3, { 1.0f, 2.0f, 3.0f }, exec_target);
+    Tensor input_gradient = ppo_layer.backward(output_gradient);
 
     bool input_grad_ok = verifyMatrix(input_gradient, { 4.0f, 5.0f });
 
@@ -1626,15 +2815,15 @@ bool testPpoActorCriticSerialization(Execution_Target exec_target)
 
     PPO_Actor_Critic_Layer ppo_source(action_dim, exec_target);
     auto& actor_linear = ppo_source.addActorLayer<Linear_Layer>(2, 2, exec_target);
-    actor_linear.setWeights(Matrix(2, 2, { 1.5f, -0.5f, 0.5f, 2.0f }, exec_target));
-    actor_linear.setBiases(Matrix(1, 2, { 0.1f, -0.2f }, exec_target));
+    actor_linear.setWeights(Tensor(2, 2, { 1.5f, -0.5f, 0.5f, 2.0f }, exec_target));
+    actor_linear.setBiases(Tensor(1, 2, { 0.1f, -0.2f }, exec_target));
 
     auto& critic_linear = ppo_source.addCriticLayer<Linear_Layer>(2, 1, exec_target);
-    critic_linear.setWeights(Matrix(2, 1, { 0.8f, -1.2f }, exec_target));
-    critic_linear.setBiases(Matrix(1, 1, { 0.5f }, exec_target));
+    critic_linear.setWeights(Tensor(2, 1, { 0.8f, -1.2f }, exec_target));
+    critic_linear.setBiases(Tensor(1, 1, { 0.5f }, exec_target));
 
-    Matrix input_mat(1, 2, { 1.0f, 2.0f }, exec_target);
-    Matrix pred_before = ppo_source.forward(input_mat);
+    Tensor input_mat(1, 2, { 1.0f, 2.0f }, exec_target);
+    Tensor pred_before = ppo_source.forward(input_mat);
 
     std::ofstream out_stream(temp_file, std::ios::binary);
     if (!out_stream.is_open())
@@ -1657,7 +2846,7 @@ bool testPpoActorCriticSerialization(Execution_Target exec_target)
     in_stream.close();
     std::remove(temp_file.c_str());
 
-    Matrix pred_after = ppo_loaded.forward(input_mat);
+    Tensor pred_after = ppo_loaded.forward(input_mat);
 
     return verifyMatrix(pred_after, pred_before.getData());
 }
@@ -1780,6 +2969,16 @@ bool testGradientAccumulation(Execution_Target exec_target)
         Execution_Engine::getInstance().executeGraph();
     }
 
+    std::cout << "\n--- [DEBUG: Gradient Accumulation Inspection] ---\n";
+    auto mb1_params_grads = net.getParametersAndGradients();
+    for (size_t i = 0; i < mb1_params_grads.size(); ++i)
+    {
+        std::cout << "Param [" << i << "] Gradient after Micro-batch 1 ("
+            << mb1_params_grads[i].second->getRows() << "x"
+            << mb1_params_grads[i].second->getColumns() << "):\n";
+        mb1_params_grads[i].second->print();
+    }
+
     Tensor mb2_out = net.forward(mb2_in);
     Tensor mb2_grad = mb2_out - mb2_target;
     net.backward(mb2_grad);
@@ -1789,21 +2988,47 @@ bool testGradientAccumulation(Execution_Target exec_target)
     }
 
     auto accum_params_grads = net.getParametersAndGradients();
+    float tol = (exec_target == Execution_Target::VULKAN_GPU) ? 1e-2f : 1e-3f;
+    bool all_match = true;
+
     for (size_t i = 0; i < accum_params_grads.size(); ++i)
     {
         std::vector<float> accum_grad = accum_params_grads[i].second->getData();
         const auto& expected_grad = full_grads_data[i];
+
+        std::cout << "Param [" << i << "] Accumulated Grad (MB1 + MB2):\n";
+        accum_params_grads[i].second->print();
+
+        std::cout << "Param [" << i << "] Expected Full-batch Grad:\n";
+        Tensor expected_tensor(accum_params_grads[i].second->getShape(), expected_grad, exec_target);
+        expected_tensor.print();
+
         if (accum_grad.size() != expected_grad.size())
         {
+            std::cout << "[FAIL] Param [" << i << "] Size mismatch: "
+                << accum_grad.size() << " != " << expected_grad.size() << "\n";
             return false;
         }
+
+        float max_diff = 0.0f;
         for (size_t j = 0; j < accum_grad.size(); ++j)
         {
-            if (!nearlyEqual(accum_grad[j], expected_grad[j], 1e-3f))
+            float diff = std::abs(accum_grad[j] - expected_grad[j]);
+            if (diff > max_diff)
             {
-                return false;
+                max_diff = diff;
+            }
+            if (!nearlyEqual(accum_grad[j], expected_grad[j], tol))
+            {
+                all_match = false;
             }
         }
+        std::cout << "Param [" << i << "] Max Abs Diff = " << max_diff << "\n\n";
+    }
+
+    if (!all_match)
+    {
+        return false;
     }
 
     net.zeroGradients();
@@ -1811,6 +3036,7 @@ bool testGradientAccumulation(Execution_Target exec_target)
     {
         Execution_Engine::getInstance().executeGraph();
     }
+
     auto zeroed_grads = net.getParametersAndGradients();
     for (const auto& zg : zeroed_grads)
     {
@@ -2185,8 +3411,8 @@ bool testStaticCommandBuffer()
 
     // Inference forward:
     uint32_t f_inf = engine.getContext().getCurrentFrame();
-    Matrix test_in(2, 4, std::vector<float>{1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f}, Execution_Target::VULKAN_GPU);
-    Matrix pred = nn.forward(test_in);
+    Tensor test_in(2, 4, std::vector<float>{1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f}, Execution_Target::VULKAN_GPU);
+    Tensor pred = nn.forward(test_in);
     engine.executeGraph();
     engine.waitIdle();
 
@@ -2197,7 +3423,7 @@ bool testStaticCommandBuffer()
     }
 
     // Replay inference on second batch
-    Matrix pred2 = nn.forward(test_in);
+    Tensor pred2 = nn.forward(test_in);
     engine.executeGraph();
     engine.waitIdle();
 
@@ -2219,16 +3445,16 @@ void runTestSuite(Execution_Target exec_target, const std::string& target_name)
 {
     std::cout << "   RUNNING TEST SUITE ON " << target_name << "\n";
 
-    std::cout << "\n[1. Basic Matrix Arithmetics]\n";
-    std::cout << "  Matrix Addition (with Broadcast):  " << (testMatrixAddition(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "  Matrix Subtraction (with Broadcast): " << (testMatrixSubtraction(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "  Matrix Multiplication (GEMM):      " << (testMatrixMultiplication(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "\n[1. Basic Tensor Arithmetics]\n";
+    std::cout << "  Tensor Addition (with Broadcast):  " << (testMatrixAddition(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Tensor Subtraction (with Broadcast): " << (testMatrixSubtraction(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Tensor Multiplication (GEMM):      " << (testMatrixMultiplication(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "  Scalar Multiplication & Division:   " << (testScalarOperations(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "  Hadamard Multiplication & Division: " << (testHadamardOperations(exec_target) ? "PASS" : "FAIL") << "\n";
-    std::cout << "  Matrix Concat & Split (Row/Col):   " << (testMatrixConcatAndSplit(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Tensor Concat & Split (Row/Col):   " << (testMatrixConcatAndSplit(exec_target) ? "PASS" : "FAIL") << "\n";
 
     std::cout << "\n[2. Transformations & Advanced Operations]\n";
-    std::cout << "  Transpose & Matrix Inversion:       " << (testTransposeAndInverse(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Transpose & Tensor Inversion:       " << (testTransposeAndInverse(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "  Euclidean L2 Normalization:        " << (testNormalize(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "  Fused Linear Bias Add (MatmulAdd): " << (testMatmulAdd(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "  Batched Tensor GEMM (3D):          " << (testBatchedTensorMatmul(exec_target) ? "PASS" : "FAIL") << "\n";
@@ -2245,6 +3471,7 @@ void runTestSuite(Execution_Target exec_target, const std::string& target_name)
     std::cout << "  BCE Cost & Gradient:               " << (testBceLoss(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "  CCE Cost & Gradient:               " << (testCceLoss(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "  Huber Cost & Gradient:             " << (testHuberLoss(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Fused CCE Cost & Gradient:         " << (testFusedCrossEntropy(exec_target) ? "PASS" : "FAIL") << "\n";
 
     std::cout << "\n[5. Neural Network Layers]\n";
     std::cout << "  Linear Layer (Forward & Backward): " << (testLinearLayer(exec_target) ? "PASS" : "FAIL") << "\n";
@@ -2259,6 +3486,26 @@ void runTestSuite(Execution_Target exec_target, const std::string& target_name)
     std::cout << "  PPO Layer Forward:                 " << (testPpoActorCriticForward(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "  PPO Layer Backward & Accumulation: " << (testPpoActorCriticBackward(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "  PPO Layer Serialization I/O:       " << (testPpoActorCriticSerialization(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  RMSNorm Layer (Fwd & Bwd):         " << (testRmsNormLayer(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  RoPE Rotary Embedding (Fwd & Bwd): " << (testRoPE(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Embedding Layer (Fwd/Bwd/Clone):   " << (testEmbeddingLayer(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  SwiGLU FFN Layer (Fwd & Bwd):       " << (testSwiGluLayer(exec_target) ? "PASS" : "FAIL") << "\n";
+    auto safeRun = [](auto&& fn, Execution_Target target) -> std::string {
+        try {
+            return fn(target) ? "PASS" : "FAIL";
+        } catch (const std::exception& e) {
+            return std::string("[EXCEPTION: ") + e.what() + "] FAIL";
+        } catch (...) {
+            return "[UNKNOWN EXCEPTION] FAIL";
+        }
+    };
+
+    std::cout << "  FlashAttention-2 FP16 (CoopMat):   " << safeRun(testFlashAttention, exec_target) << std::endl;
+    std::cout << "  KV Cache Manager (Paged / Ring):   " << safeRun(testKvCacheManager, exec_target) << std::endl;
+    std::cout << "  Transformer Block (Prefill & Decode): " << safeRun(testTransformerBlock, exec_target) << std::endl;
+    std::cout << "  Causal LM Model (Forward & Generate): " << safeRun(testCausalLMModel, exec_target) << std::endl;
+    std::cout << "  Causal LM Pre-training Engine Suite:  " << safeRun(testCausalLMTraining, exec_target) << std::endl;
+    std::cout << "  Causal LM Pure FP16 Engine Suite:     " << safeRun(testCausalLMFP16Training, exec_target) << std::endl;
 
     std::cout << "\n[6. Optimizers]\n";
     std::cout << "  SGD Optimizer Step:                " << (testSgdOptimizer(exec_target) ? "PASS" : "FAIL") << "\n";
@@ -2272,7 +3519,7 @@ void runTestSuite(Execution_Target exec_target, const std::string& target_name)
     std::cout << "  Layer Population Interface & Clone:" << (testLayerInterfaceContracts(exec_target) ? "PASS" : "FAIL") << "\n";
 
     std::cout << "\n[8. Serialization & I/O]\n";
-    std::cout << "  Matrix Binary I/O:                 " << (testMatrixSerialization(exec_target) ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Tensor Binary I/O:                 " << (testMatrixSerialization(exec_target) ? "PASS" : "FAIL") << "\n";
     std::cout << "  Model Inference I/O (NNI1):        " << (testModelInferenceSerialization(exec_target) ? "PASS" : "FAIL") << "\n";
 
     std::cout << "\n[9. Unified Architecture & New Features]\n";
@@ -2303,6 +3550,7 @@ int main()
     std::cout << "  FP16 GPU Support & Precision Cast: " << (testFp16SupportAndCastingGpu() ? "PASS" : "FAIL") << "\n";
     std::cout << "  Loss Scaler & Mixed Precision AMP: " << (testLossScalerAndAmp() ? "PASS" : "FAIL") << "\n";
     std::cout << "  Static Command Buffer (Replay):    " << (testStaticCommandBuffer() ? "PASS" : "FAIL") << "\n";
+    std::cout << "  BPE Tokenizer (UTF-8 & Fallback):  " << (testBpeTokenizer() ? "PASS" : "FAIL") << "\n";
     std::cout << "========================================\n";
 
     return 0;

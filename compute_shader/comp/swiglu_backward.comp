@@ -1,0 +1,29 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer GradY { float data_dy[]; };
+layout(std430, binding = 1) readonly buffer InA { float data_a[]; };
+layout(std430, binding = 2) readonly buffer InB { float data_b[]; };
+layout(std430, binding = 3) writeonly buffer GradA { float data_da[]; };
+layout(std430, binding = 4) writeonly buffer GradB { float data_db[]; };
+
+layout(push_constant) uniform Constants {
+    uint total_elements;
+} pcs;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pcs.total_elements) return;
+
+    float dy = data_dy[idx];
+    float a = data_a[idx];
+    float b = data_b[idx];
+
+    float sig_a = 1.0 / (1.0 + exp(-a));
+    float silu_a = a * sig_a;
+    float d_silu_a = sig_a * (1.0 + a * (1.0 - sig_a));
+
+    data_db[idx] = dy * silu_a;
+    data_da[idx] = dy * b * d_silu_a;
+}

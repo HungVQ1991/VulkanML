@@ -387,7 +387,4 @@ public:
     void setEpsilon(float _epsilon) noexcept { epsilon = _epsilon; }
     void setIsForwardCompleted(bool _is_completed) noexcept { is_forward_completed = _is_completed; }
     void setTrainingMode(bool _is_training) override { is_training = _is_training; }
-    void setIsTraining(bool _is_training) noexcept { is_training = _is_training; }
 };
-
-using Batch_Norm2d_Layer = Batch_Norm_2d_Layer;

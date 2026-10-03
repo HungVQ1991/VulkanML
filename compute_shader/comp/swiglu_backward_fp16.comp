@@ -1,0 +1,39 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer GradY { float16_t data_dy[]; };
+layout(std430, binding = 1) readonly buffer InA { float16_t data_a[]; };
+layout(std430, binding = 2) readonly buffer InB { float16_t data_b[]; };
+layout(std430, binding = 3) writeonly buffer GradA { float16_t data_da[]; };
+layout(std430, binding = 4) writeonly buffer GradB { float16_t data_db[]; };
+
+layout(push_constant) uniform Constants {
+    uint total_elements;
+} pcs;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pcs.total_elements) return;
+
+    float dy = float(data_dy[idx]);
+    float a = float(data_a[idx]);
+    float b = float(data_b[idx]);
+    if (isnan(dy) || isinf(dy)) dy = 0.0;
+    if (isnan(a) || isinf(a)) a = 0.0;
+    if (isnan(b) || isinf(b)) b = 0.0;
+
+    float sig_a = 1.0 / (1.0 + exp(-clamp(a, -85.0, 85.0)));
+    float silu_a = a * sig_a;
+    float d_silu_a = sig_a * (1.0 + a * (1.0 - sig_a));
+
+    float db_val = dy * silu_a;
+    float da_val = dy * b * d_silu_a;
+    if (isnan(db_val) || isinf(db_val)) db_val = 0.0;
+    if (isnan(da_val) || isinf(da_val)) da_val = 0.0;
+
+    data_db[idx] = float16_t(clamp(db_val, -65504.0, 65504.0));
+    data_da[idx] = float16_t(clamp(da_val, -65504.0, 65504.0));
+}

@@ -207,7 +207,4 @@ public:
     void setChannels(uint32_t _channels) noexcept { channels = _channels; }
     void setPadding(uint32_t _padding) noexcept { padding = _padding; }
     void setStride(uint32_t _stride) noexcept { stride = _stride; }
-    void setIsForwardCompleted(bool _is_completed) noexcept { is_forward_completed = _is_completed; }
 };
-
-using MaxPool2d_Layer = Max_Pool_2d_Layer;

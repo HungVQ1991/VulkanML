@@ -13,3 +13,7 @@
 #include "layer/res_net_20_layer.h"
 #include "layer/res_net_block_2d_layer.h"
 #include "layer/ppo_actor_critic_layer.h"
+#include "layer/rmsnorm_layer.h"
+#include "layer/swiglu_layer.h"
+#include "layer/embedding_layer.h"
+#include "layer/transformer_block.h"
