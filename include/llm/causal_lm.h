@@ -1210,7 +1210,7 @@ public:
 
             if (token_callback)
             {
-                token_callback(tokenizer.decode({ next_token }, skip_special, false));
+                token_callback(tokenizer.decode({ next_token }, skip_special));
             }
 
             if (next_token == eos_token_id)
