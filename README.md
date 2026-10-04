@@ -382,6 +382,25 @@ int main()
 
 ### FP16 vs FP32 Performance (MNIST CNN on AMD Radeon™ 860M)
 
+| Evaluation Metric | FP32 Baseline | FP32 Optimized | FP16 Simulated (Cast-only) | True Native FP16 (Zero-Cast) | Impact / Speedup |
+|:---|:---:|:---:|:---:|:---:|:---:|
+| **1-Epoch Training Time** | 24.00 s | 12.27 s | 13.60 s | **8.78 s** | **~28.5% faster than opt FP32, 2.73x vs baseline** |
+| **Per-Batch Graph Dispatch** | ~3.50 ms | ~1.55 ms | ~1.81 ms | **~1.32 - 1.38 ms** | **-60% latency reduction** |
+| **Intermediate Cast Passes** | 0 | 0 | 8 - 10 per batch | **0 (Zero-Cast Pipeline)** | **100% cast overhead eliminated** |
+| **Fence Wait (CPU-GPU stall)**| 0.040 ms | 0.001 ms | 0.001 ms | **0.001 ms** | **Zero sync stall (Fully overlapped)** |
+| **VRAM Buffer Allocation** | Dynamic | Persistent | Reallocated per batch | **Persistent Pre-allocated Buffers** | **Zero runtime allocation overhead** |
+| **Test Accuracy (1 Epoch)** | 98.60% | 98.92% | 98.60% | **97.76% - 98.90%** | **Retains classification accuracy** |
+
+### Benchmark Results Summary
+
+* **MNIST (Supervised CNN)**: **99.51%** test accuracy in **~12.8s** (1 epoch / batch size 512) on AMD Radeon 860M iGPU.
+* **CIFAR-100 (Deep CNN)**: **67.51%** validation accuracy with data augmentations over 100 epochs.
+
+### FP16 vs FP32 Performance (MNIST CNN on AMD Radeon™ 860M)
+
+## Building & Installation
+
+### Requirements
 | Evaluation Metric              | FP32 Baseline | FP32 Optimized | FP16 Simulated (Cast-only) |     True Native FP16 (Zero-Cast)     |                  Impact / Speedup                  |
 | :----------------------------- | :-----------: | :------------: | :------------------------: | :----------------------------------: | :------------------------------------------------: |
 | **1-Epoch Training Time**      |    24.00 s    |    12.27 s     |          13.60 s           |              **8.78 s**              | **~28.5% faster than opt FP32, 2.73x vs baseline** |
@@ -396,7 +415,9 @@ int main()
 * **MNIST (Supervised CNN)**: **99.51%** test accuracy in **~12.8s** (1 epoch / batch size 512) on AMD Radeon 860M iGPU.
 * **CIFAR-100 (Deep CNN)**: **67.51%** validation accuracy with data augmentations over 100 epochs.
 
----
+* **C++ Compiler**: Modern C++23 compliant compiler (MinGW GCC 13/14+, Clang 17+, MSVC 19.38+)
+* **Vulkan SDK**: Vulkan 1.3+ SDK with `glslc` / `shaderc` libraries installed
+* **Build System**: CMake 3.25+
 
 ## Building & Installation
 
