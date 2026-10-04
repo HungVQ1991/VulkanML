@@ -61,23 +61,23 @@ The library features a cleanly decoupled **Header (`include/`) + Implementation 
 
 ## Features
 
-| Category | Details |
-|:---|:---|
-| **Architecture** | Clean C++23 modular separation: public interface headers in `include/` and compiled implementation in `src/` packaged into `vulkanml_core` static library. |
-| **Tensor Engine** | N-dimensional Tensor with dynamic/contiguous strides, broadcasting, slice/gather operations, and seamless zero-copy CPU↔GPU transfers. |
-| **Neural Layers** | Linear (Dense), Conv2D, BatchNorm 1D/2D, MaxPool2D, GlobalAvgPool2D, GELU, ReLU, Softmax, RMSNorm, SwiGLU, Embedding, ResNet Block, ResNet-20, PPO Actor-Critic, Transformer Block. |
-| **LLM & Attention** | Autoregressive Decoder-only `Causal_LM`, `KV_Cache_Manager`, FlashAttention forward/backward, Rotary Position Embeddings (RoPE), and memory-mapped `Binary_Dataset`. |
-| **Tokenization** | Byte-Pair Encoding (`Bpe_Tokenizer`), `Syllable_Tokenizer`, and Vietnamese phonetics engine (`Vietnamese_Phonetics`) with tone analysis (Bằng/Trắc) and Lục Bát rhyme validation. |
-| **Loss Functions** | MSE, MAE, BCE, CCE, Huber, and GPU-fused Cross Entropy with logits (`Fused_Cce_Cost`). |
-| **Optimizers** | Adam (with fused weight decay and gradient clipping), SGD (with momentum). |
-| **LR Schedulers** | Cosine Annealing, Step Decay, Multi-Step Decay, Exponential Decay, Polynomial Decay, Reduce on Plateau, Constant. |
-| **Neuroevolution** | Population-based evolutionary algorithms (Tournament Selection, Uniform Crossover, Gaussian Mutation, Elitism) with batched GPU inference across generations. |
-| **Reinforcement Learning**| Deep Q-Network (DQN) with Replay Buffer and target sync, Proximal Policy Optimization (PPO Actor-Critic), CartPole simulation environment. |
-| **GPU Backend** | Vulkan 1.3 Compute, JIT GLSL shader generation, operator fusion (GEMM + Bias + Activation), persistent pipeline caching, and sub-allocator memory pooling. |
-| **Cooperative Matrix** | Auto-detected `VK_KHR_cooperative_matrix` extension for high-performance 16×16×16 subgroup hardware tensor cores. |
-| **Mixed Precision (AMP)** | True Native FP16 storage & compute pipeline (Zero-Cast), dynamic Loss Scaler for gradient underflow protection, FP32 master weights. |
-| **Data Pipeline** | Asynchronous double-buffered data pipeline overlapping CPU disk I/O with GPU training batches. |
-| **Serialization** | Binary model format (inference `.nni` + checkpoint `.nnc` / `.nnck`) with complete topology auto-restoration. |
+| Category                   | Details                                                                                                                                                                             |
+| :------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Architecture**           | Clean C++23 modular separation: public interface headers in `include/` and compiled implementation in `src/` packaged into `vulkanml_core` static library.                          |
+| **Tensor Engine**          | N-dimensional Tensor with dynamic/contiguous strides, broadcasting, slice/gather operations, and seamless zero-copy CPU↔GPU transfers.                                              |
+| **Neural Layers**          | Linear (Dense), Conv2D, BatchNorm 1D/2D, MaxPool2D, GlobalAvgPool2D, GELU, ReLU, Softmax, RMSNorm, SwiGLU, Embedding, ResNet Block, ResNet-20, PPO Actor-Critic, Transformer Block. |
+| **LLM & Attention**        | Autoregressive Decoder-only `Causal_LM`, `KV_Cache_Manager`, FlashAttention forward/backward, Rotary Position Embeddings (RoPE), and memory-mapped `Binary_Dataset`.                |
+| **Tokenization**           | Byte-Pair Encoding (`Bpe_Tokenizer`), `Syllable_Tokenizer`, and Vietnamese phonetics engine (`Vietnamese_Phonetics`) with tone analysis (Bằng/Trắc) and Lục Bát rhyme validation.   |
+| **Loss Functions**         | MSE, MAE, BCE, CCE, Huber, and GPU-fused Cross Entropy with logits (`Fused_Cce_Cost`).                                                                                              |
+| **Optimizers**             | Adam (with fused weight decay and gradient clipping), SGD (with momentum).                                                                                                          |
+| **LR Schedulers**          | Cosine Annealing, Step Decay, Multi-Step Decay, Exponential Decay, Polynomial Decay, Reduce on Plateau, Constant.                                                                   |
+| **Neuroevolution**         | Population-based evolutionary algorithms (Tournament Selection, Uniform Crossover, Gaussian Mutation, Elitism) with batched GPU inference across generations.                       |
+| **Reinforcement Learning** | Deep Q-Network (DQN) with Replay Buffer and target sync, Proximal Policy Optimization (PPO Actor-Critic), CartPole simulation environment.                                          |
+| **GPU Backend**            | Vulkan 1.3 Compute, JIT GLSL shader generation, operator fusion (GEMM + Bias + Activation), persistent pipeline caching, and sub-allocator memory pooling.                          |
+| **Cooperative Matrix**     | Auto-detected `VK_KHR_cooperative_matrix` extension for high-performance 16×16×16 subgroup hardware tensor cores.                                                                   |
+| **Mixed Precision (AMP)**  | True Native FP16 storage & compute pipeline (Zero-Cast), dynamic Loss Scaler for gradient underflow protection, FP32 master weights.                                                |
+| **Data Pipeline**          | Asynchronous double-buffered data pipeline overlapping CPU disk I/O with GPU training batches.                                                                                      |
+| **Serialization**          | Binary model format (inference `.nni` + checkpoint `.nnc` / `.nnck`) with complete topology auto-restoration.                                                                       |
 
 ---
 
@@ -396,7 +396,28 @@ int main()
 * **MNIST (Supervised CNN)**: **99.51%** test accuracy in **~12.8s** (1 epoch / batch size 512) on AMD Radeon 860M iGPU.
 * **CIFAR-100 (Deep CNN)**: **67.51%** validation accuracy with data augmentations over 100 epochs.
 
----
+### FP16 vs FP32 Performance (MNIST CNN on AMD Radeon™ 860M)
+
+## Building & Installation
+
+### Requirements
+| Evaluation Metric              | FP32 Baseline | FP32 Optimized | FP16 Simulated (Cast-only) |     True Native FP16 (Zero-Cast)     |                  Impact / Speedup                  |
+| :----------------------------- | :-----------: | :------------: | :------------------------: | :----------------------------------: | :------------------------------------------------: |
+| **1-Epoch Training Time**      |    24.00 s    |    12.27 s     |          13.60 s           |              **8.78 s**              | **~28.5% faster than opt FP32, 2.73x vs baseline** |
+| **Per-Batch Graph Dispatch**   |   ~3.50 ms    |    ~1.55 ms    |          ~1.81 ms          |         **~1.32 - 1.38 ms**          |             **-60% latency reduction**             |
+| **Intermediate Cast Passes**   |       0       |       0        |      8 - 10 per batch      |      **0 (Zero-Cast Pipeline)**      |         **100% cast overhead eliminated**          |
+| **Fence Wait (CPU-GPU stall)** |   0.040 ms    |    0.001 ms    |          0.001 ms          |             **0.001 ms**             |       **Zero sync stall (Fully overlapped)**       |
+| **VRAM Buffer Allocation**     |    Dynamic    |   Persistent   |   Reallocated per batch    | **Persistent Pre-allocated Buffers** |        **Zero runtime allocation overhead**        |
+| **Test Accuracy (1 Epoch)**    |    98.60%     |     98.92%     |           98.60%           |         **97.76% - 98.90%**          |        **Retains classification accuracy**         |
+
+### Benchmark Results Summary
+
+* **MNIST (Supervised CNN)**: **99.51%** test accuracy in **~12.8s** (1 epoch / batch size 512) on AMD Radeon 860M iGPU.
+* **CIFAR-100 (Deep CNN)**: **67.51%** validation accuracy with data augmentations over 100 epochs.
+
+* **C++ Compiler**: Modern C++23 compliant compiler (MinGW GCC 13/14+, Clang 17+, MSVC 19.38+)
+* **Vulkan SDK**: Vulkan 1.3+ SDK with `glslc` / `shaderc` libraries installed
+* **Build System**: CMake 3.25+
 
 ## Building & Installation
 
@@ -488,10 +509,10 @@ The codebase is organized in an orthogonal layout separating public header inter
 
 ## Third-Party Credits
 
-| Library | License | Usage |
-|:---|:---|:---|
-| [nlohmann/json](https://github.com/nlohmann/json) | MIT | JSON configuration serialization and hyperparameter persistence |
-| [magic_enum](https://github.com/Neargye/magic_enum) | MIT | Compile-time enum-to-string reflection for logging and serialization |
+| Library                                             | License | Usage                                                                |
+| :-------------------------------------------------- | :------ | :------------------------------------------------------------------- |
+| [nlohmann/json](https://github.com/nlohmann/json)   | MIT     | JSON configuration serialization and hyperparameter persistence      |
+| [magic_enum](https://github.com/Neargye/magic_enum) | MIT     | Compile-time enum-to-string reflection for logging and serialization |
 
 ---
 
