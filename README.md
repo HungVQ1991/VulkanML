@@ -29,7 +29,7 @@ The library features a cleanly decoupled **Header (`include/`) + Implementation 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
 │                           APPLICATION & SUBSYSTEMS                       │
-│      Neural_Network · Population · RL (DQN, PPO) · Causal_LM (LLM)      │
+│      Neural_Network · Population · RL (DQN, PPO) · Causal_LM (LLM)       │
 │         Tokenizers (BPE, Syllable, VN Phonetics) · Training_Context      │
 ├──────────────────────────────────────────────────────────────────────────┤
 │                            LAYER SYSTEM                                  │

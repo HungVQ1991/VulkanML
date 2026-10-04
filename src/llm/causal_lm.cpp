@@ -1132,7 +1132,7 @@ std::string Causal_LM::generate(const std::string& prompt, size_t max_new_tokens
 
             if (token_callback)
             {
-                token_callback(tokenizer.decode({ next_token }, skip_special, false));
+                token_callback(tokenizer.decode({ next_token }, skip_special));
             }
 
             if (next_token == eos_token_id)
