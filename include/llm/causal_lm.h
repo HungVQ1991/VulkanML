@@ -65,7 +65,8 @@ private:
     mutable Tensor d_logits_tensor;    int32_t sampleToken(std::vector<float>& logits, float temperature, float top_p, size_t top_k = 0) const;
 
 
-public:    explicit Causal_LM(const Causal_LM_Config& _config);
+public:    
+    explicit Causal_LM(const Causal_LM_Config& _config);
 
 
       Loss_Scaler* getLossScaler() const noexcept { return loss_scaler.get(); }
@@ -78,7 +79,7 @@ public:    explicit Causal_LM(const Causal_LM_Config& _config);
 
       bool getTrainingMode() const noexcept { return is_training_mode; }
       const Step_Timings& getLastStepTimings() const noexcept { return Step_Timings::getInstance(); }
-      void setStepDataPrepMs(double ms) noexcept { Step_Timings::getInstance().data_prep_ms += ms; }    void resetKVCaches() noexcept;
+      void setStepDataPrepMs(double ms) noexcept { Step_Timings::getInstance()[Timing_Stage::DATA_PREP] += ms; }    void resetKVCaches() noexcept;
       void resetGradients();
 
 

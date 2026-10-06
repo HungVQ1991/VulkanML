@@ -64,7 +64,7 @@ void Async_Data_Pipeline::destroyFences()
                 vkWaitForFences(device, 1, &slot.fence, VK_TRUE, UINT64_MAX);
                 auto end_time = std::chrono::high_resolution_clock::now();
                 double time = std::chrono::duration<double, std::milli>(end_time - start_time).count();
-                Step_Timings::getInstance().data_prep_ms += time;
+                Step_Timings::getInstance()[Timing_Stage::DATA_PREP] += time;
             }
             vkDestroyFence(device, slot.fence, nullptr);
             slot.fence = VK_NULL_HANDLE;
@@ -236,7 +236,7 @@ Batch_Data Async_Data_Pipeline::nextBatch(size_t batch_size, size_t input_dimens
 
             auto end_time = std::chrono::high_resolution_clock::now();
             double time = std::chrono::duration<double, std::milli>(end_time - start_time).count();
-            Step_Timings::getInstance().data_prep_ms += time;
+            Step_Timings::getInstance()[Timing_Stage::DATA_PREP] += time;
         }
         vkResetFences(device, 1, &slot.fence);
         slot.is_fence_submitted = true;

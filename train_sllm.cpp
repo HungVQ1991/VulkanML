@@ -820,7 +820,7 @@ namespace
                 batch_targets.uploadData(tgt_data);
                 auto data_prep_end = std::chrono::high_resolution_clock::now();
                 double data_prep_ms = std::chrono::duration<double, std::milli>(data_prep_end - data_prep_start).count();
-                Step_Timings::getInstance().data_prep_ms += data_prep_ms;
+                Step_Timings::getInstance()[Timing_Stage::DATA_PREP] += data_prep_ms;
 
                 bool is_start_of_accum = (batch_idx % config.grad_accum == 0);
                 bool is_end_of_accum = ((batch_idx + 1) % config.grad_accum == 0) ||
@@ -834,7 +834,7 @@ namespace
                     auto reset_start = std::chrono::high_resolution_clock::now();
                     model.resetGradients();
                     auto reset_end = std::chrono::high_resolution_clock::now();
-                    Step_Timings::getInstance().reset_grad_ms += std::chrono::duration<double, std::milli>(reset_end - reset_start).count();
+                    Step_Timings::getInstance()[Timing_Stage::RESET_GRAD] += std::chrono::duration<double, std::milli>(reset_end - reset_start).count();
                 }
                 else
                 {
@@ -854,28 +854,27 @@ namespace
                     bool overflow_hint = std::isnan(step_loss) || std::isinf(step_loss);
                     bool success = model.stepOptimizer(optimizer, config.grad_clip, current_scale, overflow_hint, defer_bwd);
                     auto opt_end = std::chrono::high_resolution_clock::now();
-                    Step_Timings::getInstance().opt_step_ms += std::chrono::duration<double, std::milli>(opt_end - opt_start).count();
+                    Step_Timings::getInstance()[Timing_Stage::OPT_EXEC] += std::chrono::duration<double, std::milli>(opt_end - opt_start).count();
 
                     if (success)
                     {
                         auto sched_start = std::chrono::high_resolution_clock::now();
                         scheduler.step();
                         auto sched_end = std::chrono::high_resolution_clock::now();
-                        Step_Timings::getInstance().sched_step_ms += std::chrono::duration<double, std::milli>(sched_end - sched_start).count();
+                        Step_Timings::getInstance()[Timing_Stage::SCHED_STEP] += std::chrono::duration<double, std::milli>(sched_end - sched_start).count();
                     }
                     else
                     {
                         auto reset_start = std::chrono::high_resolution_clock::now();
                         model.resetGradients();
                         auto reset_end = std::chrono::high_resolution_clock::now();
-                        Step_Timings::getInstance().reset_grad_ms += std::chrono::duration<double, std::milli>(reset_end - reset_start).count();
+                        Step_Timings::getInstance()[Timing_Stage::RESET_GRAD] += std::chrono::duration<double, std::milli>(reset_end - reset_start).count();
                     }
                 }
 
                 auto batch_step_end = std::chrono::high_resolution_clock::now();
                 double batch_total_ms = std::chrono::duration<double, std::milli>(batch_step_end - batch_step_start).count();
-                Step_Timings::getInstance().total_batch_ms += batch_total_ms;
-                Step_Timings::getInstance().total_ms += batch_total_ms;
+                Step_Timings::getInstance()[Timing_Stage::TOTAL_BATCH] += batch_total_ms;
                 interval_batch_count++;
 
                 size_t log_interval = std::max<size_t>(5, effective_batches / 10);
