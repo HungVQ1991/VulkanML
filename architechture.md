@@ -1,76 +1,76 @@
 # VulkanML — Sơ đồ Kiến trúc UML Chi tiết
 
-## 1. Architecture Layering Diagram
+## 1. Architecture Layering Diagram (Phân tầng Kiến trúc)
 
 ```mermaid
 graph TD
     subgraph L6["Layer 6 — Application & High-Level Models"]
-        NN["Neural_Network\n(Sequential Model + Training Loop)"]
-        POP["Population\n(Neuroevolution + Batched GPU GEMM)"]
-        TC["Training_Context\n(Layer Factory + Optimizer Factory)"]
-        LLM["Causal_LM\n(Decoder-only Transformer LLM)"]
-        RL["DQN / PPO Agents\n(Replay Buffer + CartPole Env)"]
+        NN["Neural_Network\n(Sequential Model, Training Loop & Checkpoints)"]
+        POP["Population\n(Neuroevolution, SoA Batched GPU GEMM)"]
+        TC["Training_Context\n(Epoch State, Optimizer, Loss & Scheduler Management)"]
+        LLM["Causal_LM\n(Decoder-only Transformer LLM & Generation Loop)"]
+        RL["RL Agents\n(DQN Agent, PPO Agent, Replay Buffer, CartPole Env)"]
     end
 
-    subgraph L5["Layer 5 — Tokenizers"]
-        BPE["Bpe_Tokenizer\n(Byte-Pair Encoding)"]
-        SYL["Syllable_Tokenizer\n(Vietnamese Syllable)"]
-        VNP["Vietnamese_Phonetics\n(Tone + Rhyme Analysis)"]
+    subgraph L5["Layer 5 — Tokenizers & Phonetics"]
+        BPE["Bpe_Tokenizer\n(Byte-Pair Encoding, HuggingFace JSON Compatible)"]
+        SYL["Syllable_Tokenizer\n(Vietnamese Syllable Segmentation & Rhyme Matching)"]
+        VNP["Vietnamese_Phonetics\n(Tone Analysis: Bằng/Trắc, Rhyme Family)"]
     end
 
-    subgraph L4["Layer 4 — Concrete Neural Layers"]
-        LIN["Linear_Layer\n(Dense + Adam Fused)"]
-        CONV["Conv2d_Layer"]
-        BN["BatchNorm 1D/2D"]
-        RMSN["RMSNorm_Layer"]
-        SWIGLU["SwiGLU_Layer"]
-        EMB["Embedding_Layer"]
-        TRB["Transformer_Block\n(QKV + FlashAttention + FFN)"]
-        ACT["ReLU / GELU / Softmax"]
-        POOL["MaxPool2D / GlobalAvgPool2D"]
-        RES["ResNet Block / ResNet-20"]
-        PPO_L["PPO_Actor_Critic_Layer"]
+    subgraph L4["Layer 4 — Concrete Neural Layers & Operators"]
+        LIN["Linear_Layer\n(Dense GEMM + Adam Fused Backward)"]
+        CONV["Conv2d_Layer\n(Im2Col / Direct GEMM)"]
+        BN["BatchNorm 1D & 2D\n(Running Mean/Variance)"]
+        RMSN["RMSNorm_Layer\n(Root Mean Square Normalization)"]
+        SWIGLU["SwiGLU_Layer\n(Swish-Gated Activation Layer)"]
+        EMB["Embedding_Layer\n(Token Lookup & Grad Accumulation)"]
+        TRB["Transformer_Block\n(Pre-RMSNorm + RoPE + FlashAttention + SwiGLU FFN)"]
+        ACT["Activation Layers\n(ReLU, GELU, Softmax)"]
+        POOL["Pooling Layers\n(MaxPool2D, GlobalAvgPool2D)"]
+        RES["Residual Networks\n(Res_Net_Block_2d_Layer, Res_Net_20_Layer)"]
+        PPO_L["PPO_Actor_Critic_Layer\n(Actor Policy + Critic Value Heads)"]
     end
 
-    subgraph L4i["Layer 4 — Loss / Optimizer / LR"]
-        COST["ICost_Function\n(MSE / MAE / BCE / CCE / Huber / Fused_CCE)"]
-        OPT["IOptimizer\n(Adam / SGD)"]
-        LRS["ILearning_Rate\n(Cosine / Step / Plateau / Exp / Poly)"]
-        IL["ILayer\n(Abstract Base)"]
+    subgraph L4i["Layer 4 — Loss Functions, Optimizers & Schedulers"]
+        COST["ICost_Function\n(MSE, MAE, BCE, CCE, Huber, Fused_Cross_Entropy)"]
+        OPT["IOptimizer\n(Adam_Optimizer with AMP & Weight Decay, Sgd_Optimizer)"]
+        LRS["ILearning_Rate\n(Cosine_Annealing, Step, Exponential, Polynomial, Plateau)"]
+        IL["ILayer\n(Abstract Base Class)"]
     end
 
-    subgraph L3["Layer 3 — Tensor & Math System"]
-        TENS["Tensor\n(Public API)"]
-        SHP["Shape + Stride"]
-        CPU_IMPL["Cpu_Tensor_Impl\n(~2800 lines CPU ops)"]
-        GPU_IMPL["Gpu_Tensor_Impl\n(~3100 lines GPU dispatch)"]
+    subgraph L3["Layer 3 — Tensor & Math Abstraction System"]
+        TENS["Tensor\n(Public PIMPL API, Strides, Slicing & Serialization)"]
+        SHP["Shape & Stride\n(Static Array Dims up to Rank 6)"]
+        CPU_IMPL["Cpu_Tensor_Impl\n(AVX/CPU Math Implementations)"]
+        GPU_IMPL["Gpu_Tensor_Impl\n(Vulkan Compute Kernels, FlashAttention, RoPE)"]
         TIMPL["Tensor_Impl\n(Abstract Interface)"]
     end
 
-    subgraph L2["Layer 2 — Graph & Execution Engine"]
-        EE["Execution_Engine\n(Singleton, Graph Lifecycle)"]
-        GO["Graph_Optimizer\n(JIT Fusion + Aliasing Hazard)"]
-        GX["Graph_Executor\n(Vulkan Dispatch + Static Buffer)"]
-        CG["Compute_Graph\n(DAG of Compute_Node)"]
-        LS["Loss_Scaler\n(FP16 AMP)"]
-        ADP["Async_Data_Pipeline\n(Double Buffer)"]
+    subgraph L2["Layer 2 — Graph Optimization & Execution Engine"]
+        EE["Execution_Engine\n(Singleton, Graph Cache, Double-Buffered Frames)"]
+        GO["Graph_Optimizer\n(Static JIT Fusion Validation & Hazard Analysis)"]
+        GX["Graph_Executor\n(Vulkan Command Dispatch, Static Buffers, Fallback)"]
+        CG["Compute_Graph\n(DAG Container of Compute_Node)"]
+        LS["Loss_Scaler\n(Dynamic Mixed Precision FP16 AMP)"]
+        ADP["Async_Data_Pipeline\n(Double-Buffered Background Disk I/O)"]
     end
 
-    subgraph L1["Layer 1 — Vulkan Core Engine"]
-        VK["Vulkan_Context\n(Device + Queue + Swapchain)"]
-        NET["Vulkan_Network\n(Pipeline Layout + Descriptor Pool)"]
-        ALLOC["Vulkan_Sub_Allocator\n(Memory Pool)"]
-        GPUV["gpu::vector\n(GPU Buffer RAII)"]
-        SHAD["Shader_Dictionary\n(JSON Metadata)"]
-        SHGEN["Shader_Generator\n(Runtime GLSL)"]
-        SHCOMP["Shader_Compiler\n(glslc / shaderc)"]
-        PCM["Pipeline_Cache_Manager\n(On-disk VkPipeline Cache)"]
+    subgraph L1["Layer 1 — Vulkan Core Compute Backend"]
+        VK["Vulkan_Context\n(Physical/Logical Device, Compute Queue, Staging Buffers)"]
+        NET["Vulkan_Network\n(Pipeline Layout, Descriptor Layout & Static Pipelines)"]
+        ALLOC["Vulkan_Sub_Allocator\n(Device Memory Chunk Pool & Dynamic Blocks)"]
+        GPUV["gpu::vector\n(RAII GPU Buffer with Sub-Allocation)"]
+        SHAD["Shader_Dictionary\n(Snippet JSON Metadata & Fusion Capabilities)"]
+        SHGEN["Shader_Generator\n(Dynamic GLSL Stitching for Operator Fusion)"]
+        SHCOMP["Shader_Compiler\n(glslc / libshaderc SPIR-V Compilation)"]
+        PCM["Pipeline_Cache_Manager\n(On-disk & In-memory VkPipeline Cache)"]
     end
 
-    subgraph L0["Layer 0 — Utilities & Helpers"]
-        LOG["Logger\n(Feature-masked Async)"]
-        UPREFS["User_Preferences\n(JSON Config)"]
-        PROF["Training_Profiler\n(Step Timings)"]
+    subgraph L0["Layer 0 — Foundation Utilities & Profiling"]
+        LOG["Logger\n(Feature-Masked Logging & Timestamps)"]
+        UPREFS["User_Preferences\n(JSON Preferences & Device Config)"]
+        PROF["Training_Profiler\n(Stage Timing Accumulators)"]
     end
 
     L6 --> L5
@@ -85,101 +85,126 @@ graph TD
 
 ---
 
-## 2. Class Diagram — Tensor System
+## 2. Class Diagram — Tensor System (Hệ thống Tensor)
 
 ```mermaid
 classDiagram
     class Shape {
-        -vector~size_t~ dims
+        -array~size_t, 6~ dimensions
+        -uint8_t rank_size
+        +Shape()
+        +Shape(dim_0, dim_1)
         +getRank() size_t
         +getTotalElements() size_t
-        +computeContiguousStrides() Stride
+        +computeContiguousStrides() Shape
         +toString() string
-        +operator[]() size_t
+        +getDimensions() span~const size_t~
+        +operator[](index) size_t
     }
 
     class Tensor_Impl {
         <<abstract>>
         #Shape shape
-        #Stride strides
+        #Shape strides
+        #size_t byte_offset
         #size_t total_elements
         #Data_Type data_type
         +getShape() Shape
+        +getStrides() Shape
         +getRows() size_t
         +getColumns() size_t
+        +getDataType() Data_Type
         +isContiguous() bool
-        +validateSameDimensions()
-        +matmul()* = 0
-        +add()* = 0
-        +relu()* = 0
-        +flashAttentionForward()* = 0
-        +fusedCrossEntropyLoss()* = 0
-        +adamUpdate()* = 0
+        +validateSameDimensions(other)
+        +validateMatmulDimensions(other)
+        +validateSquare()
+        +matmul(other, output)*
+        +add(other, output)*
+        +relu(output)*
+        +conv2d(weights, biases, output)*
+        +flashAttentionForward(k, v, output)*
+        +fusedCrossEntropyLoss(targets, d_logits)* float
+        +adamUpdate(gradient, m, v, lr, beta1, beta2, eps, step)*
     }
 
     class Cpu_Tensor_Impl {
         -vector~float~ data
         +getData() vector~float~
-        +uploadData()
-        +matmul()
-        +add()
-        +relu()
-        +conv2d()
-        +flashAttentionForward()
-        +fusedCrossEntropyLoss()
-        +adamUpdate()
+        +uploadData(host_data)
+        +matmul(other, output)
+        +add(other, output)
+        +relu(output)
+        +conv2d(weights, biases, output)
+        +flashAttentionForward(k, v, output)
+        +fusedCrossEntropyLoss(targets, d_logits) float
+        +adamUpdate(gradient, m, v, lr, beta1, beta2, eps, step)
     }
 
     class Gpu_Tensor_Impl {
-        -shared_ptr~gpu::vector~ gpu_vec
-        +getVector() shared_ptr~gpu::vector~
-        +uploadData()
-        +matmul()
-        +add()
-        +relu()
-        +conv2d()
-        +flashAttentionForward()
-        +fusedCrossEntropyLoss()
-        +adamUpdate()
+        -shared_ptr~gpu_vector~ gpu_vec
+        -shared_ptr~gpu_vector~ fp16_gpu_vec
+        +getVector() shared_ptr~gpu_vector~
+        +uploadData(host_data)
+        +matmul(other, output)
+        +add(other, output)
+        +relu(output)
+        +conv2d(weights, biases, output)
+        +flashAttentionForward(k, v, output)
+        +fusedCrossEntropyLoss(targets, d_logits) float
+        +adamUpdate(gradient, m, v, lr, beta1, beta2, eps, step)
     }
 
     class Tensor {
-        -shared_ptr~Tensor_Impl~ impl
+        -shared_ptr~Tensor_Impl~ implementation
+        -Execution_Target execution_target
+        +Tensor(target)
         +Tensor(rows, cols, target)
-        +Tensor(rows, cols, data, target)
-        +matmul(other) Tensor
-        +operator+() Tensor
+        +Tensor(rows, cols, host_data, target)
+        +Tensor(shape, target)
+        +matmul(other, output)
+        +matmulAdd(other, biases) Tensor
+        +operator+(other) Tensor
         +relu() Tensor
-        +to(Data_Type) Tensor
-        +saveToFile()
-        +loadFromFile()
+        +to(target_type) Tensor
+        +toFp16() Tensor
+        +toFp32() Tensor
+        +saveTensor(output_stream)
+        +loadTensor(input_stream, target)$ Tensor
         +getRows() size_t
         +getColumns() size_t
         +getShape() Shape
         +getData() vector~float~
         +getStorage() Storage_Handle
+        +getExecutionTarget() Execution_Target
+        +setExecutionTarget(new_target)
     }
 
-    class gpu_vector["gpu::vector"] {
+    class gpu_vector {
+        -Vulkan_Context context
         -VkBuffer buffer
-        -VkDeviceMemory memory
-        -size_t size_bytes
+        -Memory_Allocation allocation
+        -size_t buffer_size_in_bytes
+        -size_t element_count
+        -Data_Type data_type
         +getBuffer() VkBuffer
         +getSize() size_t
-        +upload(data)
+        +uploadData(host_data)
         +download() vector~float~
+        +allocateMemory(count, type)
+        +freeMemory()
+        +isEmpty() bool
     }
 
     Tensor_Impl <|-- Cpu_Tensor_Impl
     Tensor_Impl <|-- Gpu_Tensor_Impl
-    Tensor o-- Tensor_Impl : impl (PIMPL)
+    Tensor o-- Tensor_Impl : implementation (PIMPL)
     Gpu_Tensor_Impl o-- gpu_vector : gpu_vec
-    Shape <-- Tensor_Impl : shape
+    Shape <-- Tensor_Impl : shape & strides
 ```
 
 ---
 
-## 3. Class Diagram — Layer System
+## 3. Class Diagram — Layer System (Hệ thống Lớp Nơ-ron)
 
 ```mermaid
 classDiagram
@@ -187,18 +212,22 @@ classDiagram
         <<abstract>>
         #bool is_accumulated
         #bool is_mixed_precision_enabled
-        +forward(input) Tensor
-        +backward(grad) Tensor*= 0
-        +clone() unique_ptr~ILayer~*= 0
-        +saveInference(ofstream)*= 0
-        +loadInference(ifstream)*= 0
-        +getLayerType() Layer_Type*= 0
-        +getExecutionTarget() Execution_Target*= 0
-        +setExecutionTarget()*= 0
-        +getParametersAndGradients()
+        +forward(input_tensor) Tensor
+        +backward(output_gradient)* Tensor
+        +clone()* unique_ptr~ILayer~
+        +saveConfiguration(output_stream)*
+        +saveInference(output_stream)*
+        +loadInference(input_stream)*
+        +saveCheckpoint(output_stream)*
+        +loadCheckpoint(input_stream)*
+        +getLayerType()* Layer_Type
+        +getExecutionTarget()* Execution_Target
+        +setExecutionTarget(target)*
         +hasParameters() bool
-        +setMixedPrecision(bool)
-        +logBufferAddress()
+        +getParametersAndGradients() vector~pair~
+        +setMixedPrecision(enable)
+        +setAccumulated(is_accumulated)
+        +logBufferAddress(tensor, name)
     }
 
     class Linear_Layer {
@@ -207,65 +236,84 @@ classDiagram
         -Tensor weights_gradient
         -Tensor bias_gradient
         -Tensor input_cache
-        +forward(input) Tensor
-        +backward(grad) Tensor
-        +saveInference()
-        +loadInference()
-        +getLayerType() LINEAR
+        +forward(input_tensor) Tensor
+        +backward(output_gradient) Tensor
+        +saveInference(output_stream)
+        +loadInference(input_stream)
+        +getLayerType() Layer_Type
     }
 
     class Conv2d_Layer {
         -Tensor weights
         -Tensor biases
         -uint32_t kernel_size
-        -uint32_t stride, padding
-        +forward(input) Tensor
-        +backward(grad) Tensor
+        -uint32_t stride
+        -uint32_t padding
+        +forward(input_tensor) Tensor
+        +backward(output_gradient) Tensor
     }
 
     class Transformer_Block {
-        -Linear_Layer q_proj, k_proj, v_proj, o_proj
-        -RMSNorm_Layer attn_norm, ffn_norm
-        -SwiGLU_Layer ffn
-        -size_t num_heads, head_dim
-        +forward(input) Tensor
-        +backward(grad) Tensor
+        -size_t hidden_dim
+        -size_t num_heads
+        -size_t head_dim
+        -RMSNorm_Layer input_layernorm
+        -Linear_Layer q_proj
+        -Linear_Layer k_proj
+        -Linear_Layer v_proj
+        -Linear_Layer o_proj
+        -RMSNorm_Layer post_attention_layernorm
+        -Linear_Layer gate_proj
+        -Linear_Layer up_proj
+        -Linear_Layer down_proj
+        -SwiGLU_Layer swiglu
+        +forward(input_tensor) Tensor
+        +forward(input_tensor, kv_cache) Tensor
+        +backward(output_gradient) Tensor
     }
 
     class RMSNorm_Layer {
         -Tensor gamma
         -Tensor inv_rms_cache
-        +forward(input) Tensor
-        +backward(grad) Tensor
+        -float epsilon
+        +forward(input_tensor) Tensor
+        +backward(output_gradient) Tensor
     }
 
     class SwiGLU_Layer {
-        -Linear_Layer gate_proj
-        -Linear_Layer up_proj
-        -Linear_Layer down_proj
-        +forward(input) Tensor
-        +backward(grad) Tensor
+        -Tensor tensor_a
+        -Tensor tensor_b
+        -Tensor grad_a
+        -Tensor grad_b
+        +forward(input_tensor) Tensor
+        +forward(a, b) Tensor
+        +backward(output_gradient) Tensor
     }
 
     class Embedding_Layer {
         -Tensor weights
         -Tensor indices_cache
-        +forward(indices) Tensor
-        +backward(grad) Tensor
+        +forward(indices_tensor) Tensor
+        +backward(output_gradient) Tensor
     }
 
     class Batch_Norm_Layer {
-        -Tensor gamma, beta
-        -Tensor running_mean, running_variance
-        +forward(input) Tensor
-        +backward(grad) Tensor
+        -Tensor gamma
+        -Tensor beta
+        -Tensor running_mean
+        -Tensor running_variance
+        +forward(input_tensor) Tensor
+        +backward(output_gradient) Tensor
     }
 
     class Res_Net_Block_2d_Layer {
-        -vector~unique_ptr~ILayer~~ main_path
-        -Conv2d_Layer skip_conv
-        +forward(input) Tensor
-        +backward(grad) Tensor
+        -vector~unique_ptr~ILayer~~ main_branch
+        -vector~unique_ptr~ILayer~~ shortcut_branch
+        -unique_ptr~ILayer~ post_activation
+        +addMainLayer(args)
+        +addShortcutLayer(args)
+        +forward(input_tensor) Tensor
+        +backward(output_gradient) Tensor
     }
 
     ILayer <|-- Linear_Layer
@@ -282,15 +330,15 @@ classDiagram
     ILayer <|-- Max_Pool_2d_Layer
     ILayer <|-- Batch_Norm_2d_Layer
     ILayer <|-- PPO_Actor_Critic_Layer
-    Transformer_Block o-- RMSNorm_Layer
-    Transformer_Block o-- SwiGLU_Layer
-    Transformer_Block o-- Linear_Layer
-    Res_Net_Block_2d_Layer o-- Conv2d_Layer
+    Transformer_Block o-- RMSNorm_Layer : input & post norm
+    Transformer_Block o-- SwiGLU_Layer : swiglu activation
+    Transformer_Block o-- Linear_Layer : q,k,v,o,gate,up,down
+    Res_Net_Block_2d_Layer o-- ILayer : main & shortcut branches
 ```
 
 ---
 
-## 4. Class Diagram — Execution Engine & Graph Optimization
+## 4. Class Diagram — Execution Engine & Graph Optimization (Đồ thị & Tối ưu hóa)
 
 ```mermaid
 classDiagram
@@ -298,33 +346,37 @@ classDiagram
         <<singleton>>
         -unique_ptr~Vulkan_Context~ context
         -unique_ptr~Vulkan_Network~ network
-        -unique_ptr~Graph_Executor~ graph_executor
-        -unique_ptr~Graph_Optimizer~ graph_optimizer
-        -unique_ptr~Shader_Dictionary~ shader_dictionary
         -unique_ptr~Pipeline_Cache_Manager~ pipeline_cache_manager
+        -unique_ptr~Shader_Dictionary~ shader_dictionary
+        -unique_ptr~Graph_Executor~ graph_executor
         -Compute_Graph current_graph
-        +getInstance() Execution_Engine&
+        -unordered_map~size_t, Cached_Graph_Template~ cached_graph_templates
+        -bool is_graph_cache_enabled
+        -bool is_static_graph_enabled
+        +getInstance()$ Execution_Engine&
         +executeGraph()
-        +buildCachedTemplate() Cached_Graph_Template
-        +applyCachedTemplate()
+        +warmCache(raw_graph)
         +getCurrentGraph() Compute_Graph&
         +isCooperativeMatrixSupported() bool
-        +setCooperativeMatrixEnabled(bool)
+        +setCooperativeMatrixEnabled(enable)
+        +precompileTemplatePipelines(template)
     }
 
     class Compute_Graph {
         -vector~Compute_Node~ nodes
-        +addNode(Compute_Node)
+        +addNode(node)
         +getNodeCount() size_t
-        +getNodes() vector~Compute_Node~
+        +getNodes() vector~Compute_Node~&
         +clear()
     }
 
     class Compute_Node {
         +Compute_Pipeline pipeline_id
-        +vector~shared_ptr~gpu::vector~~ buffers
+        +vector~shared_ptr~gpu_vector~~ buffers
         +vector~uint8_t~ push_constants_data
-        +uint32_t workgroup_count_x, y, z
+        +uint32_t workgroup_count_x
+        +uint32_t workgroup_count_y
+        +uint32_t workgroup_count_z
         +bool is_fused
         +vector~Fused_Operation~ fused_operations
         +string fused_glsl_code
@@ -340,62 +392,64 @@ classDiagram
     }
 
     class Graph_Optimizer {
-        <<static>>
-        -MAX_PUSH_CONSTANTS_BYTES 128
-        -MAX_STORAGE_BUFFER_BINDINGS 32
-        -MAX_FUSED_OPERATIONS 8
-        +optimize(Compute_Graph&)
-        +buildCachedTemplate(Compute_Graph&) Cached_Graph_Template
-        +applyCachedTemplate()
-        -isFusible() bool
-        -hasCompatibleDimensions() bool
-        -hasAliasingHazard() bool
-        -optimizeInternal() Cached_Graph_Template
+        <<utility>>
+        -size_t MAX_PUSH_CONSTANTS_BYTES$ = 128
+        -size_t MAX_STORAGE_BUFFER_BINDINGS$ = 32
+        -size_t MAX_FUSED_OPERATIONS$ = 8
+        +optimize(graph)$
+        +buildCachedTemplate(graph)$ Cached_Graph_Template
+        +applyCachedTemplateInPlace(raw, template, target)$
+        -isFusible(prod_class, cons_class, prod_pipe, cons_pipe)$ bool
+        -hasCompatibleDimensions(prod, cons, prod_cls, cons_cls)$ bool
+        -hasAliasingHazard(fused_node, next_node, dict)$ bool
+        -optimizeInternal(nodes, track_mappings)$ Cached_Graph_Template
     }
 
     class Graph_Executor {
-        -Vulkan_Context context
-        -Vulkan_Network network
-        -Pipeline_Cache_Manager pipeline_cache_manager
-        -Shader_Dictionary shader_dictionary
-        +executeNode(Compute_Node, VkCommandBuffer)
-        +generateFusedGlsl(Compute_Node) string
-        +getExternalBufferIndices()
-        +executeFallbackNode()
-        +isBuffersMatching() bool
+        -Vulkan_Context& context
+        -Vulkan_Network& network
+        -Pipeline_Cache_Manager& pipeline_cache_manager
+        -Shader_Dictionary& shader_dictionary
+        +executeNode(node, cmd_buffer)
+        +generateFusedGlsl(fused_node) string
+        +getExternalBufferIndices(node, indices)
+        +executeFallbackNode(node, cmd_buffer)
+        +isBuffersMatching(entry, buffers) bool
     }
 
     class Cached_Graph_Template {
         +vector~Compute_Node~ fused_nodes
         +vector~vector~Buffer_Binding_Mapping~~ buffer_mappings
         +vector~vector~Push_Constant_Mapping~~ push_constants_mappings
+        +vector~vector~uint32_t~~ raw_node_indices
         +array~Compute_Graph, 2~ instantiated_graphs
         +bool is_valid
         +isValid() bool
     }
 
     class Pipeline_Cache_Manager {
-        -Vulkan_Context context
+        -Vulkan_Context& context
         -VkPipelineLayout pipeline_layout
-        -map~string, VkPipeline~ pipeline_cache
+        -unordered_map~string, VkPipeline~ pipeline_cache
         +getOrCreatePipeline(glsl_code) VkPipeline
         +initializePipelineCache(path)
-        +savePipelineCache(path)
+        +savePipelineCache()
     }
 
-    Execution_Engine o-- Compute_Graph
-    Execution_Engine o-- Graph_Executor
-    Execution_Engine o-- Pipeline_Cache_Manager
-    Compute_Graph o-- Compute_Node : "1..*"
-    Compute_Node o-- Fused_Operation : "0..*"
-    Graph_Optimizer ..> Cached_Graph_Template : builds
-    Graph_Optimizer ..> Compute_Node : validates & fuses
+    Execution_Engine o-- Compute_Graph : current_graph
+    Execution_Engine o-- Graph_Executor : graph_executor
+    Execution_Engine o-- Pipeline_Cache_Manager : pipeline_cache_manager
+    Execution_Engine o-- Cached_Graph_Template : cached_graph_templates
+    Compute_Graph o-- Compute_Node : contains
+    Compute_Node o-- Fused_Operation : contains
+    Graph_Optimizer ..> Cached_Graph_Template : constructs
+    Graph_Optimizer ..> Compute_Node : inspects & fuses
     Graph_Executor ..> Compute_Node : dispatches
 ```
 
 ---
 
-## 5. Class Diagram — Vulkan Core Engine
+## 5. Class Diagram — Vulkan Core Engine (Tầng Lõi Vulkan)
 
 ```mermaid
 classDiagram
@@ -405,58 +459,52 @@ classDiagram
         -VkDevice device
         -VkQueue compute_queue
         -VkCommandPool command_pool
-        -bool cooperative_matrix_supported
+        -bool is_cooperative_matrix_supported
+        -bool is_float16_supported
+        -unique_ptr~Vulkan_Sub_Allocator~ allocator
+        -VkBuffer staging_buffers[2]
+        -Memory_Allocation staging_allocations[2]
         +getDevice() VkDevice
-        +getQueue() VkQueue
-        +allocateBuffer(size, usage, props) VkBuffer
-        +submitCompute(VkCommandBuffer)
-        +prepareFrame()
-        +presentFrame()
+        +getComputeQueue() VkQueue
+        +getAllocator() Vulkan_Sub_Allocator&
+        +submitCompute(command_buffer)
+        +prepareFrame(frame_index)
         +isCooperativeMatrixEnabled() bool
+        +isFloat16Enabled() bool
+        +executePendingTransfers()
     }
 
     class Vulkan_Sub_Allocator {
-        -vector~Memory_Chunk~ chunks
-        -Memory_Planner planner
-        +allocate(size_bytes) Memory_Allocation
-        +free(Memory_Allocation)
-        +collectGarbage()
-        +planStaticLayout(tensors)
+        -vector~Memory_Chunk~ memory_chunks
+        -Memory_Planner memory_planner
+        +allocate(size_bytes, alignment) Memory_Allocation
+        +free(allocation)
+        +collectGarbage(frame_index)
+        +planStaticLayout(tensor_lifetimes)
     }
 
     class Memory_Chunk {
-        -VkDeviceMemory memory
+        -VkDeviceMemory device_memory
         -VkBuffer buffer
-        -size_t capacity
+        -size_t total_capacity
         -vector~Free_Block~ free_blocks
     }
 
-    class gpu_vector["gpu::vector"] {
-        -VkBuffer buffer
-        -size_t size_elements
-        -bool owns_memory
-        +getBuffer() VkBuffer
-        +getSize() size_t
-        +upload(vector~float~)
-        +download() vector~float~
-        +resize(new_size)
-        +isEmpty() bool
-    }
-
     class Vulkan_Network {
-        -Vulkan_Context context
+        -Vulkan_Context& context
         -VkPipelineLayout pipeline_layout
         -VkDescriptorSetLayout descriptor_set_layout
-        -map~Compute_Pipeline, VkPipeline~ pipelines
-        +getPipeline(id) VkPipeline
+        -unordered_map~Compute_Pipeline, VkPipeline~ static_pipelines
+        +getPipeline(pipeline_id) VkPipeline
         +getPipelineLayout() VkPipelineLayout
-        +createPipelineFromSpirv(spv)
+        +getDescriptorSetLayout() VkDescriptorSetLayout
     }
 
     class Shader_Dictionary {
         <<singleton>>
-        -map~Compute_Pipeline, Snippet_Metadata~ metadata_map
-        +getMetadata(pipeline_id) Snippet_Metadata
+        -unordered_map~Compute_Pipeline, Snippet_Metadata~ metadata_map
+        +getInstance()$ Shader_Dictionary&
+        +getMetadata(pipeline_id) Snippet_Metadata&
         +loadFromJson(path)
     }
 
@@ -475,12 +523,12 @@ classDiagram
         -stringstream specialization_stream
         -uint32_t current_binding
         +addBuffer(binding, name, type, access) string
-        +addSpecializationConstant(id, name, type, value)
-        +generateGlsl(ops) string
+        +addSpecializationConstant(id, name, type, val)
+        +generateGlsl(operations) string
     }
 
     class Shader_Compiler {
-        +compileGlslToSpirv(glsl_code) vector~uint32_t~
+        +compileGlslToSpirv(glsl_code)$ vector~uint32_t~
     }
 
     class Loss_Scaler {
@@ -495,113 +543,126 @@ classDiagram
         +isOverflow() bool
     }
 
-    Vulkan_Context <-- Vulkan_Sub_Allocator
-    Vulkan_Context <-- Vulkan_Network
-    Vulkan_Sub_Allocator o-- Memory_Chunk : "1..*"
+    Vulkan_Context o-- Vulkan_Sub_Allocator : allocator
+    Vulkan_Sub_Allocator o-- Memory_Chunk : contains
     Vulkan_Network o-- Shader_Dictionary
-    Shader_Dictionary o-- Snippet_Metadata : "1..*"
-    Shader_Generator ..> Shader_Compiler : feeds GLSL
-    Shader_Compiler ..> Vulkan_Network : SPIR-V pipeline
+    Shader_Dictionary o-- Snippet_Metadata : contains
+    Shader_Generator ..> Shader_Compiler : produces GLSL
+    Shader_Compiler ..> Vulkan_Network : produces SPIR-V
 ```
 
 ---
 
-## 6. Class Diagram — Neural Network & Training Context
+## 6. Class Diagram — Neural Network & Training Context (Mô hình & Quản lý Huấn luyện)
 
 ```mermaid
 classDiagram
     class Neural_Network {
         -vector~unique_ptr~ILayer~~ layers
-        -unique_ptr~IOptimizer~ optimizer
-        -unique_ptr~ICost_Function~ cost_function
-        -unique_ptr~ILearning_Rate~ learning_rate
-        -unique_ptr~Loss_Scaler~ loss_scaler
+        -Training_Context training_context
+        -Loss_Scaler loss_scaler
+        -Tensor last_prediction
         -Execution_Target execution_target
         -bool is_training_mode
-        +addLayer()
-        +forward(input) Tensor
-        +backward(grad) Tensor
+        -bool is_mixed_precision_enabled
+        -bool is_gradient_accumulation_enabled
+        +addLayer(layer)
+        +forward(input_tensor) Tensor
+        +backward(target_or_grad) Tensor
         +trainStep(input, target) float
         +fit(dataset, epochs)
-        +compileAndWarmup(batch, in_dim, out_dim)
-        +saveInference(path)
-        +loadInference(path)
-        +saveTrainingCheckpoint(path)
-        +loadTrainingCheckpoint(path)
-        +setMixedPrecision(bool)
+        +compileAndWarmup(batch_size, in_features, out_features)
+        +saveInference(file_path)
+        +loadInference(file_path)
+        +saveTrainingCheckpoint(file_path)
+        +loadTrainingCheckpoint(file_path)
+        +setMixedPrecision(enable)
+        +getTrainingContext() Training_Context&
     }
 
     class Training_Context {
+        -size_t current_epoch
         -unique_ptr~IOptimizer~ optimizer
-        -unique_ptr~ILearning_Rate~ learning_rate
+        -unique_ptr~ILearning_Rate~ learning_rate_scheduler
         -unique_ptr~ICost_Function~ cost_function
-        +constructLayerFromConfig(type, stream) ILayer*
-        +createCostFunction(type) ICost_Function*
-        +createOptimizer(type) IOptimizer*
-        +createLearningRateScheduler(type) ILearning_Rate*
+        +constructLayerFromConfig(stream, type, target)$ unique_ptr~ILayer~
+        +setOptimizer(optimizer)
+        +setCostFunction(cost_function)
+        +setLearningRate(scheduler)
+        +getOptimizer() IOptimizer&
+        +getCostFunction() ICost_Function&
+        +getLearningRateScheduler() ILearning_Rate&
+        +loadHeader(stream, target) bool
     }
 
     class IOptimizer {
         <<abstract>>
-        +step(param_grad_pairs)*= 0
-        +saveCheckpoint(ofstream)*= 0
-        +loadCheckpoint(ifstream)*= 0
-        +getLearningRate() float*= 0
-        +getType() Optimizer_Type*= 0
-        +setLearningRate(float)*= 0
+        +step(parameter_gradient_pairs)*
+        +step(parameter_gradient_pairs, grad_scale)
+        +stepDynamicParams(grad_scale)
+        +saveCheckpoint(output_stream)*
+        +loadCheckpoint(input_stream, target)*
+        +getLearningRate()* float
+        +setLearningRate(learning_rate)*
+        +getType()* Optimizer_Type
     }
 
     class Adam_Optimizer {
         -float learning_rate
-        -float beta1, beta2, epsilon
+        -float beta1
+        -float beta2
+        -float epsilon
         -float weight_decay
         -size_t timestep
-        -map~Tensor*, Parameter_State~ states
-        +step(param_grad_pairs)
-        +saveCheckpoint()
-        +loadCheckpoint()
+        -unordered_map~Tensor*, Parameter_State~ parameter_states
+        +step(parameter_gradient_pairs)
+        +saveCheckpoint(output_stream)
+        +loadCheckpoint(input_stream, target)
     }
 
     class Sgd_Optimizer {
         -float learning_rate
+        -float momentum
         -float max_gradient
-        +step(param_grad_pairs)
+        +step(parameter_gradient_pairs)
     }
 
     class ILearning_Rate {
         <<abstract>>
-        +updateRate() float*= 0
-        +step(current_value)*= 0
-        +getCurrentRate() float*= 0
-        +saveCheckpoint()*= 0
+        +updateRate()* float
+        +step(current_value)*
+        +getCurrentRate()* float
+        +saveCheckpoint(output_stream)*
+        +loadCheckpoint(input_stream)*
+        +getType()* Decay_Mode
     }
 
     class ICost_Function {
         <<abstract>>
-        +computeLoss(pred, target) float*= 0
-        +computeGradient(pred, target) Tensor*= 0
+        +computeLoss(prediction, target)* float
+        +computeGradient(prediction, target)* Tensor
+        +computeLossAndGradient(pred, target, grad_out) float
         +isFused() bool
         +supportsIntegerTargets() bool
-        +getType() Cost_Type*= 0
+        +getType()* Cost_Type
     }
 
     class Fused_Cross_Entropy {
         -int32_t ignore_index
-        +computeLoss(pred, target) float
-        +computeGradient(pred, target) Tensor
-        +computeLossAndGradient(logits, integer_targets, d_logits) float
-        +isFused() true
-        +supportsIntegerTargets() true
+        +computeLoss(prediction, target) float
+        +computeGradient(prediction, target) Tensor
+        +computeLossAndGradient(prediction, target_indices, grad_out) float
+        +isFused() bool
+        +supportsIntegerTargets() bool
+        +getType() Cost_Type
     }
 
-    Neural_Network o-- ILayer : "0..*"
-    Neural_Network o-- IOptimizer
-    Neural_Network o-- ICost_Function
-    Neural_Network o-- ILearning_Rate
-    Neural_Network o-- Loss_Scaler
-    Training_Context ..> ILayer : constructs
-    Training_Context ..> IOptimizer : constructs
-    Training_Context ..> ICost_Function : constructs
+    Neural_Network o-- ILayer : layers
+    Neural_Network o-- Training_Context : training_context
+    Neural_Network o-- Loss_Scaler : loss_scaler
+    Training_Context o-- IOptimizer : optimizer
+    Training_Context o-- ICost_Function : cost_function
+    Training_Context o-- ILearning_Rate : learning_rate_scheduler
     IOptimizer <|-- Adam_Optimizer
     IOptimizer <|-- Sgd_Optimizer
     ICost_Function <|-- Fused_Cross_Entropy
@@ -621,7 +682,7 @@ classDiagram
 
 ---
 
-## 7. Class Diagram — LLM & Tokenizer Subsystem
+## 7. Class Diagram — LLM & Tokenizer Subsystem (Phân hệ Ngôn ngữ & Tokenizer)
 
 ```mermaid
 classDiagram
@@ -634,9 +695,11 @@ classDiagram
         +size_t max_seq_len
         +float rms_norm_eps
         +float rope_base
+        +int32_t ignore_index
         +Execution_Target execution_target
         +Data_Type data_type
         +bool use_loss_scaler
+        +float initial_loss_scale
         +string tokenizer_path
     }
 
@@ -650,112 +713,147 @@ classDiagram
         -Bpe_Tokenizer tokenizer
         -unique_ptr~Loss_Scaler~ loss_scaler
         -unique_ptr~ICost_Function~ cost_function
+        +forward(input_tensor, use_cache) Tensor
         +forward(token_ids, use_cache) Tensor
-        +backward(d_logits) Tensor
-        +trainStep(inputs, targets, optimizer) float
-        +forwardLossAndBackward(inputs, targets) float
-        +generate(prompt, max_tokens, temperature, top_p, top_k) string
-        +stepOptimizer(optimizer, max_grad_norm)
+        +backward(d_logits, defer_execution) Tensor
+        +trainStep(input_tokens, target_tokens, optimizer, max_grad_norm) float
+        +forwardLossAndBackward(inputs, targets, loss_scale) float
+        +generate(prompt, max_tokens, temp, top_p, eos, skip, cb, rep_pen, top_k, stops) string
+        +stepOptimizer(optimizer, max_grad_norm) bool
         +resetKVCaches()
-        +saveCheckpoint(path)
-        +loadInference(path)
+        +saveCheckpoint(file_path)
+        +loadCheckpoint(file_path)
+        +saveInference(file_path)
+        +loadInference(file_path)
     }
 
     class KV_Cache_Manager {
-        -Tensor key_cache
-        -Tensor value_cache
-        -size_t current_seq_len
-        -size_t max_seq_len
+        -size_t batch_size
         -size_t num_heads
+        -size_t max_seq_len
         -size_t head_dim
-        +appendKV(keys, values)
-        +getKeys() Tensor&
-        +getValues() Tensor&
-        +getCurrentSeqLen() size_t
+        -size_t current_seq_len
+        -KV_Cache_Mode mode
+        -Tensor k_cache
+        -Tensor v_cache
+        +append(k_new, v_new)
+        +appendAt(k_new, v_new, pos)
+        +getK(len) Tensor
+        +getV(len) Tensor
         +reset()
+        +getCurrentSeqLen() size_t
+        +getRawKCache() Tensor&
+        +getRawVCache() Tensor&
     }
 
     class Binary_Token_Dataset {
-        -string file_path
-        -size_t seq_len
-        -size_t stride
-        -size_t sample_count
-        +getSampleCount() size_t
-        +getBatch(start, batch_size) pair~vector~vector~int~~, vector~vector~int~~~
-        +createFromText(txt_path, bin_path, tokenizer, seq_len, stride)
+        <<utility>>
+        +uint32_t MAGIC_HEADER$
+        +uint32_t CURRENT_VERSION$
+        +save(file_path, tokens)$ bool
+        +load(file_path, tokens)$ bool
+        +existsAndValid(file_path)$ bool
     }
 
     class Bpe_Tokenizer {
-        -unordered_map~string, int32_t~ vocab
-        -vector~Merge_Rule~ merges
-        +encode(text) vector~int32_t~
-        +decode(ids) string
-        +load(path)
-        +save(path)
+        -unordered_map~string, int32_t~ vocab_
+        -vector~string~ id_to_token_
+        -unordered_map~uint64_t, Merge_Rule~ merges_
+        -unordered_set~int32_t~ special_tokens_
+        -int32_t bos_id_
+        -int32_t eos_id_
+        -int32_t unk_id_
+        +load(tokenizer_json_path) bool
+        +encode(text, add_bos) vector~int32_t~
+        +decode(token_ids, skip_special) string
         +getVocabSize() size_t
+        +isLoaded() bool
     }
 
     class Syllable_Tokenizer {
-        -vector~Token_Metadata~ vocab
-        -unordered_map~string, int32_t~ token_to_id
-        +encode(text) vector~int32_t~
-        +decode(ids) string
-        +load(path)
+        -vector~Token_Metadata~ vocab_
+        -unordered_map~string, int32_t~ token_to_id_
+        -int32_t bos_id_
+        -int32_t eos_id_
+        +load(tokenizer_json_path) bool
+        +save(output_path) bool
+        +trainFromText(corpus_text, min_freq, max_vocab)
+        +segmentSyllables(text) vector~string~
+        +encode(text, add_bos) vector~int32_t~
+        +decode(token_ids, skip_special, strip_leading) string
+        +getRhymingTokens(token_id, must_be_bang) vector~int32_t~
         +getVocabSize() size_t
     }
 
-    Causal_LM o-- Causal_LM_Config
-    Causal_LM o-- Transformer_Block : "N blocks"
-    Causal_LM o-- KV_Cache_Manager : "N caches"
-    Causal_LM o-- Embedding_Layer
-    Causal_LM o-- RMSNorm_Layer
+    class Vietnamese_Phonetics {
+        <<utility>>
+        +decomposeVietnameseChar(utf8_char, base_out, tone_out)$
+        +toLowerUtf8(str)$ string
+        +analyzeSyllable(word)$ Syllable_Info
+        +canRhymeLucBat(a, b, require_bang)$ bool
+    }
+
+    Causal_LM o-- Causal_LM_Config : config
+    Causal_LM o-- Transformer_Block : blocks (N layers)
+    Causal_LM o-- KV_Cache_Manager : kv_caches (N layers)
+    Causal_LM o-- Embedding_Layer : token_embedding
+    Causal_LM o-- RMSNorm_Layer : final_norm
     Causal_LM o-- Linear_Layer : lm_head
-    Causal_LM o-- Bpe_Tokenizer
-    Causal_LM o-- Loss_Scaler
-    Bpe_Tokenizer ..> Syllable_Tokenizer : alternative
+    Causal_LM o-- Bpe_Tokenizer : tokenizer
+    Causal_LM o-- Loss_Scaler : loss_scaler
+    Syllable_Tokenizer ..> Vietnamese_Phonetics : phonetics analysis
 ```
 
 ---
 
-## 8. Class Diagram — Population (Neuroevolution)
+## 8. Class Diagram — Population & Neuroevolution (Tiến hóa Nơ-ron)
 
 ```mermaid
 classDiagram
     class Population {
-        -vector~Neural_Network~ individuals
-        -size_t pop_size
-        -vector~vector~Tensor~~ population_weights_soa
-        -float elitism_ratio
-        -float mutation_rate
-        -float mutation_strength
-        +evolve(fitness_scores)
+        -size_t population_size
+        -size_t state_dimension
+        -size_t action_space_size
+        -Execution_Target execution_target
+        -mt19937 random_engine
+        -bool is_mixed_precision_enabled
+        -vector~Population_Layer_Adapter~ layer_adapters
+        -Tensor batched_input_tensor
+        -vector~float~ batched_input_host
+        +Population(template_network, pop_size)
+        +evolve(fitness_scores, elitism_ratio, mutation_rate, mutation_strength)
         +selectBatchActions(inputs) vector~size_t~
-        +getIndividual(index) Neural_Network&
+        +forwardBatch(batched_inputs) Tensor
+        +getIndividual(index) Neural_Network
         +setIndividual(index, network)
-        +saveCheckpoint(path, fitness)
+        +getBestIndividual(fitness_scores) Neural_Network
+        +saveCheckpoint(path, fitness_scores)
         +loadCheckpoint(path)
-        +getBestIndividual(fitness) Neural_Network&
-        +setMixedPrecision(bool)
+        +setMixedPrecision(enable)
+        +setExecutionTarget(target)
     }
 
     class Population_Layer_Adapter {
-        -ILayer& layer_ref
-        +getPopulationParameterDims() vector~Shape~
-        +getPopulationParameter(idx) vector~float~
-        +setPopulationParameter(idx, data)
-        +getPopulationParameterInitializer(idx) function
+        +ILayer* template_layer
+        +vector~Shape~ param_shapes
+        +vector~bool~ param_evolvable
+        +vector~size_t~ param_numel
+        +vector~Tensor~ batched_params
+        +vector~vector~float~~ host_params
     }
 
-    Population o-- Neural_Network : "pop_size individuals"
-    Population o-- Population_Layer_Adapter
+    Population o-- Population_Layer_Adapter : layer_adapters
+    Population ..> Neural_Network : constructs on-demand
+    Population_Layer_Adapter o-- Tensor : batched_params (SoA)
 ```
 
 ---
 
-## 9. Sequence Diagram — Operator Fusion Pipeline (JIT)
+## 9. Sequence Diagram — JIT Operator Fusion Pipeline (Ghép Toán tử Đồ thị)
 
 ```mermaid
 sequenceDiagram
+    autonumber
     participant User
     participant Tensor
     participant EE as Execution_Engine
@@ -766,118 +864,163 @@ sequenceDiagram
     participant SG as Shader_Generator
     participant VK as Vulkan_Context
 
-    User->>Tensor: mat_a + mat_b (ADD node)
+    User->>Tensor: mat_a + mat_b (Elementwise ADD)
     Tensor->>CG: addNode(ADD_compute_node)
-    User->>Tensor: result.relu() (RELU node)
+    User->>Tensor: result.relu() (Elementwise RELU)
     Tensor->>CG: addNode(RELU_compute_node)
 
     User->>EE: executeGraph()
-    EE->>GO: buildCachedTemplate(current_graph)
+    EE->>EE: computeGraphSignature(current_graph)
 
-    GO->>GO: isFusible(ELEMENTWISE, ELEMENTWISE)?
-    GO->>GO: hasCompatibleDimensions(ADD, RELU)?
-    GO->>GO: hasAliasingHazard(ADD, RELU)?
-    Note over GO: All checks PASS → Fuse!
+    alt Graph Template NOT in cache (Cache Miss)
+        EE->>GO: buildCachedTemplate(current_graph)
+        GO->>GO: isFusible(producer, consumer)
+        Note over GO: Checks: Consumer == ELEMENTWISE,<br/>No cooperative matrix in consumer,<br/>No shared memory / multi-write hazard
+        GO->>GO: hasCompatibleDimensions(ADD, RELU)
+        Note over GO: Checks: Workgroups match OR<br/>producer threads >= consumer threads
+        GO->>GO: hasAliasingHazard(ADD, RELU)
+        Note over GO: Checks: No RAW / WAR buffer aliasing
+        Note over GO: All validation checks PASS -> Fused Node created!
+        GO-->>EE: Cached_Graph_Template [Fused_Node(ADD + RELU)]
 
-    GO-->>EE: Cached_Graph_Template {fused_node[ADD+RELU]}
+        EE->>GX: generateFusedGlsl(fused_node)
+        GX->>SG: generateGlsl(fused_operations)
+        SG-->>GX: Combined GLSL compute shader string
+        GX-->>EE: fused_glsl_code
 
-    EE->>PCM: getOrCreatePipeline(fused_glsl_code)
-    alt Pipeline NOT in cache
-        PCM->>SG: generateFusedGlsl(fused_operations)
-        SG-->>PCM: "void main() { add(); relu(); }"
-        PCM->>PCM: compileGlslToSpirv()
+        EE->>PCM: getOrCreatePipeline(fused_glsl_code)
+        PCM->>PCM: Shader_Compiler::compileGlslToSpirv()
         PCM->>VK: vkCreateComputePipeline()
-        PCM-->>EE: VkPipeline (new)
-    else Pipeline IN cache
-        PCM-->>EE: VkPipeline (cached)
+        PCM-->>EE: VkPipeline (cached & ready)
+    else Graph Template in cache (Cache Hit)
+        EE->>GO: applyCachedTemplateInPlace(raw, template, cached_graph)
     end
 
     EE->>GX: executeNode(fused_node, cmd_buffer)
+    GX->>GX: isBuffersMatching(descriptor_entry)
     GX->>VK: vkCmdBindPipeline(fused_pipeline)
-    GX->>VK: vkCmdBindDescriptorSets(buffers)
-    GX->>VK: vkCmdPushConstants(ADD_params + RELU_params)
-    GX->>VK: vkCmdDispatch(workgroups)
-    EE->>VK: vkQueueSubmit()
-    EE-->>User: Result tensors ready
+    GX->>VK: vkCmdBindDescriptorSets(shared_buffers)
+    GX->>VK: vkCmdPushConstants(aligned_push_constants)
+    GX->>VK: vkCmdDispatch(workgroup_x, y, z)
+    EE->>VK: submitCompute(cmd_buffer)
+    EE-->>User: Execution complete, GPU results ready
 ```
 
 ---
 
-## 10. Sequence Diagram — LLM Token Generation (Autoregressive + KV Cache)
+## 10. Sequence Diagram — LLM Autoregressive Generation (Sinh Token & KV Cache)
 
 ```mermaid
 sequenceDiagram
+    autonumber
     participant User
     participant LLM as Causal_LM
     participant Tok as Bpe_Tokenizer
     participant EMB as Embedding_Layer
-    participant Block as Transformer_Block (x N)
-    participant KVC as KV_Cache_Manager
-    participant NORM as Final RMSNorm
-    participant HEAD as LM Head (Linear)
-    participant SAMPLE as Token Sampler
+    participant Block as Transformer_Block (N Layers)
+    participant KVC as KV_Cache_Manager (N Layers)
+    participant NORM as Final RMSNorm_Layer
+    participant HEAD as LM Head (Linear_Layer)
+    participant EE as Execution_Engine
 
-    User->>LLM: generate("Trăm năm", max_tokens=64, temperature=0.7)
-    LLM->>Tok: encode("Trăm năm")
-    Tok-->>LLM: [token_ids: 154, 829]
+    User->>LLM: generate("Trăm năm", max_new_tokens=64, temp=0.7)
+    LLM->>Tok: encode("Trăm năm", add_bos=true)
+    Tok-->>LLM: prompt_token_ids [1, 154, 829]
 
-    loop For each new token (up to max_tokens)
-        LLM->>EMB: forward(token_ids)
-        EMB-->>LLM: hidden_states (seq_len × hidden_dim)
+    loop For each token step (up to max_new_tokens)
+        LLM->>LLM: forward(current_tokens, use_cache=true)
+        LLM->>EMB: forward(input_indices)
+        EMB-->>LLM: hidden_states (B, S, hidden_dim)
 
-        loop For each Transformer Block
-            Block->>Block: Pre-RMSNorm(hidden_states)
-            Block->>Block: Q, K, V = qkv_proj(normed)
+        loop For each layer block (l = 0..N-1)
+            LLM->>Block: forward(hidden_states, kv_caches[l])
+            Block->>Block: input_layernorm.forward(hidden_states)
+            Block->>Block: q_proj, k_proj, v_proj
             Block->>Block: applyRoPE(Q, K)
-            Block->>KVC: appendKV(K, V)
-            KVC-->>Block: full_keys, full_values (prefix + current)
-            Block->>Block: FlashAttention(Q, full_K, full_V, causal=true)
-            Block->>Block: O = o_proj(attn_output)
-            Block->>Block: hidden = hidden + O (residual)
-            Block->>Block: Pre-RMSNorm(hidden)
-            Block->>Block: FFN = SwiGLU(normed)
-            Block->>Block: hidden = hidden + FFN (residual)
+            Block->>KVC: append(K, V)
+            Block->>KVC: getK(), getV()
+            KVC-->>Block: full_cached_K, full_cached_V
+            Block->>Block: FlashAttention(Q, cached_K, cached_V, is_causal=true)
+            Block->>Block: o_proj + residual add
+            Block->>Block: post_attention_layernorm.forward()
+            Block->>Block: gate_proj & up_proj -> swiglu.forward() -> down_proj
+            Block->>Block: residual add
+            Block-->>LLM: layer_output
         end
 
-        LLM->>NORM: rmsNormForward(hidden_states)
-        LLM->>HEAD: forward(normed) → logits (vocab_size)
-        LLM->>SAMPLE: sampleToken(logits, temperature, top_p, top_k)
-        SAMPLE-->>LLM: next_token_id
+        LLM->>NORM: forward(layer_output)
+        LLM->>HEAD: forward(normed_output)
+        HEAD-->>LLM: logits (B, S, vocab_size)
 
-        alt next_token_id == eos_token
-            LLM-->>User: decoded_text (stop)
-        else
-            LLM->>Tok: decode([next_token_id])
-            Tok-->>LLM: next_token_text
-            LLM-->>User: stream callback(next_token_text)
+        opt GPU Execution Target
+            LLM->>EE: executeGraph()
+        end
+
+        LLM->>LLM: apply repetition_penalty
+        LLM->>LLM: sampleToken(logits[last_token], temp, top_p, top_k)
+        LLM-->>LLM: next_token_id
+
+        alt next_token_id == eos_token_id OR matches stop_sequences
+            Note over LLM: Termination condition met -> Break generation loop
+        else Continues generation
+            LLM->>Tok: decode([next_token_id], skip_special=true)
+            Tok-->>LLM: next_token_string
+            opt token_callback registered
+                LLM->>User: token_callback(next_token_string) [Streaming]
+            end
+            LLM->>LLM: append next_token_id to current_tokens
         end
     end
+
+    LLM-->>User: complete generated string
 ```
 
 ---
 
-## 11. State Diagram — Execution Engine Graph Lifecycle
+## 11. State Diagram — Execution Engine Graph Lifecycle (Vòng đời Đồ thị Tính toán)
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Idle : Engine Initialized
+    [*] --> Idle : Engine Initialization & Vulkan_Context ready
 
-    Idle --> Recording : Tensor Op Triggered
-    Recording --> Recording : addNode() to Compute_Graph
-    Recording --> Optimizing : executeGraph() called
+    Idle --> Recording : Tensor operator called (e.g. matmul, add, relu)
+    Recording --> Recording : addNode() appends Compute_Node to current_graph
 
-    Optimizing --> FusingNodes : Graph_Optimizer.buildCachedTemplate()
-    FusingNodes --> FusingNodes : isFusible? hasCompatibleDimensions? hasAliasingHazard?
-    FusingNodes --> CompilingPipeline : Fusion decisions finalized
+    Recording --> CheckingCache : executeGraph() / warmCache() invoked
+    
+    state CheckingCache <<choice>>
+    CheckingCache --> ApplyingCache : computeGraphSignature() HIT in cached_graph_templates
+    CheckingCache --> Optimizing : computeGraphSignature() MISS
 
-    CompilingPipeline --> PipelineCached : getOrCreatePipeline()
-    CompilingPipeline --> FallbackMode : Shader compilation FAILED
-    PipelineCached --> Dispatching : Pipeline ready
+    state Optimizing {
+        [*] --> AnalyzingHazards : Iterate nodes
+        AnalyzingHazards --> ValidatingFusion : isFusible? & hasCompatibleDimensions?
+        ValidatingFusion --> CreatingFusedNode : Checks PASS & is_sharing_buffer
+        ValidatingFusion --> StartingNewNode : Checks FAIL (Limits exceeded or Hazard detected)
+        CreatingFusedNode --> AnalyzingHazards : Next node
+        StartingNewNode --> AnalyzingHazards : Next node
+        AnalyzingHazards --> [*] : All nodes partitioned into template
+    }
 
-    Dispatching --> Dispatching : vkCmdBindPipeline + vkCmdDispatch per node
-    Dispatching --> Submitted : vkQueueSubmit()
-    Submitted --> Waiting : Timeline Semaphore / Fence
-    Waiting --> Idle : GPU work complete, graph cleared
+    Optimizing --> GeneratingShader : buildCachedTemplate() completed
+    GeneratingShader --> CompilingSpirv : Graph_Executor::generateFusedGlsl()
+    CompilingSpirv --> CachingPipeline : Shader_Compiler::compileGlslToSpirv() & vkCreateComputePipeline()
+    CachingPipeline --> ApplyingCache : Pipeline_Cache_Manager stores VkPipeline
 
-    FallbackMode --> Dispatching : Per-node fallback execution
+    ApplyingCache --> BindingResources : applyCachedTemplateInPlace() assigns active buffers
+    
+    state BindingResources {
+        [*] --> CheckingDescriptors : isBuffersMatching()?
+        CheckingDescriptors --> UpdatingDescriptors : Buffers changed -> vkUpdateDescriptorSets()
+        CheckingDescriptors --> UsingCachedDescriptors : Buffers identical -> Skip update
+        UpdatingDescriptors --> [*]
+        UsingCachedDescriptors --> [*]
+    }
+
+    BindingResources --> RecordingCommands : vkCmdBindPipeline() + vkCmdBindDescriptorSets() + vkCmdPushConstants()
+    RecordingCommands --> Dispatching : vkCmdDispatch(workgroups) per node
+    Dispatching --> Submitting : vkEndCommandBuffer()
+    Submitting --> AwaitingGpu : submitCompute() -> vkQueueSubmit() with VkFence / Timeline Semaphore
+    AwaitingGpu --> CleaningGarbage : Fence signaled -> Frame complete
+    CleaningGarbage --> Idle : cleanGarbage(), resetFrameState(), graph.clear()
 ```
