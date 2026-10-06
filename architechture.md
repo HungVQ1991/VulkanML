@@ -60,7 +60,7 @@ graph TD
         VK["Vulkan_Context\n(Physical/Logical Device, Compute Queue, Staging Buffers)"]
         NET["Vulkan_Network\n(Pipeline Layout, Descriptor Layout & Static Pipelines)"]
         ALLOC["Vulkan_Sub_Allocator\n(Device Memory Chunk Pool & Dynamic Blocks)"]
-        GPUV["gpu::vector\n(RAII GPU Buffer with Sub-Allocation)"]
+        GPUV["gpu_vector\n(RAII GPU Buffer with Sub-Allocation)"]
         SHAD["Shader_Dictionary\n(Snippet JSON Metadata & Fusion Capabilities)"]
         SHGEN["Shader_Generator\n(Dynamic GLSL Stitching for Operator Fusion)"]
         SHCOMP["Shader_Compiler\n(glslc / libshaderc SPIR-V Compilation)"]
@@ -90,7 +90,7 @@ graph TD
 ```mermaid
 classDiagram
     class Shape {
-        -array~size_t, 6~ dimensions
+        -array~size_t~ dimensions
         -uint8_t rank_size
         +Shape()
         +Shape(dim_0, dim_1)
@@ -98,8 +98,8 @@ classDiagram
         +getTotalElements() size_t
         +computeContiguousStrides() Shape
         +toString() string
-        +getDimensions() span~const size_t~
-        +operator[](index) size_t
+        +getDimensions() span~size_t~
+        +operatorIndex(index) size_t
     }
 
     class Tensor_Impl {
@@ -163,7 +163,7 @@ classDiagram
         +Tensor(shape, target)
         +matmul(other, output)
         +matmulAdd(other, biases) Tensor
-        +operator+(other) Tensor
+        +operatorPlus(other) Tensor
         +relu() Tensor
         +to(target_type) Tensor
         +toFp16() Tensor
@@ -197,9 +197,9 @@ classDiagram
 
     Tensor_Impl <|-- Cpu_Tensor_Impl
     Tensor_Impl <|-- Gpu_Tensor_Impl
-    Tensor o-- Tensor_Impl : implementation (PIMPL)
+    Tensor o-- Tensor_Impl : implementation
     Gpu_Tensor_Impl o-- gpu_vector : gpu_vec
-    Shape <-- Tensor_Impl : shape & strides
+    Shape <-- Tensor_Impl : shape and strides
 ```
 
 ---
@@ -307,8 +307,8 @@ classDiagram
     }
 
     class Res_Net_Block_2d_Layer {
-        -vector~unique_ptr~ILayer~~ main_branch
-        -vector~unique_ptr~ILayer~~ shortcut_branch
+        -vector~ILayer*~ main_branch
+        -vector~ILayer*~ shortcut_branch
         -unique_ptr~ILayer~ post_activation
         +addMainLayer(args)
         +addShortcutLayer(args)
@@ -330,10 +330,10 @@ classDiagram
     ILayer <|-- Max_Pool_2d_Layer
     ILayer <|-- Batch_Norm_2d_Layer
     ILayer <|-- PPO_Actor_Critic_Layer
-    Transformer_Block o-- RMSNorm_Layer : input & post norm
+    Transformer_Block o-- RMSNorm_Layer : input and post norm
     Transformer_Block o-- SwiGLU_Layer : swiglu activation
-    Transformer_Block o-- Linear_Layer : q,k,v,o,gate,up,down
-    Res_Net_Block_2d_Layer o-- ILayer : main & shortcut branches
+    Transformer_Block o-- Linear_Layer : projection layers
+    Res_Net_Block_2d_Layer o-- ILayer : main and shortcut branches
 ```
 
 ---
@@ -372,7 +372,7 @@ classDiagram
 
     class Compute_Node {
         +Compute_Pipeline pipeline_id
-        +vector~shared_ptr~gpu_vector~~ buffers
+        +vector~gpu_vector*~ buffers
         +vector~uint8_t~ push_constants_data
         +uint32_t workgroup_count_x
         +uint32_t workgroup_count_y
@@ -393,9 +393,9 @@ classDiagram
 
     class Graph_Optimizer {
         <<utility>>
-        -size_t MAX_PUSH_CONSTANTS_BYTES$ = 128
-        -size_t MAX_STORAGE_BUFFER_BINDINGS$ = 32
-        -size_t MAX_FUSED_OPERATIONS$ = 8
+        -size_t MAX_PUSH_CONSTANTS_BYTES$
+        -size_t MAX_STORAGE_BUFFER_BINDINGS$
+        -size_t MAX_FUSED_OPERATIONS$
         +optimize(graph)$
         +buildCachedTemplate(graph)$ Cached_Graph_Template
         +applyCachedTemplateInPlace(raw, template, target)$
@@ -419,9 +419,9 @@ classDiagram
 
     class Cached_Graph_Template {
         +vector~Compute_Node~ fused_nodes
-        +vector~vector~Buffer_Binding_Mapping~~ buffer_mappings
-        +vector~vector~Push_Constant_Mapping~~ push_constants_mappings
-        +vector~vector~uint32_t~~ raw_node_indices
+        +vector2D~Buffer_Binding_Mapping~ buffer_mappings
+        +vector2D~Push_Constant_Mapping~ push_constants_mappings
+        +vector2D~uint32_t~ raw_node_indices
         +array~Compute_Graph, 2~ instantiated_graphs
         +bool is_valid
         +isValid() bool
@@ -443,7 +443,7 @@ classDiagram
     Compute_Graph o-- Compute_Node : contains
     Compute_Node o-- Fused_Operation : contains
     Graph_Optimizer ..> Cached_Graph_Template : constructs
-    Graph_Optimizer ..> Compute_Node : inspects & fuses
+    Graph_Optimizer ..> Compute_Node : inspects and fuses
     Graph_Executor ..> Compute_Node : dispatches
 ```
 
@@ -462,8 +462,8 @@ classDiagram
         -bool is_cooperative_matrix_supported
         -bool is_float16_supported
         -unique_ptr~Vulkan_Sub_Allocator~ allocator
-        -VkBuffer staging_buffers[2]
-        -Memory_Allocation staging_allocations[2]
+        -array~VkBuffer~ staging_buffers
+        -array~Memory_Allocation~ staging_allocations
         +getDevice() VkDevice
         +getComputeQueue() VkQueue
         +getAllocator() Vulkan_Sub_Allocator&
@@ -558,7 +558,7 @@ classDiagram
 ```mermaid
 classDiagram
     class Neural_Network {
-        -vector~unique_ptr~ILayer~~ layers
+        -vector~ILayer*~ layers
         -Training_Context training_context
         -Loss_Scaler loss_scaler
         -Tensor last_prediction
@@ -706,8 +706,8 @@ classDiagram
     class Causal_LM {
         -Causal_LM_Config config
         -Embedding_Layer token_embedding
-        -vector~unique_ptr~Transformer_Block~~ blocks
-        -vector~unique_ptr~KV_Cache_Manager~~ kv_caches
+        -vector~Transformer_Block*~ blocks
+        -vector~KV_Cache_Manager*~ kv_caches
         -RMSNorm_Layer final_norm
         -Linear_Layer lm_head
         -Bpe_Tokenizer tokenizer
@@ -794,8 +794,8 @@ classDiagram
     }
 
     Causal_LM o-- Causal_LM_Config : config
-    Causal_LM o-- Transformer_Block : blocks (N layers)
-    Causal_LM o-- KV_Cache_Manager : kv_caches (N layers)
+    Causal_LM o-- Transformer_Block : blocks
+    Causal_LM o-- KV_Cache_Manager : kv_caches
     Causal_LM o-- Embedding_Layer : token_embedding
     Causal_LM o-- RMSNorm_Layer : final_norm
     Causal_LM o-- Linear_Layer : lm_head
@@ -839,12 +839,12 @@ classDiagram
         +vector~bool~ param_evolvable
         +vector~size_t~ param_numel
         +vector~Tensor~ batched_params
-        +vector~vector~float~~ host_params
+        +vector2D~float~ host_params
     }
 
     Population o-- Population_Layer_Adapter : layer_adapters
     Population ..> Neural_Network : constructs on-demand
-    Population_Layer_Adapter o-- Tensor : batched_params (SoA)
+    Population_Layer_Adapter o-- Tensor : batched_params
 ```
 
 ---
@@ -875,12 +875,12 @@ sequenceDiagram
     alt Graph Template NOT in cache (Cache Miss)
         EE->>GO: buildCachedTemplate(current_graph)
         GO->>GO: isFusible(producer, consumer)
-        Note over GO: Checks: Consumer == ELEMENTWISE,<br/>No cooperative matrix in consumer,<br/>No shared memory / multi-write hazard
+        Note over GO: Checks: Consumer is ELEMENTWISE,<br/>No cooperative matrix in consumer,<br/>No shared memory or multi-write hazard
         GO->>GO: hasCompatibleDimensions(ADD, RELU)
-        Note over GO: Checks: Workgroups match OR<br/>producer threads >= consumer threads
+        Note over GO: Checks: Workgroups match OR<br/>producer threads at least consumer threads
         GO->>GO: hasAliasingHazard(ADD, RELU)
-        Note over GO: Checks: No RAW / WAR buffer aliasing
-        Note over GO: All validation checks PASS -> Fused Node created!
+        Note over GO: Checks: No RAW or WAR buffer aliasing
+        Note over GO: All validation checks PASS, Fused Node created!
         GO-->>EE: Cached_Graph_Template [Fused_Node(ADD + RELU)]
 
         EE->>GX: generateFusedGlsl(fused_node)
@@ -889,9 +889,9 @@ sequenceDiagram
         GX-->>EE: fused_glsl_code
 
         EE->>PCM: getOrCreatePipeline(fused_glsl_code)
-        PCM->>PCM: Shader_Compiler::compileGlslToSpirv()
+        PCM->>PCM: compileGlslToSpirv()
         PCM->>VK: vkCreateComputePipeline()
-        PCM-->>EE: VkPipeline (cached & ready)
+        PCM-->>EE: VkPipeline (cached and ready)
     else Graph Template in cache (Cache Hit)
         EE->>GO: applyCachedTemplateInPlace(raw, template, cached_graph)
     end
@@ -943,7 +943,7 @@ sequenceDiagram
             Block->>Block: FlashAttention(Q, cached_K, cached_V, is_causal=true)
             Block->>Block: o_proj + residual add
             Block->>Block: post_attention_layernorm.forward()
-            Block->>Block: gate_proj & up_proj -> swiglu.forward() -> down_proj
+            Block->>Block: gate_proj and up_proj through swiglu to down_proj
             Block->>Block: residual add
             Block-->>LLM: layer_output
         end
@@ -961,7 +961,7 @@ sequenceDiagram
         LLM-->>LLM: next_token_id
 
         alt next_token_id == eos_token_id OR matches stop_sequences
-            Note over LLM: Termination condition met -> Break generation loop
+            Note over LLM: Termination condition met, break generation loop
         else Continues generation
             LLM->>Tok: decode([next_token_id], skip_special=true)
             Tok-->>LLM: next_token_string
@@ -981,46 +981,46 @@ sequenceDiagram
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Idle : Engine Initialization & Vulkan_Context ready
+    [*] --> Idle : Engine Initialized
 
-    Idle --> Recording : Tensor operator called (e.g. matmul, add, relu)
-    Recording --> Recording : addNode() appends Compute_Node to current_graph
+    Idle --> Recording : Tensor operator dispatched
+    Recording --> Recording : Append Compute_Node to graph
 
-    Recording --> CheckingCache : executeGraph() / warmCache() invoked
+    Recording --> CheckingCache : Execute or warm cache
     
     state CheckingCache <<choice>>
-    CheckingCache --> ApplyingCache : computeGraphSignature() HIT in cached_graph_templates
-    CheckingCache --> Optimizing : computeGraphSignature() MISS
+    CheckingCache --> ApplyingCache : Cache Hit on signature
+    CheckingCache --> Optimizing : Cache Miss on signature
 
     state Optimizing {
         [*] --> AnalyzingHazards : Iterate nodes
-        AnalyzingHazards --> ValidatingFusion : isFusible? & hasCompatibleDimensions?
-        ValidatingFusion --> CreatingFusedNode : Checks PASS & is_sharing_buffer
-        ValidatingFusion --> StartingNewNode : Checks FAIL (Limits exceeded or Hazard detected)
-        CreatingFusedNode --> AnalyzingHazards : Next node
-        StartingNewNode --> AnalyzingHazards : Next node
-        AnalyzingHazards --> [*] : All nodes partitioned into template
+        AnalyzingHazards --> ValidatingFusion : Check isFusible and dimensions
+        ValidatingFusion --> CreatingFusedNode : Validation passed and buffer shared
+        ValidatingFusion --> StartingNewNode : Validation failed or limit reached
+        CreatingFusedNode --> AnalyzingHazards : Process next node
+        StartingNewNode --> AnalyzingHazards : Process next node
+        AnalyzingHazards --> [*] : All nodes partitioned
     }
 
-    Optimizing --> GeneratingShader : buildCachedTemplate() completed
-    GeneratingShader --> CompilingSpirv : Graph_Executor::generateFusedGlsl()
-    CompilingSpirv --> CachingPipeline : Shader_Compiler::compileGlslToSpirv() & vkCreateComputePipeline()
-    CachingPipeline --> ApplyingCache : Pipeline_Cache_Manager stores VkPipeline
+    Optimizing --> GeneratingShader : Template constructed
+    GeneratingShader --> CompilingSpirv : Generate fused GLSL code
+    CompilingSpirv --> CachingPipeline : Compile SPIR-V and create pipeline
+    CachingPipeline --> ApplyingCache : Store in pipeline cache
 
-    ApplyingCache --> BindingResources : applyCachedTemplateInPlace() assigns active buffers
+    ApplyingCache --> BindingResources : Assign active buffer descriptors
     
     state BindingResources {
-        [*] --> CheckingDescriptors : isBuffersMatching()?
-        CheckingDescriptors --> UpdatingDescriptors : Buffers changed -> vkUpdateDescriptorSets()
-        CheckingDescriptors --> UsingCachedDescriptors : Buffers identical -> Skip update
+        [*] --> CheckingDescriptors : Check isBuffersMatching
+        CheckingDescriptors --> UpdatingDescriptors : Buffers changed update sets
+        CheckingDescriptors --> UsingCachedDescriptors : Buffers unchanged reuse sets
         UpdatingDescriptors --> [*]
         UsingCachedDescriptors --> [*]
     }
 
-    BindingResources --> RecordingCommands : vkCmdBindPipeline() + vkCmdBindDescriptorSets() + vkCmdPushConstants()
-    RecordingCommands --> Dispatching : vkCmdDispatch(workgroups) per node
-    Dispatching --> Submitting : vkEndCommandBuffer()
-    Submitting --> AwaitingGpu : submitCompute() -> vkQueueSubmit() with VkFence / Timeline Semaphore
-    AwaitingGpu --> CleaningGarbage : Fence signaled -> Frame complete
-    CleaningGarbage --> Idle : cleanGarbage(), resetFrameState(), graph.clear()
+    BindingResources --> RecordingCommands : Bind pipeline descriptors and push constants
+    RecordingCommands --> Dispatching : Dispatch compute workgroups
+    Dispatching --> Submitting : End command buffer
+    Submitting --> AwaitingGpu : Queue submit with timeline fence
+    AwaitingGpu --> CleaningGarbage : Fence signaled frame complete
+    CleaningGarbage --> Idle : Clean staging buffers and clear graph
 ```
