@@ -81,6 +81,8 @@ public:    explicit Tensor(Execution_Target target = Execution_Target::CPU);
     void reluBackward(const Tensor &output_gradient, Tensor &input_gradient) const;
     void gelu(Tensor &output) const;
     void geluBackward(const Tensor &output_gradient, Tensor &input_gradient) const;
+    void sigmoid(Tensor &output) const;
+    void sigmoidBackward(const Tensor &output_gradient, Tensor &input_gradient) const;
     void softmax(Tensor &output) const;
     void softmaxBackward(const Tensor &output_gradient, Tensor &input_gradient) const;
     void matmulAdd(const Tensor &other, const Tensor &biases, Tensor &output) const;
@@ -190,6 +192,8 @@ public:    explicit Tensor(Execution_Target target = Execution_Target::CPU);
     Tensor reluBackward(const Tensor &output_gradient) const;
     Tensor gelu() const;
     Tensor geluBackward(const Tensor &output_gradient) const;
+    Tensor sigmoid() const;
+    Tensor sigmoidBackward(const Tensor &output_gradient) const;
     Tensor softmax() const;
     Tensor softmaxBackward(const Tensor &output_gradient) const;
     Tensor matmulAdd(const Tensor &other, const Tensor &biases) const;
@@ -217,7 +221,10 @@ public:    explicit Tensor(Execution_Target target = Execution_Target::CPU);
     const Shape &getShape() const noexcept { return implementation->getShape(); }
     const Stride &getStrides() const noexcept { return implementation->getStrides(); }
     Storage_Handle getStorage() const { const Tensor_Impl &const_implementation = *implementation; return const_implementation.getStorage(); }
-    Mutable_Storage_Handle getStorage() { return implementation->getStorage(); }    std::vector<float> getData() const;
+    Mutable_Storage_Handle getStorage() { return implementation->getStorage(); }
+    std::vector<float> getData() const;
+    const std::vector<uint32_t> &getPackedData() const { return implementation->getPackedData(); }
+    void uploadPackedData(const std::vector<uint32_t> &packed_data) { implementation->uploadPackedData(packed_data); }
 
     std::shared_ptr<Tensor_Impl> getImplementation() const noexcept { return implementation; }
     size_t getTotalElements() const noexcept { return implementation->getTotalElements(); }

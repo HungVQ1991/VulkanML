@@ -93,6 +93,10 @@ private:
     void updateDescriptorSet(VkDescriptorSet _descriptor_set,
                              const std::vector<uint32_t> &_binding_indices,
                              const std::vector<std::shared_ptr<gpu::vector>> &_buffers) const;
+    void pushDescriptors(VkCommandBuffer _command_buffer, const std::vector<std::shared_ptr<gpu::vector>> &_buffers) const;
+    void pushDescriptors(VkCommandBuffer _command_buffer,
+                         const std::vector<uint32_t> &_binding_indices,
+                         const std::vector<std::shared_ptr<gpu::vector>> &_buffers) const;
 
 public:
     Graph_Executor(const Vulkan_Context &_context,

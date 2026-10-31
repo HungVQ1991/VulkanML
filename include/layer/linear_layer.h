@@ -68,7 +68,9 @@ public:
         result.push_back({input_dimension, output_dimension});
         result.push_back({1, output_dimension});
         return result;
-    }    std::vector<std::pair<Tensor *, Tensor *>> getParametersAndGradients() override;
+    }
+    std::vector<std::pair<Tensor *, Tensor *>> getParametersAndGradients() override;
+    std::vector<const Tensor *> getNoDecayParameters() const override { return { &biases }; }
 
     const Tensor &getWeightsGradient() const override { return weights_gradient_tensor; }
     const Tensor &getBiasesGradient() const noexcept { return biases_gradient_tensor; }

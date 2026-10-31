@@ -17,6 +17,7 @@
 #include "helper/logger.h"
 #include "helper/magic_enum.hpp"
 #include "math/tensor.h"
+#include "ops/vision/pooling.h"
 
 
 Max_Pool_2d_Layer::Max_Pool_2d_Layer(uint32_t _height, uint32_t _width, uint32_t _channels, uint32_t _kernel_size, uint32_t _stride, uint32_t _padding, Execution_Target _execution_target)
@@ -49,7 +50,7 @@ Tensor Max_Pool_2d_Layer::forward(const Tensor &_input_tensor)
                            Log_Feature::POOLING_COMPUTE | Log_Feature::FORWARD_EVALUATION);
 
         input_tensor = _input_tensor;
-        input_tensor.maxpool2d(output_tensor, mask_tensor, input_height, input_width, channels, kernel_size, stride, padding);
+        ops::vision::maxpool2d(input_tensor, output_tensor, mask_tensor, input_height, input_width, channels, kernel_size, stride, padding);
         is_forward_completed = true;
         logBufferAddress(&mask_tensor, "mask_tensor");
         return output_tensor;
@@ -70,7 +71,7 @@ Tensor Max_Pool_2d_Layer::forward(const Tensor& _batched_input, const std::vecto
 
         Tensor output_tensor_result(_batched_input.getExecutionTarget());
         Tensor mask_tensor_result(_batched_input.getExecutionTarget());
-        _batched_input.maxpool2d(output_tensor_result, mask_tensor_result, input_height, input_width, channels, kernel_size, stride, padding);
+        ops::vision::maxpool2d(_batched_input, output_tensor_result, mask_tensor_result, input_height, input_width, channels, kernel_size, stride, padding);
         return output_tensor_result;
     }
 
@@ -100,7 +101,7 @@ Tensor Max_Pool_2d_Layer::backward(const Tensor &_output_gradient)
                             1,
                             Log_Feature::POOLING_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
-        _output_gradient.maxpool2dBackward(mask_tensor, input_gradient_tensor, input_height, input_width, channels, output_height, output_width, kernel_size, stride, padding);
+        ops::vision::maxpool2dBackward(_output_gradient, mask_tensor, input_gradient_tensor, input_height, input_width, channels, output_height, output_width, kernel_size, stride, padding);
         logBufferAddress(&mask_tensor, "mask_tensor (Backward)");
         logBufferAddress(&input_tensor, "input_tensor (Backward)");
         logBufferAddress(&input_gradient_tensor, "input_gradient_tensor (Backward)");
@@ -110,8 +111,12 @@ Tensor Max_Pool_2d_Layer::backward(const Tensor &_output_gradient)
 
 void Max_Pool_2d_Layer::resetGradient()
 {
-        is_forward_completed = false;
-    }
+    is_forward_completed = false;
+    input_tensor = Tensor(0, 0, execution_target);
+    output_tensor = Tensor(0, 0, execution_target);
+    mask_tensor = Tensor(0, 0, execution_target);
+    input_gradient_tensor = Tensor(0, 0, execution_target);
+}
 
 void Max_Pool_2d_Layer::saveConfiguration(std::ofstream &_output_file_stream) const
 {

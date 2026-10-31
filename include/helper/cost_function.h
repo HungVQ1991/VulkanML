@@ -7,3 +7,6 @@
 #include "cost_function/cce_cost.h"
 #include "cost_function/huber_cost.h"
 #include "cost_function/fused_cce_cost.h"
+#include "cost_function/asl_cost.h"
+#include "cost_function/dice_cost.h"
+#include "cost_function/dice_bce_cost.h"

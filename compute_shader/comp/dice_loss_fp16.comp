@@ -1,0 +1,71 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer Pred_Buffer {
+    float16_t pred_data[];
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer Target_Buffer {
+    float16_t target_data[];
+};
+
+layout(std430, set = 0, binding = 2) writeonly buffer Loss_Buffer {
+    float loss_data[];
+};
+
+layout(push_constant) uniform Push_Constants {
+    uint total_elements;
+    float epsilon_val;
+} push_constants;
+
+shared float shared_inter[256];
+shared float shared_pred[256];
+shared float shared_target[256];
+
+void main() {
+    uint global_idx = gl_GlobalInvocationID.x;
+    uint local_idx = gl_LocalInvocationID.x;
+
+    float inter_val = 0.0f;
+    float pred_val = 0.0f;
+    float target_val = 0.0f;
+
+    for (uint idx = global_idx; idx < push_constants.total_elements; idx += gl_WorkGroupSize.x * gl_NumWorkGroups.x) {
+        float p = clamp(float(pred_data[idx]), 0.0f, 1.0f);
+        float y = float(target_data[idx]);
+        inter_val += p * y;
+        pred_val += p;
+        target_val += y;
+    }
+
+    shared_inter[local_idx] = inter_val;
+    shared_pred[local_idx] = pred_val;
+    shared_target[local_idx] = target_val;
+    barrier();
+
+    for (uint stride = gl_WorkGroupSize.x / 2; stride > 0; stride >>= 1) {
+        if (local_idx < stride) {
+            shared_inter[local_idx] += shared_inter[local_idx + stride];
+            shared_pred[local_idx] += shared_pred[local_idx + stride];
+            shared_target[local_idx] += shared_target[local_idx + stride];
+        }
+        barrier();
+    }
+
+    if (local_idx == 0) {
+        if (gl_NumWorkGroups.x == 1) {
+            float total_inter = shared_inter[0];
+            float total_pred = shared_pred[0];
+            float total_target = shared_target[0];
+            float dice = (2.0f * total_inter + push_constants.epsilon_val) / (total_pred + total_target + push_constants.epsilon_val);
+            loss_data[0] = 1.0f - dice;
+        } else {
+            loss_data[gl_WorkGroupID.x * 3 + 0] = shared_inter[0];
+            loss_data[gl_WorkGroupID.x * 3 + 1] = shared_pred[0];
+            loss_data[gl_WorkGroupID.x * 3 + 2] = shared_target[0];
+        }
+    }
+}

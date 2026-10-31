@@ -1,0 +1,23 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly restrict buffer InputBuffer {
+    float X[];
+};
+
+layout(std430, set = 0, binding = 1) writeonly restrict buffer OutputBuffer {
+    float Y[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint total_elements;
+} pc;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.total_elements) return;
+
+    float x = X[idx];
+    Y[idx] = 1.0f / (1.0f + exp(-clamp(x, -85.0f, 85.0f)));
+}

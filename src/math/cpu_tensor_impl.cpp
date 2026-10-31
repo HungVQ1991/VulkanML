@@ -103,6 +103,12 @@ Cpu_Tensor_Impl::Cpu_Tensor_Impl(Shape tensor_shape, Data_Type type)
         {
             storage_buffer_fp16 = std::make_shared<std::vector<float16_t>>(total_elements, static_cast<float16_t>(0.0f));
         }
+        else if (data_type == Data_Type::TERNARY_INT2)
+        {
+            size_t bytes = getTensorStorageBytes(data_type, shape);
+            size_t words = bytes / sizeof(uint32_t);
+            storage_buffer_u32 = std::make_shared<std::vector<uint32_t>>(words, 0u);
+        }
         else
         {
             storage_buffer = std::make_shared<std::vector<float>>(total_elements, 0.0F);
@@ -1967,6 +1973,20 @@ const std::vector<float> & Cpu_Tensor_Impl::getData() const noexcept
             return materialized_cache;
         }
 
+        if (data_type == Data_Type::TERNARY_INT2)
+        {
+            std::lock_guard<std::mutex> lock(cache_mutex);
+            materialized_cache.resize(total_elements);
+            if (storage_buffer_u32)
+            {
+                size_t rank = shape.getRank();
+                size_t cols = (rank == 0) ? 1 : shape[rank - 1];
+                size_t rows = (rank <= 1) ? 1 : (total_elements / cols);
+                unpackTernary(storage_buffer_u32->data(), materialized_cache.data(), rows, cols, 1.0f);
+            }
+            return materialized_cache;
+        }
+
         if (isContiguous() && byte_offset == 0)
         {
             if (storage_buffer)
@@ -2708,3 +2728,120 @@ float Cpu_Tensor_Impl::fusedCrossEntropyLoss(const Tensor_Impl &targets, Tensor_
 
         return total_loss * scale;
     }
+
+const std::vector<uint32_t> &Cpu_Tensor_Impl::getPackedData() const
+{
+    if (data_type != Data_Type::TERNARY_INT2 || !storage_buffer_u32)
+    {
+        static const std::vector<uint32_t> empty_vec;
+        return empty_vec;
+    }
+    return *storage_buffer_u32;
+}
+
+void Cpu_Tensor_Impl::uploadPackedData(const std::vector<uint32_t> &packed_data)
+{
+    if (data_type != Data_Type::TERNARY_INT2)
+    {
+        throw std::invalid_argument("uploadPackedData called on non-TERNARY_INT2 tensor");
+    }
+    size_t expected_words = getTensorStorageBytes(data_type, shape) / sizeof(uint32_t);
+    if (packed_data.size() != expected_words)
+    {
+        throw std::invalid_argument("uploadPackedData size mismatch");
+    }
+    if (!storage_buffer_u32)
+    {
+        storage_buffer_u32 = std::make_shared<std::vector<uint32_t>>(packed_data);
+    }
+    else
+    {
+        *storage_buffer_u32 = packed_data;
+    }
+}
+
+void Cpu_Tensor_Impl::packTernary(const float *src, uint32_t *dst, size_t rows, size_t cols)
+{
+    if (!src || !dst) return;
+    const size_t words_per_row = (cols + 15) / 16;
+    for (size_t r = 0; r < rows; ++r)
+    {
+        const float *src_row = src + r * cols;
+        uint32_t *dst_row = dst + r * words_per_row;
+        for (size_t w = 0; w < words_per_row; ++w)
+        {
+            uint32_t packed_val = 0;
+            for (size_t bit_idx = 0; bit_idx < 16; ++bit_idx)
+            {
+                size_t col_idx = w * 16 + bit_idx;
+                if (col_idx < cols)
+                {
+                    float val = src_row[col_idx];
+                    int q = (val > 0.5f) ? 1 : ((val < -0.5f) ? -1 : 0);
+                    uint32_t code = static_cast<uint32_t>(q) & 3u;
+                    packed_val |= (code << (bit_idx * 2));
+                }
+            }
+            dst_row[w] = packed_val;
+        }
+    }
+}
+
+void Cpu_Tensor_Impl::unpackTernary(const uint32_t *src, float *dst, size_t rows, size_t cols, float gamma)
+{
+    if (!src || !dst) return;
+    const size_t words_per_row = (cols + 15) / 16;
+    for (size_t r = 0; r < rows; ++r)
+    {
+        const uint32_t *src_row = src + r * words_per_row;
+        float *dst_row = dst + r * cols;
+        for (size_t w = 0; w < words_per_row; ++w)
+        {
+            uint32_t packed_val = src_row[w];
+            for (size_t bit_idx = 0; bit_idx < 16; ++bit_idx)
+            {
+                size_t col_idx = w * 16 + bit_idx;
+                if (col_idx < cols)
+                {
+                    uint32_t code = (packed_val >> (bit_idx * 2)) & 3u;
+                    int val = static_cast<int>((code & 1u) * (1u - (code & 2u)));
+                    dst_row[col_idx] = static_cast<float>(val) * gamma;
+                }
+            }
+        }
+    }
+}
+
+void Cpu_Tensor_Impl::ternaryMatmul(const float *A, const uint32_t *B_packed, float *C,
+                                    size_t M, size_t K, size_t N, float gamma, const float *biases)
+{
+    if (!A || !B_packed || !C) return;
+    const size_t words_per_row = (K + 15) / 16;
+
+    for (size_t m = 0; m < M; ++m)
+    {
+        const float *a_row = A + m * K;
+        float *c_row = C + m * N;
+
+        for (size_t n = 0; n < N; ++n)
+        {
+            float acc = (biases != nullptr) ? biases[n] : 0.0f;
+            const uint32_t *b_row = B_packed + n * words_per_row;
+
+            for (size_t w = 0; w < words_per_row; ++w)
+            {
+                uint32_t packed_val = b_row[w];
+                size_t k_base = w * 16;
+                size_t k_limit = std::min<size_t>(16, K - k_base);
+
+                for (size_t bit_idx = 0; bit_idx < k_limit; ++bit_idx)
+                {
+                    uint32_t code = (packed_val >> (bit_idx * 2)) & 3u;
+                    int val = static_cast<int>((code & 1u) * (1u - (code & 2u)));
+                    acc += a_row[k_base + bit_idx] * (static_cast<float>(val) * gamma);
+                }
+            }
+            c_row[n] = acc;
+        }
+    }
+}

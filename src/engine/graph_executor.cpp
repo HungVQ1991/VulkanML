@@ -80,126 +80,138 @@ bool Graph_Executor::isBuffersMatching(const Persistent_Descriptor_Entry &_entry
     }
 
 std::string Graph_Executor::replacePlaceholders(
-        std::string _text,
-        const std::vector<std::string> &_input_identifiers,
-        const std::vector<bool> &_is_input_register_flags,
-        const std::vector<std::string> &_output_identifiers,
-        const std::vector<bool> &_is_output_register_flags,
-        const std::vector<uint32_t> &_output_buffer_indices,
-        const std::unordered_set<uint32_t> &_external_buffer_indices_set,
-        uint32_t _push_constants_word_offset,
-        const std::vector<std::shared_ptr<gpu::vector>> &_node_buffers)
+    std::string _text,
+    const std::vector<std::string>& _input_identifiers,
+    const std::vector<bool>& _is_input_register_flags,
+    const std::vector<std::string>& _output_identifiers,
+    const std::vector<bool>& _is_output_register_flags,
+    const std::vector<uint32_t>& _output_buffer_indices,
+    const std::unordered_set<uint32_t>& _external_buffer_indices_set,
+    uint32_t _push_constants_word_offset,
+    const std::vector<std::shared_ptr<gpu::vector>>& _node_buffers)
+{
+    for (size_t i = 0; i < _input_identifiers.size(); ++i)
     {
-        for (size_t i = 0; i < _input_identifiers.size(); ++i)
+        std::string token_prefix = std::format("{{in_{}}}[", i);
+        std::string token_plain = std::format("{{in_{}}}", i);
+
+        if (_is_input_register_flags[i])
         {
-            std::string token_prefix = std::format("{{in_{}}}[", i);
-            std::string token_plain = std::format("{{in_{}}}", i);
-
-            if (_is_input_register_flags[i])
-            {
-                size_t position = 0;
-                while ((position = _text.find(token_prefix, position)) != std::string::npos)
-                {
-                    size_t end_position = _text.find(']', position);
-                    if (end_position != std::string::npos)
-                    {
-                        _text.replace(position, end_position - position + 1, _input_identifiers[i]);
-                        position += _input_identifiers[i].length();
-                    }
-                    else
-                    {
-                        break;
-                    }
-                }
-            }
-
             size_t position = 0;
-            while ((position = _text.find(token_plain, position)) != std::string::npos)
+            while ((position = _text.find(token_prefix, position)) != std::string::npos)
             {
-                _text.replace(position, token_plain.length(), _input_identifiers[i]);
-                position += _input_identifiers[i].length();
+                size_t end_position = _text.find(']', position);
+                if (end_position != std::string::npos)
+                {
+                    _text.replace(position, end_position - position + 1, _input_identifiers[i]);
+                    position += _input_identifiers[i].length();
+                }
+                else
+                {
+                    break;
+                }
             }
         }
 
-        for (size_t i = 0; i < _output_identifiers.size(); ++i)
+        size_t position = 0;
+        while ((position = _text.find(token_plain, position)) != std::string::npos)
         {
-            std::string token_prefix = std::format("{{out_{}}}[", i);
-            std::string token_plain = std::format("{{out_{}}}", i);
+            _text.replace(position, token_plain.length(), _input_identifiers[i]);
+            position += _input_identifiers[i].length();
+        }
+    }
 
-            if (_is_output_register_flags[i])
+    for (size_t i = 0; i < _output_identifiers.size(); ++i)
+    {
+        std::string token_prefix = std::format("{{out_{}}}[", i);
+        std::string token_plain = std::format("{{out_{}}}", i);
+
+        if (_is_output_register_flags[i])
+        {
+            uint32_t real_buffer_index = (i < _output_buffer_indices.size()) ? _output_buffer_indices[i] : 0;
+            bool is_external = _external_buffer_indices_set.contains(real_buffer_index);
+            std::string target_type = "float";
+            if (real_buffer_index < _node_buffers.size() && _node_buffers[real_buffer_index])
             {
-                uint32_t real_buffer_index = (i < _output_buffer_indices.size()) ? _output_buffer_indices[i] : 0;
-                bool is_external = _external_buffer_indices_set.contains(real_buffer_index);
-                std::string target_type = "float";
-                if (real_buffer_index < _node_buffers.size() && _node_buffers[real_buffer_index])
-                {
-                    target_type = std::string(getDataTypeGlslName(_node_buffers[real_buffer_index]->getDataType()));
-                }
+                target_type = std::string(getDataTypeGlslName(_node_buffers[real_buffer_index]->getDataType()));
+            }
 
-                size_t position = 0;
-                while ((position = _text.find(token_prefix, position)) != std::string::npos)
+            size_t position = 0;
+            while ((position = _text.find(token_prefix, position)) != std::string::npos)
+            {
+                size_t end_position = _text.find(']', position);
+                if (end_position != std::string::npos)
                 {
-                    size_t end_position = _text.find(']', position);
-                    if (end_position != std::string::npos)
+                    std::string index_expression = _text.substr(position + token_prefix.length(), end_position - (position + token_prefix.length()));
+                    _text.replace(position, end_position - position + 1, _output_identifiers[i]);
+                    position += _output_identifiers[i].length();
+
+                    size_t semi_pos = _text.find(';', position);
+                    size_t eq_pos = _text.find('=', position);
+                    bool is_assignment_lhs = false;
+
+                    if (semi_pos != std::string::npos && eq_pos != std::string::npos && eq_pos < semi_pos)
                     {
-                        std::string index_expression = _text.substr(position + token_prefix.length(), end_position - (position + token_prefix.length()));
-                        _text.replace(position, end_position - position + 1, _output_identifiers[i]);
-                        position += _output_identifiers[i].length();
-
-                        if (target_type == "float16_t")
+                        bool next_is_eq = (eq_pos + 1 < _text.size() && _text[eq_pos + 1] == '=');
+                        if (!next_is_eq)
                         {
-                            size_t eq_pos = _text.find('=', position);
-                            if (eq_pos != std::string::npos)
+                            bool valid_lhs_gap = true;
+                            for (size_t k = position; k < eq_pos; ++k)
                             {
-                                size_t semi_pos = _text.find(';', eq_pos);
-                                if (semi_pos != std::string::npos)
+                                char ch = _text[k];
+                                if (ch != ' ' && ch != '\t' && ch != '+' && ch != '-' && ch != '*' && ch != '/')
                                 {
-                                    std::string expr = _text.substr(eq_pos + 1, semi_pos - (eq_pos + 1));
-                                    std::string wrapped_expr = std::format(" float16_t({})", expr);
-                                    _text.replace(eq_pos + 1, semi_pos - (eq_pos + 1), wrapped_expr);
+                                    valid_lhs_gap = false;
+                                    break;
                                 }
                             }
-                        }
-
-                        if (is_external)
-                        {
-                            size_t semicolon_position = _text.find(';', position);
-                            if (semicolon_position != std::string::npos)
-                            {
-                                std::string write_statement = std::format(" buf_{}[{}] = {}({});", real_buffer_index, index_expression, target_type, _output_identifiers[i]);
-                                _text.insert(semicolon_position + 1, write_statement);
-                                position = semicolon_position + 1 + write_statement.length();
-                            }
+                            is_assignment_lhs = valid_lhs_gap;
                         }
                     }
-                    else
+
+                    if (is_assignment_lhs && target_type == "float16_t")
                     {
-                        break;
+                        std::string expr = _text.substr(eq_pos + 1, semi_pos - (eq_pos + 1));
+                        std::string wrapped_expr = std::format(" float16_t({})", expr);
+                        _text.replace(eq_pos + 1, semi_pos - (eq_pos + 1), wrapped_expr);
+                        semi_pos = _text.find(';', eq_pos);
+                    }
+
+                    if (is_assignment_lhs && is_external && semi_pos != std::string::npos)
+                    {
+                        std::string write_statement = std::format(" buf_{}[{}] = {}({});", real_buffer_index, index_expression, target_type, _output_identifiers[i]);
+                        _text.insert(semi_pos + 1, write_statement);
+                        position = semi_pos + 1 + write_statement.length();
                     }
                 }
-            }
-
-            size_t position = 0;
-            while ((position = _text.find(token_plain, position)) != std::string::npos)
-            {
-                _text.replace(position, token_plain.length(), _output_identifiers[i]);
-                position += _output_identifiers[i].length();
+                else
+                {
+                    break;
+                }
             }
         }
 
-        for (int i = 31; i >= 0; --i)
+        size_t position = 0;
+        while ((position = _text.find(token_plain, position)) != std::string::npos)
         {
-            std::string token = std::format("{{pc_{}}}", i);
-            size_t position = 0;
-            while ((position = _text.find(token, position)) != std::string::npos)
-            {
-                std::string replacement = std::format("pc.data[{}]", _push_constants_word_offset + i);
-                _text.replace(position, token.length(), replacement);
-                position += replacement.length();
-            }
+            _text.replace(position, token_plain.length(), _output_identifiers[i]);
+            position += _output_identifiers[i].length();
         }
-        return _text;
     }
+
+    for (int i = 31; i >= 0; --i)
+    {
+        std::string token = std::format("{{pc_{}}}", i);
+        size_t position = 0;
+        while ((position = _text.find(token, position)) != std::string::npos)
+        {
+            std::string replacement = std::format("pc.data[{}]", _push_constants_word_offset + i);
+            _text.replace(position, token.length(), replacement);
+            position += replacement.length();
+        }
+    }
+    return _text;
+}
 
 std::vector<std::shared_ptr<gpu::vector>> Graph_Executor::getNodeWrittenBuffers(const Compute_Node &_node) const
     {
@@ -397,42 +409,49 @@ void Graph_Executor::executeFallbackNode(VkCommandBuffer _command_buffer, const 
                 }
             }
 
-            auto &entry = node_fallback_entries[operation_index];
-            if (entry.descriptor_set == VK_NULL_HANDLE)
-            {
-                VkDescriptorSetAllocateInfo allocate_information{
-                    .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-                    .pNext = nullptr,
-                    .descriptorPool = descriptor_pools[_frame_index],
-                    .descriptorSetCount = 1,
-                    .pSetLayouts = &layout};
-
-                if (vkAllocateDescriptorSets(device, &allocate_information, &entry.descriptor_set) != VK_SUCCESS)
-                {
-                    Logger::logMessage(Input_Format{"Graph_Executor::executeFallbackNode: Failed to allocate descriptor set for fallback op {}", operation_index},
-                                       Log_Level::LOG_ERROR,
-                                       true,
-                                       0,
-                                       Log_Feature::DISPATCH_EXECUTION);
-                    throw std::runtime_error("Failed to allocate descriptor set");
-                }
-            }
-
-            if (!isBuffersMatching(entry, shared_fused_buffers))
-            {
-                updateDescriptorSet(entry.descriptor_set, shared_fused_buffers);
-                entry.bound_binding_indices.clear();
-                entry.bound_buffers.resize(shared_fused_buffers.size());
-                for (size_t j = 0; j < shared_fused_buffers.size(); ++j)
-                {
-                    entry.bound_buffers[j] = shared_fused_buffers[j] ? shared_fused_buffers[j]->getBuffer() : VK_NULL_HANDLE;
-                }
-            }
-
             VkPipeline static_pipeline = network.getPipeline(operation.pipeline_id);
-
             vkCmdBindPipeline(_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, static_pipeline);
-            vkCmdBindDescriptorSets(_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, network.getPipelineLayout(), 0, 1, &entry.descriptor_set, 0, nullptr);
+
+            if (network.isPushDescriptorActive())
+            {
+                pushDescriptors(_command_buffer, shared_fused_buffers);
+            }
+            else
+            {
+                auto &entry = node_fallback_entries[operation_index];
+                if (entry.descriptor_set == VK_NULL_HANDLE)
+                {
+                    VkDescriptorSetAllocateInfo allocate_information{
+                        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                        .pNext = nullptr,
+                        .descriptorPool = descriptor_pools[_frame_index],
+                        .descriptorSetCount = 1,
+                        .pSetLayouts = &layout};
+
+                    if (vkAllocateDescriptorSets(device, &allocate_information, &entry.descriptor_set) != VK_SUCCESS)
+                    {
+                        Logger::logMessage(Input_Format{"Graph_Executor::executeFallbackNode: Failed to allocate descriptor set for fallback op {}", operation_index},
+                                           Log_Level::LOG_ERROR,
+                                           true,
+                                           0,
+                                           Log_Feature::DISPATCH_EXECUTION);
+                        throw std::runtime_error("Failed to allocate descriptor set");
+                    }
+                }
+
+                if (!isBuffersMatching(entry, shared_fused_buffers))
+                {
+                    updateDescriptorSet(entry.descriptor_set, shared_fused_buffers);
+                    entry.bound_binding_indices.clear();
+                    entry.bound_buffers.resize(shared_fused_buffers.size());
+                    for (size_t j = 0; j < shared_fused_buffers.size(); ++j)
+                    {
+                        entry.bound_buffers[j] = shared_fused_buffers[j] ? shared_fused_buffers[j]->getBuffer() : VK_NULL_HANDLE;
+                    }
+                }
+
+                vkCmdBindDescriptorSets(_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, network.getPipelineLayout(), 0, 1, &entry.descriptor_set, 0, nullptr);
+            }
 
             if (operation.push_constants_size > 0 && operation.push_constants_offset + operation.push_constants_size <= _node.push_constants_data.size())
             {
@@ -646,6 +665,108 @@ void Graph_Executor::updateDescriptorSet(VkDescriptorSet _descriptor_set,
         }
     }
 
+void Graph_Executor::pushDescriptors(VkCommandBuffer _command_buffer, const std::vector<std::shared_ptr<gpu::vector>> &_buffers) const
+{
+    if (_buffers.empty())
+    {
+        return;
+    }
+
+    size_t count = _buffers.size();
+    shared_descriptor_buffer_informations.clear();
+    shared_write_descriptor_sets.clear();
+
+    for (size_t i = 0; i < count; ++i)
+    {
+        if (!_buffers[i] || _buffers[i]->getBuffer() == VK_NULL_HANDLE)
+        {
+            continue;
+        }
+
+        shared_descriptor_buffer_informations.push_back(VkDescriptorBufferInfo{
+            .buffer = _buffers[i]->getBuffer(),
+            .offset = 0,
+            .range = VK_WHOLE_SIZE});
+
+        shared_write_descriptor_sets.push_back(VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .pNext = nullptr,
+            .dstSet = VK_NULL_HANDLE,
+            .dstBinding = static_cast<uint32_t>(i),
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pImageInfo = nullptr,
+            .pBufferInfo = nullptr,
+            .pTexelBufferView = nullptr});
+    }
+
+    for (size_t i = 0; i < shared_write_descriptor_sets.size(); ++i)
+    {
+        shared_write_descriptor_sets[i].pBufferInfo = &shared_descriptor_buffer_informations[i];
+    }
+
+    if (!shared_write_descriptor_sets.empty())
+    {
+        context.cmdPushDescriptorSet(_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                     network.getPipelineLayout(), 0,
+                                     static_cast<uint32_t>(shared_write_descriptor_sets.size()),
+                                     shared_write_descriptor_sets.data());
+    }
+}
+
+void Graph_Executor::pushDescriptors(VkCommandBuffer _command_buffer,
+                                     const std::vector<uint32_t> &_binding_indices,
+                                     const std::vector<std::shared_ptr<gpu::vector>> &_buffers) const
+{
+    if (_buffers.empty() || _binding_indices.size() != _buffers.size())
+    {
+        return;
+    }
+
+    size_t count = _buffers.size();
+    shared_descriptor_buffer_informations.clear();
+    shared_write_descriptor_sets.clear();
+
+    for (size_t i = 0; i < count; ++i)
+    {
+        if (!_buffers[i] || _buffers[i]->getBuffer() == VK_NULL_HANDLE)
+        {
+            continue;
+        }
+
+        shared_descriptor_buffer_informations.push_back(VkDescriptorBufferInfo{
+            .buffer = _buffers[i]->getBuffer(),
+            .offset = 0,
+            .range = VK_WHOLE_SIZE});
+
+        shared_write_descriptor_sets.push_back(VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .pNext = nullptr,
+            .dstSet = VK_NULL_HANDLE,
+            .dstBinding = _binding_indices[i],
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pImageInfo = nullptr,
+            .pBufferInfo = nullptr,
+            .pTexelBufferView = nullptr});
+    }
+
+    for (size_t i = 0; i < shared_write_descriptor_sets.size(); ++i)
+    {
+        shared_write_descriptor_sets[i].pBufferInfo = &shared_descriptor_buffer_informations[i];
+    }
+
+    if (!shared_write_descriptor_sets.empty())
+    {
+        context.cmdPushDescriptorSet(_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                     network.getPipelineLayout(), 0,
+                                     static_cast<uint32_t>(shared_write_descriptor_sets.size()),
+                                     shared_write_descriptor_sets.data());
+    }
+}
+
 Graph_Executor::Graph_Executor(const Vulkan_Context &_context,
                    const Vulkan_Network &_network,
                    Pipeline_Cache_Manager &_pipeline_cache_manager,
@@ -696,21 +817,7 @@ void Graph_Executor::getExternalBufferIndices(const Compute_Node &_node, std::ve
     {
         _output_indices.clear();
 
-        std::array<std::int32_t, 64> last_write_operation_indices;
-        last_write_operation_indices.fill(-1);
-
-        for (size_t operation_index = 0; operation_index < _node.fused_operations.size(); ++operation_index)
-        {
-            const auto &operation = _node.fused_operations[operation_index];
-            for (uint32_t output_index : operation.output_buffer_indices)
-            {
-                if (output_index < last_write_operation_indices.size())
-                {
-                    last_write_operation_indices[output_index] = static_cast<std::int32_t>(operation_index);
-                }
-            }
-        }
-
+        std::array<bool, 64> is_written_by_earlier_op{};
         std::array<bool, 64> is_added_flags{};
 
         for (size_t operation_index = 0; operation_index < _node.fused_operations.size(); ++operation_index)
@@ -718,13 +825,23 @@ void Graph_Executor::getExternalBufferIndices(const Compute_Node &_node, std::ve
             const auto &operation = _node.fused_operations[operation_index];
             for (uint32_t input_index : operation.input_buffer_indices)
             {
-                if (input_index < last_write_operation_indices.size())
+                if (input_index < is_written_by_earlier_op.size())
                 {
-                    if (last_write_operation_indices[input_index] == -1 && !is_added_flags[input_index])
+                    // Nếu buffer này chưa được ghi bởi bất kỳ operation nào trước đó trong node fused,
+                    // thì nó bắt buộc phải là external input nạp từ bộ nhớ GPU.
+                    if (!is_written_by_earlier_op[input_index] && !is_added_flags[input_index])
                     {
                         _output_indices.push_back(input_index);
                         is_added_flags[input_index] = true;
                     }
+                }
+            }
+
+            for (uint32_t output_index : operation.output_buffer_indices)
+            {
+                if (output_index < is_written_by_earlier_op.size())
+                {
+                    is_written_by_earlier_op[output_index] = true;
                 }
             }
         }
@@ -750,6 +867,19 @@ void Graph_Executor::getExternalBufferIndices(const Compute_Node &_node, std::ve
                     {
                         _output_indices.push_back(persistent_buffer_index);
                         is_added_flags[persistent_buffer_index] = true;
+                    }
+                }
+            }
+
+            for (uint32_t accum_output_local_index : metadata.accumulator_output_indices)
+            {
+                if (accum_output_local_index < operation.output_buffer_indices.size())
+                {
+                    uint32_t accum_buffer_index = operation.output_buffer_indices[accum_output_local_index];
+                    if (accum_buffer_index < is_added_flags.size() && !is_added_flags[accum_buffer_index])
+                    {
+                        _output_indices.push_back(accum_buffer_index);
+                        is_added_flags[accum_buffer_index] = true;
                     }
                 }
             }
@@ -857,10 +987,35 @@ std::string Graph_Executor::generateFusedGlsl(const Compute_Node &_node) const
 
         std::vector<uint32_t> external_indices;
         getExternalBufferIndices(_node, external_indices);
-        std::unordered_set<uint32_t> external_buffer_set(external_indices.begin(), external_indices.end());
+
+        std::unordered_set<uint32_t> external_output_set(_node.external_output_indices.begin(), _node.external_output_indices.end());
+        if (!_node.fused_operations.empty())
+        {
+            for (uint32_t output_index : _node.fused_operations.back().output_buffer_indices)
+            {
+                external_output_set.insert(output_index);
+            }
+        }
+        for (const auto &operation : _node.fused_operations)
+        {
+            const auto &metadata = shader_dictionary.getMetadata(operation.pipeline_id);
+            for (uint32_t persistent_output_local_index : metadata.persistent_output_indices)
+            {
+                if (persistent_output_local_index < operation.output_buffer_indices.size())
+                {
+                    external_output_set.insert(operation.output_buffer_indices[persistent_output_local_index]);
+                }
+            }
+            for (uint32_t accum_output_local_index : metadata.accumulator_output_indices)
+            {
+                if (accum_output_local_index < operation.output_buffer_indices.size())
+                {
+                    external_output_set.insert(operation.output_buffer_indices[accum_output_local_index]);
+                }
+            }
+        }
 
         std::unordered_set<uint32_t> read_buffer_indices;
-        std::unordered_set<uint32_t> written_buffer_indices;
 
         for (size_t op_idx = 0; op_idx < _node.fused_operations.size(); ++op_idx)
         {
@@ -891,17 +1046,12 @@ std::string Graph_Executor::generateFusedGlsl(const Compute_Node &_node) const
                     read_buffer_indices.insert(input_index);
                 }
             }
-
-            for (uint32_t output_index : operation.output_buffer_indices)
-            {
-                written_buffer_indices.insert(output_index);
-            }
         }
 
         for (uint32_t buffer_index : external_indices)
         {
             bool is_read = read_buffer_indices.contains(buffer_index);
-            bool is_written = written_buffer_indices.contains(buffer_index) || _node.external_output_indices.contains(buffer_index);
+            bool is_written = external_output_set.contains(buffer_index);
 
             Buffer_Access buffer_access = Buffer_Access::READ_WRITE;
             if (is_read && !is_written)
@@ -943,7 +1093,9 @@ std::string Graph_Executor::generateFusedGlsl(const Compute_Node &_node) const
         else if (primary_operation_class == Operation_Class::STANDALONE)
         {
             if (primary_pipeline == Compute_Pipeline::BATCH_NORM2D_STATS_FORWARD ||
-                primary_pipeline == Compute_Pipeline::BATCH_NORM2D_STATS_BACKWARD)
+                primary_pipeline == Compute_Pipeline::BATCH_NORM2D_STATS_BACKWARD ||
+                primary_pipeline == Compute_Pipeline::BATCH_NORM2D_STATS_FORWARD_FP16 ||
+                primary_pipeline == Compute_Pipeline::BATCH_NORM2D_STATS_BACKWARD_FP16)
             {
                 // Standalone 2D BatchNorm stats handles workgroup internally with 100% coalesced access
             }
@@ -1105,7 +1257,7 @@ std::string Graph_Executor::generateFusedGlsl(const Compute_Node &_node) const
                                                       outputs,
                                                       is_output_register_flags,
                                                       operation.output_buffer_indices,
-                                                      external_buffer_set,
+                                                      external_output_set,
                                                       push_constants_word_offset,
                                                       _node.buffers);
 
@@ -1364,41 +1516,49 @@ void Graph_Executor::recordComputeNodes(VkCommandBuffer _command_buffer,
                             }
                         }
 
-                        auto &entry = persistent_descriptor_caches[_frame_index][cache_idx];
-                        if (entry.descriptor_set == VK_NULL_HANDLE)
-                        {
-                            VkDescriptorSetLayout layout = network.getDescriptorSetLayout();
-                            VkDescriptorSetAllocateInfo allocate_information{
-                                .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-                                .pNext = nullptr,
-                                .descriptorPool = descriptor_pools[_frame_index],
-                                .descriptorSetCount = 1,
-                                .pSetLayouts = &layout};
-
-                            if (vkAllocateDescriptorSets(device, &allocate_information, &entry.descriptor_set) != VK_SUCCESS)
-                            {
-                                Logger::logMessage(Input_Format{"Graph_Executor::recordComputeNodes: Failed to allocate persistent descriptor set for fused node {}", i},
-                                                   Log_Level::LOG_ERROR,
-                                                   true,
-                                                   0,
-                                                   Log_Feature::DISPATCH_EXECUTION);
-                                throw std::runtime_error("Failed to allocate descriptor set");
-                            }
-                        }
-
-                        if (!isBuffersMatching(entry, external_indices, shared_fused_buffers))
-                        {
-                            updateDescriptorSet(entry.descriptor_set, external_indices, shared_fused_buffers);
-                            entry.bound_binding_indices = external_indices;
-                            entry.bound_buffers.resize(shared_fused_buffers.size());
-                            for (size_t j = 0; j < shared_fused_buffers.size(); ++j)
-                            {
-                                entry.bound_buffers[j] = shared_fused_buffers[j] ? shared_fused_buffers[j]->getBuffer() : VK_NULL_HANDLE;
-                            }
-                        }
-
                         vkCmdBindPipeline(_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, target_pipeline);
-                        vkCmdBindDescriptorSets(_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, network.getPipelineLayout(), 0, 1, &entry.descriptor_set, 0, nullptr);
+
+                        if (network.isPushDescriptorActive())
+                        {
+                            pushDescriptors(_command_buffer, external_indices, shared_fused_buffers);
+                        }
+                        else
+                        {
+                            auto &entry = persistent_descriptor_caches[_frame_index][cache_idx];
+                            if (entry.descriptor_set == VK_NULL_HANDLE)
+                            {
+                                VkDescriptorSetLayout layout = network.getDescriptorSetLayout();
+                                VkDescriptorSetAllocateInfo allocate_information{
+                                    .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                                    .pNext = nullptr,
+                                    .descriptorPool = descriptor_pools[_frame_index],
+                                    .descriptorSetCount = 1,
+                                    .pSetLayouts = &layout};
+
+                                if (vkAllocateDescriptorSets(device, &allocate_information, &entry.descriptor_set) != VK_SUCCESS)
+                                {
+                                    Logger::logMessage(Input_Format{"Graph_Executor::recordComputeNodes: Failed to allocate persistent descriptor set for fused node {}", i},
+                                                       Log_Level::LOG_ERROR,
+                                                       true,
+                                                       0,
+                                                       Log_Feature::DISPATCH_EXECUTION);
+                                    throw std::runtime_error("Failed to allocate descriptor set");
+                                }
+                            }
+
+                            if (!isBuffersMatching(entry, external_indices, shared_fused_buffers))
+                            {
+                                updateDescriptorSet(entry.descriptor_set, external_indices, shared_fused_buffers);
+                                entry.bound_binding_indices = external_indices;
+                                entry.bound_buffers.resize(shared_fused_buffers.size());
+                                for (size_t j = 0; j < shared_fused_buffers.size(); ++j)
+                                {
+                                    entry.bound_buffers[j] = shared_fused_buffers[j] ? shared_fused_buffers[j]->getBuffer() : VK_NULL_HANDLE;
+                                }
+                            }
+
+                            vkCmdBindDescriptorSets(_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, network.getPipelineLayout(), 0, 1, &entry.descriptor_set, 0, nullptr);
+                        }
 
                         if (!node.push_constants_data.empty())
                         {
@@ -1429,28 +1589,6 @@ void Graph_Executor::recordComputeNodes(VkCommandBuffer _command_buffer,
                 }
                 else
                 {
-                    auto &entry = persistent_descriptor_caches[_frame_index][cache_idx];
-                    if (entry.descriptor_set == VK_NULL_HANDLE)
-                    {
-                        VkDescriptorSetLayout layout = network.getDescriptorSetLayout();
-                        VkDescriptorSetAllocateInfo allocate_information{
-                            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-                            .pNext = nullptr,
-                            .descriptorPool = descriptor_pools[_frame_index],
-                            .descriptorSetCount = 1,
-                            .pSetLayouts = &layout};
-
-                        if (vkAllocateDescriptorSets(device, &allocate_information, &entry.descriptor_set) != VK_SUCCESS)
-                        {
-                            Logger::logMessage(Input_Format{"Graph_Executor::recordComputeNodes: Failed to allocate descriptor set for node {}", i},
-                                               Log_Level::LOG_ERROR,
-                                               true,
-                                               0,
-                                               Log_Feature::DISPATCH_EXECUTION);
-                            throw std::runtime_error("Failed to allocate descriptor set");
-                        }
-                    }
-
                     const auto *effective_buffers = &node.buffers;
                     std::vector<std::shared_ptr<gpu::vector>> localized_buffers;
                     if ((node.pipeline_id == Compute_Pipeline::ADAM_UPDATE || node.pipeline_id == Compute_Pipeline::ADAM_UPDATE_FP16) && node.buffers.size() > 4)
@@ -1472,21 +1610,50 @@ void Graph_Executor::recordComputeNodes(VkCommandBuffer _command_buffer,
                         effective_buffers = &localized_buffers;
                     }
 
-                    if (!isBuffersMatching(entry, *effective_buffers))
-                    {
-                        updateDescriptorSet(entry.descriptor_set, *effective_buffers);
-                        entry.bound_binding_indices.clear();
-                        entry.bound_buffers.resize(effective_buffers->size());
-                        for (size_t j = 0; j < effective_buffers->size(); ++j)
-                        {
-                            entry.bound_buffers[j] = (*effective_buffers)[j] ? (*effective_buffers)[j]->getBuffer() : VK_NULL_HANDLE;
-                        }
-                    }
-
                     VkPipeline target_pipeline = network.getPipeline(node.pipeline_id);
-
                     vkCmdBindPipeline(_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, target_pipeline);
-                    vkCmdBindDescriptorSets(_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, network.getPipelineLayout(), 0, 1, &entry.descriptor_set, 0, nullptr);
+
+                    if (network.isPushDescriptorActive())
+                    {
+                        pushDescriptors(_command_buffer, *effective_buffers);
+                    }
+                    else
+                    {
+                        auto &entry = persistent_descriptor_caches[_frame_index][cache_idx];
+                        if (entry.descriptor_set == VK_NULL_HANDLE)
+                        {
+                            VkDescriptorSetLayout layout = network.getDescriptorSetLayout();
+                            VkDescriptorSetAllocateInfo allocate_information{
+                                .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                                .pNext = nullptr,
+                                .descriptorPool = descriptor_pools[_frame_index],
+                                .descriptorSetCount = 1,
+                                .pSetLayouts = &layout};
+
+                            if (vkAllocateDescriptorSets(device, &allocate_information, &entry.descriptor_set) != VK_SUCCESS)
+                            {
+                                Logger::logMessage(Input_Format{"Graph_Executor::recordComputeNodes: Failed to allocate descriptor set for node {}", i},
+                                                   Log_Level::LOG_ERROR,
+                                                   true,
+                                                   0,
+                                                   Log_Feature::DISPATCH_EXECUTION);
+                                throw std::runtime_error("Failed to allocate descriptor set");
+                            }
+                        }
+
+                        if (!isBuffersMatching(entry, *effective_buffers))
+                        {
+                            updateDescriptorSet(entry.descriptor_set, *effective_buffers);
+                            entry.bound_binding_indices.clear();
+                            entry.bound_buffers.resize(effective_buffers->size());
+                            for (size_t j = 0; j < effective_buffers->size(); ++j)
+                            {
+                                entry.bound_buffers[j] = (*effective_buffers)[j] ? (*effective_buffers)[j]->getBuffer() : VK_NULL_HANDLE;
+                            }
+                        }
+
+                        vkCmdBindDescriptorSets(_command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, network.getPipelineLayout(), 0, 1, &entry.descriptor_set, 0, nullptr);
+                    }
 
                     if (!node.push_constants_data.empty())
                     {
@@ -1504,6 +1671,8 @@ void Graph_Executor::recordComputeNodes(VkCommandBuffer _command_buffer,
                 insertBufferMemoryBarriers(_command_buffer, getNodeWrittenBuffers(node));
             }
         }
+        shared_fused_buffers.clear();
+        shared_external_buffer_indices.clear();
     }
 
 void Graph_Executor::compileAndExecute(const Compute_Graph &_graph,

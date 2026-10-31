@@ -146,9 +146,8 @@ size_t Population::selectAction(size_t individual_index, const float *state_data
         return 0;
     }
 
-    return static_cast<size_t>(std::distance(
-        output_data.begin(),
-        std::max_element(output_data.begin(), output_data.end())));
+    auto max_it = std::max_element(output_data.begin(), output_data.end());
+    return static_cast<size_t>(std::distance(output_data.begin(), max_it));
 }
 
 size_t Population::selectAction(size_t individual_index, const Tensor &state_tensor) const
@@ -171,9 +170,8 @@ size_t Population::selectAction(size_t individual_index, const Tensor &state_ten
         return 0;
     }
 
-    return static_cast<size_t>(std::distance(
-        output_data.begin(),
-        std::max_element(output_data.begin(), output_data.end())));
+    auto max_it = std::max_element(output_data.begin(), output_data.end());
+    return static_cast<size_t>(std::distance(output_data.begin(), max_it));
 }
 
 void Population::selectBatchActions(const float *states_flat,

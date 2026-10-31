@@ -60,10 +60,12 @@ public:
 
     void zeroGradients();
     Tensor forward(const Tensor &_input_tensor);
-    Tensor backward(const Tensor &_target_tensor);
+    Tensor backward(const Tensor &_target_tensor, bool _is_loss_gradient = true);
 
     std::vector<std::pair<Tensor *, Tensor *>> getParametersAndGradients();
     std::vector<std::pair<Tensor *, Tensor *>> getParamsAndGrads();
+    std::vector<const Tensor *> getNoDecayParameters() const;
+    float clipGradients(float max_norm = 1.0f);
 
     void reset();
     void resetGradients() { zeroGradients(); }
@@ -153,6 +155,7 @@ public:
     void setExecutionTarget(Execution_Target _new_execution_target);
     void setTarget(Execution_Target _new_execution_target) { setExecutionTarget(_new_execution_target); }
     void setTrainingMode(bool _is_training_mode);
+    bool isTrainingMode() const noexcept { return is_training_mode; }
     void setGradientAccumulation(bool _enable) noexcept;
     void setLossScaler(Loss_Scaler _loss_scaler) noexcept { loss_scaler = _loss_scaler; }
     void setMixedPrecision(bool _enable) noexcept;
@@ -172,4 +175,48 @@ public:
     void setFusedGemmAdamEnabled(bool _enable) noexcept;
     bool isFusedGemmAdamEnabled() const noexcept;
     void invalidateStaticGraph() noexcept;
+
+    using Hook_Type = ::Hook_Type;
+    using Hook_Fn = ILayer::Hook_Fn;
+    using Void_Hook_Fn = ILayer::Void_Hook_Fn;
+
+    bool hasHooks() const noexcept
+    {
+        for (const auto &layer : layers)
+        {
+            if (layer && (layer->hasForwardHooks() || layer->hasPreBackwardHooks() || layer->hasPostBackwardHooks()))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    template <typename Callback_T>
+        requires std::is_invocable_v<Callback_T, const Tensor &>
+    Scoped_Hook registerForwardHook(size_t layer_index, Callback_T &&callback)
+    {
+        return layers.at(layer_index)->registerForwardHook(std::forward<Callback_T>(callback));
+    }
+
+    template <typename Callback_T>
+        requires std::is_invocable_v<Callback_T, const Tensor &>
+    Scoped_Hook registerBackwardHook(size_t layer_index, Callback_T &&callback, Hook_Type type = Hook_Type::PRE_BACKWARD)
+    {
+        return layers.at(layer_index)->registerBackwardHook(std::forward<Callback_T>(callback), type);
+    }
+
+    template <typename Callback_T>
+        requires std::is_invocable_v<Callback_T, const Tensor &>
+    Scoped_Hook registerPreBackwardHook(size_t layer_index, Callback_T &&callback)
+    {
+        return layers.at(layer_index)->registerPreBackwardHook(std::forward<Callback_T>(callback));
+    }
+
+    template <typename Callback_T>
+        requires std::is_invocable_v<Callback_T, const Tensor &>
+    Scoped_Hook registerPostBackwardHook(size_t layer_index, Callback_T &&callback)
+    {
+        return layers.at(layer_index)->registerPostBackwardHook(std::forward<Callback_T>(callback));
+    }
 };

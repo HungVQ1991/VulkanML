@@ -61,6 +61,7 @@ bool User_Preferences::load(const std::string &path)
             const auto &mem = j["memory"];
             if (mem.contains("staging_pool_initial_size_mb")) mem.at("staging_pool_initial_size_mb").get_to(memory_prefs.staging_pool_initial_size_mb);
             if (mem.contains("enable_timeline_semaphore")) mem.at("enable_timeline_semaphore").get_to(memory_prefs.enable_timeline_semaphore);
+            if (mem.contains("enable_push_descriptor")) mem.at("enable_push_descriptor").get_to(memory_prefs.enable_push_descriptor);
         }
 
         if (j.contains("logging"))
@@ -104,6 +105,7 @@ bool User_Preferences::save(const std::string &path) const
 
         j["memory"]["staging_pool_initial_size_mb"] = memory_prefs.staging_pool_initial_size_mb;
         j["memory"]["enable_timeline_semaphore"] = memory_prefs.enable_timeline_semaphore;
+        j["memory"]["enable_push_descriptor"] = memory_prefs.enable_push_descriptor;
 
         j["logging"]["enable_logging"] = logging_prefs.enable_logging;
         j["logging"]["level"] = logging_prefs.level;

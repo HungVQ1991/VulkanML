@@ -1,36 +1,120 @@
-output/
+# ====================================================================
+# VulkanML - Git Ignore Configuration
+# Chỉ giữ lại thư viện core (include/, src/, compute_shader/)
+# Bỏ qua các file bên ngoài (builds, applications, datasets, temp, IDE)
+# ====================================================================
+
+# --------------------------------------------------------------------
+# 1. Build & Compilation Artifacts
+# --------------------------------------------------------------------
 build/
-archive/
-__pycache__/
-.vscode/
-data/
-logs/
-compute_shader/*.spv
-CMakeLists.txt
-*.exe
-*.py
-cifar_train.cpp
-reload_model.cpp
-compile.bat
-convert.cpp
-.VSCodeCounter/
+bin/
+obj/
+out/
+output/
 temp/
-include/c_api.cpp
-include/rl/
-*.bin
-train_emnist.cpp
-MUJOCO_LOG.TXT
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+*.pdb
+*.ilk
+*.exp
+vulkanml_sdk/
+vulkanml_core.dll
 mujoco.dll
-mujoco/
-train_humanoid.cpp
-verify_humanoid.cpp
+
+# Build system & scripts
+CMakeLists.txt
+CMakeLists.txt.bak
+compile.bat
+*.bat
+
+# --------------------------------------------------------------------
+# 2. Datasets, Model Weights & Checkpoints
+# --------------------------------------------------------------------
+data/
 assets/
-train_mujoco.cpp
+archive/
+*.bin
+*.nnck
+*.weights
+*.pt
+*.pth
+*.onnx
+
+# --------------------------------------------------------------------
+# 3. Logs, Backups & Temporary Scratch Files
+# --------------------------------------------------------------------
+logs/
+backup/
+*.log
+*.bak
+*.tmp
+*.cache
+MUJOCO_LOG.TXT
+
+# Temporary test shaders in root
+/*.spv
+/*.comp
+
+# Loose shaders in compute_shader root (preserves compute_shader/spv/ and comp/)
+compute_shader/*.spv
+
+# --------------------------------------------------------------------
+# 4. External Applications & Non-Core Domains
+# --------------------------------------------------------------------
+# CheXpert / Chest Localization Application
+include/chexlocalize/
+src/chexlocalize/
+chexpert_thresholds.json
+pack_chest_segmentation.py
+
+# Reinforcement Learning & MuJoCo Environments
+include/rl/
+src/rl/
 include/environment/
-.editorconfig
-.prettierrc
+mujoco/
+
+# Tokenizer Tools & Datasets
 include/tokenizer/
+src/tokenizer/
+tokenizer/
 token.cpp
 build_syllable_tokenizer.cpp
-tokenizer/
+
+# --------------------------------------------------------------------
+# 5. Standalone Training, Benchmark & Experiment Scripts
+# (Chỉ giữ lại test.cpp và example.cpp cho core library)
+# --------------------------------------------------------------------
+train_*.cpp
+!train_sllm.cpp
+benchmark_*.cpp
+validate_*.cpp
+verify_*.cpp
+cifar_train.cpp
+reload_model.cpp
+convert.cpp
+include/c_api.cpp
+
+# Python scripts & caches
+__pycache__/
+*.py
+*.py[cod]
+.pytest_cache/
+
+# --------------------------------------------------------------------
+# 6. IDE, Editors, OS & User Configuration
+# --------------------------------------------------------------------
+.vscode/
+.vs/
+.idea/
+.VSCodeCounter/
+.editorconfig
+.prettierrc
+user_preferences.json
 VULKANML_PROJECT_REVIEW.md
+Thumbs.db
+.DS_Store

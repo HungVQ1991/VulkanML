@@ -97,7 +97,16 @@ Gpu_Tensor_Impl::Gpu_Tensor_Impl(Shape tensor_shape, Data_Type type)
         updateShapeAndStrides(tensor_shape);
         if (total_elements > 0)
         {
-            storage = std::make_shared<gpu::vector>(Execution_Engine::getInstance().getContext(), total_elements, data_type);
+            if (data_type == Data_Type::TERNARY_INT2)
+            {
+                size_t bytes = getTensorStorageBytes(data_type, shape);
+                storage = std::make_shared<gpu::vector>(Execution_Engine::getInstance().getContext());
+                storage->allocateMemoryByBytes(bytes, data_type, total_elements);
+            }
+            else
+            {
+                storage = std::make_shared<gpu::vector>(Execution_Engine::getInstance().getContext(), total_elements, data_type);
+            }
         }
     }
 
@@ -114,10 +123,13 @@ Gpu_Tensor_Impl::Gpu_Tensor_Impl(Shape tensor_shape, const std::vector<float> &h
         }
         if (total_elements > 0)
         {
-            storage = std::make_shared<gpu::vector>(Execution_Engine::getInstance().getContext(), host_data);
-            if (data_type != Data_Type::FLOAT32)
+            if (data_type == Data_Type::FLOAT32)
             {
-                storage->setDataType(data_type);
+                storage = std::make_shared<gpu::vector>(Execution_Engine::getInstance().getContext(), host_data);
+            }
+            else
+            {
+                storage = std::make_shared<gpu::vector>(Execution_Engine::getInstance().getContext(), total_elements, data_type);
                 storage->uploadData(host_data);
             }
         }
@@ -231,6 +243,24 @@ void Gpu_Tensor_Impl::updateSlice(size_t axis, size_t start, const Tensor_Impl &
         host_cache.clear();
         is_fp16_cache_dirty = true;
     }
+
+std::shared_ptr<gpu::vector> Gpu_Tensor_Impl::getOrUploadIndicesBuffer(const std::vector<int32_t>& indices) const
+{
+    size_t count = indices.size();
+    std::vector<float> idx_float(count);
+    for (size_t i = 0; i < count; ++i)
+    {
+        idx_float[i] = static_cast<float>(indices[i]);
+    }
+
+    if (!cached_indices_storage || cached_indices_storage->getSize() != count || cached_indices_storage->getDataType() != Data_Type::FLOAT32)
+    {
+        cached_indices_storage = std::make_shared<gpu::vector>(Execution_Engine::getInstance().getContext(), count, Data_Type::FLOAT32);
+    }
+
+    cached_indices_storage->uploadData(idx_float);
+    return cached_indices_storage;
+}
 
 void Gpu_Tensor_Impl::gatherRows(const std::vector<int32_t> &indices, Tensor_Impl &output) const
 {
@@ -2798,3 +2828,33 @@ Mutable_Storage_Handle Gpu_Tensor_Impl::getStorage()
         }
         return storage;
     }
+
+const std::vector<uint32_t> &Gpu_Tensor_Impl::getPackedData() const
+{
+    if (total_elements == 0 || !storage)
+    {
+        host_cache_u32.clear();
+        return host_cache_u32;
+    }
+    Execution_Engine::getInstance().getContext().executePendingTransfers();
+    Execution_Engine::getInstance().getContext().flush();
+    size_t words = storage->getBufferSizeInBytes() / sizeof(uint32_t);
+    host_cache_u32.resize(words);
+    storage->downloadData(host_cache_u32);
+    return host_cache_u32;
+}
+
+void Gpu_Tensor_Impl::uploadPackedData(const std::vector<uint32_t> &packed_data)
+{
+    size_t required_bytes = getTensorStorageBytes(data_type, shape);
+    if (packed_data.size() * sizeof(uint32_t) != required_bytes)
+    {
+        throw std::invalid_argument("uploadPackedData size mismatch");
+    }
+    if (!storage || storage->getBufferSizeInBytes() != required_bytes)
+    {
+        storage = std::make_shared<gpu::vector>(Execution_Engine::getInstance().getContext());
+        storage->allocateMemoryByBytes(required_bytes, data_type, total_elements);
+    }
+    storage->uploadData(packed_data);
+}

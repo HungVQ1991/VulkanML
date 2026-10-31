@@ -17,6 +17,7 @@
 #include "helper/logger.h"
 #include "helper/magic_enum.hpp"
 #include "math/tensor.h"
+#include "ops/activation/activation.h"
 
 
 Softmax_Layer::Softmax_Layer(bool _is_fused_with_loss, Execution_Target _execution_target)
@@ -44,11 +45,11 @@ Tensor Softmax_Layer::forward(const Tensor &_input_tensor)
         if (input_tensor.getDataType() == Data_Type::FLOAT16)
         {
             input_tensor.to(Data_Type::FLOAT32, input_fp32);
-            input_fp32.softmax(output_tensor);
+            ops::activation::softmax(input_fp32, output_tensor);
         }
         else
         {
-            input_tensor.softmax(output_tensor);
+            ops::activation::softmax(input_tensor, output_tensor);
         }
         is_forward_completed = true;
         return output_tensor;
@@ -104,7 +105,7 @@ Tensor Softmax_Layer::backward(const Tensor& _output_gradient)
             return _output_gradient;
         }
 
-        output_tensor.softmaxBackward(_output_gradient, input_gradient_tensor);
+        ops::activation::softmaxBackward(output_tensor, _output_gradient, input_gradient_tensor);
         return input_gradient_tensor;
     }
 

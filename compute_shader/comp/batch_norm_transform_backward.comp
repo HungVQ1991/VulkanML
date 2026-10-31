@@ -25,6 +25,13 @@ void main() {
     
     float std_inv = 1.0 / sqrt(var_data[j] + pcs.epsilon);
     float g_val = gamma_data[j];
+
+    // Evaluation mode (pcs.batch_size == 0): dy/dx = gamma / sqrt(running_var + eps)
+    if (pcs.batch_size == 0) {
+        dx_data[idx] = g_val * std_inv * dout_data[idx];
+        return;
+    }
+
     float dg_val = dgamma_data[j];
     float db_val = dbeta_data[j];
     float inv_n = 1.0 / float(pcs.batch_size);

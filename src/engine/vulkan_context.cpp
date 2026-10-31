@@ -201,7 +201,7 @@ void Vulkan_Context::selectPhysicalDevice()
     {
         VkPhysicalDeviceProperties prop;
         vkGetPhysicalDeviceProperties(dev, &prop);
-        std::cout << prop.deviceName << "\n";
+        Logger::logMessage(static_cast<std::string>(prop.deviceName), Log_Level::LOG_INFO, true, 1);
     }
     constexpr std::array<size_t, 5> priority_order = {2, 1, 3, 4, 0};
     VkPhysicalDevice best_device = VK_NULL_HANDLE;
@@ -349,6 +349,66 @@ void Vulkan_Context::createLogicalDevice()
 
     VkPhysicalDeviceFeatures enabled_features{};
 
+    VkPhysicalDeviceSubgroupSizeControlFeatures subgroup_size_control_features{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES,
+        .pNext = nullptr,
+        .subgroupSizeControl = VK_TRUE,
+        .computeFullSubgroups = VK_TRUE};
+
+    bool has_subgroup_control_ext = is_extension_available(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
+    if (has_subgroup_control_ext)
+    {
+        VkPhysicalDeviceSubgroupSizeControlFeatures check_features{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES,
+            .pNext = nullptr,
+            .subgroupSizeControl = VK_FALSE,
+            .computeFullSubgroups = VK_FALSE};
+        VkPhysicalDeviceFeatures2 features2{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+            .pNext = &check_features};
+        vkGetPhysicalDeviceFeatures2(physical_device, &features2);
+
+        if (check_features.subgroupSizeControl == VK_TRUE)
+        {
+            required_extensions.push_back(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
+            subgroup_size_control_features.subgroupSizeControl = VK_TRUE;
+            subgroup_size_control_features.computeFullSubgroups = check_features.computeFullSubgroups;
+            subgroup_size_control_features.pNext = device_create_pnext;
+            device_create_pnext = &subgroup_size_control_features;
+            is_subgroup_size_control_supported = true;
+            is_subgroup_size_control_enabled = true;
+            Logger::logMessage("Vulkan_Context::createLogicalDevice: Subgroup size control (VK_EXT_subgroup_size_control) enabled",
+                               Log_Level::LOG_INFO,
+                               true,
+                               0,
+                               Log_Feature::DEVICE_MANAGEMENT);
+        }
+    }
+
+    bool has_push_descriptor_ext = is_extension_available(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
+    if (has_push_descriptor_ext)
+    {
+        is_push_descriptor_supported = true;
+        if (User_Preferences::getInstance().isPushDescriptorEnabled())
+        {
+            required_extensions.push_back(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
+            is_push_descriptor_enabled = true;
+            Logger::logMessage("Vulkan_Context::createLogicalDevice: Push descriptors (VK_KHR_push_descriptor) enabled",
+                               Log_Level::LOG_INFO,
+                               true,
+                               0,
+                               Log_Feature::DEVICE_MANAGEMENT);
+        }
+        else
+        {
+            Logger::logMessage("Vulkan_Context::createLogicalDevice: Push descriptors supported but disabled by user preferences",
+                               Log_Level::LOG_INFO,
+                               true,
+                               0,
+                               Log_Feature::DEVICE_MANAGEMENT);
+        }
+    }
+
     VkDeviceCreateInfo device_create_information{
         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
         .pNext = device_create_pnext,
@@ -369,6 +429,22 @@ void Vulkan_Context::createLogicalDevice()
                            0,
                            Log_Feature::DEVICE_MANAGEMENT);
         throw std::runtime_error("Failed to create logical device");
+    }
+
+    if (is_push_descriptor_enabled)
+    {
+        vkCmdPushDescriptorSetKHR_ptr = reinterpret_cast<PFN_vkCmdPushDescriptorSetKHR>(
+            vkGetDeviceProcAddr(device, "vkCmdPushDescriptorSetKHR")
+        );
+        if (!vkCmdPushDescriptorSetKHR_ptr)
+        {
+            Logger::logMessage("Vulkan_Context::createLogicalDevice: Failed to load vkCmdPushDescriptorSetKHR proc address",
+                               Log_Level::LOG_WARNING,
+                               true,
+                               0,
+                               Log_Feature::DEVICE_MANAGEMENT);
+            is_push_descriptor_enabled = false;
+        }
     }
 
     vkGetDeviceQueue(device, compute_queue_family_index, 0, &compute_queue);
@@ -524,15 +600,14 @@ Vulkan_Context::~Vulkan_Context()
 
         if (staging_buffers[i] != VK_NULL_HANDLE)
         {
-            vkUnmapMemory(device, staging_allocations[i].memory);
             vkDestroyBuffer(device, staging_buffers[i], nullptr);
             allocator->free(staging_allocations[i]);
+            staging_mapped_pointers[i] = nullptr;
         }
     }
 
     if (readback_staging_buffer != VK_NULL_HANDLE)
     {
-        vkUnmapMemory(device, readback_staging_allocation.memory);
         vkDestroyBuffer(device, readback_staging_buffer, nullptr);
         allocator->free(readback_staging_allocation);
         readback_staging_buffer = VK_NULL_HANDLE;
@@ -547,6 +622,24 @@ Vulkan_Context::~Vulkan_Context()
     }
 
     allocator.reset();
+
+    if (transfer_command_buffer != VK_NULL_HANDLE)
+    {
+        vkFreeCommandBuffers(device, command_pool, 1, &transfer_command_buffer);
+        transfer_command_buffer = VK_NULL_HANDLE;
+    }
+
+    if (immediate_copy_command_buffer != VK_NULL_HANDLE)
+    {
+        vkFreeCommandBuffers(device, command_pool, 1, &immediate_copy_command_buffer);
+        immediate_copy_command_buffer = VK_NULL_HANDLE;
+    }
+
+    if (immediate_copy_fence != VK_NULL_HANDLE)
+    {
+        vkDestroyFence(device, immediate_copy_fence, nullptr);
+        immediate_copy_fence = VK_NULL_HANDLE;
+    }
 
     if (command_pool != VK_NULL_HANDLE)
     {
@@ -617,16 +710,21 @@ uint32_t Vulkan_Context::findMemoryType(uint32_t _type_filter, VkMemoryPropertyF
     throw std::runtime_error("Failed to find suitable memory type");
 }
 
-void *Vulkan_Context::allocateStagingSpace(uint32_t _frame_index, VkDeviceSize _size, VkBuffer &_out_buffer, VkDeviceSize &_out_offset) const
+void* Vulkan_Context::allocateStagingSpace(uint32_t _frame_index, VkDeviceSize _size, VkBuffer& _out_buffer, VkDeviceSize& _out_offset) const
 {
     if (_frame_index >= MAX_FRAMES_IN_FLIGHT)
     {
-        Logger::logMessage(Input_Format{"Vulkan_Context::allocateStagingSpace: frame_index out of bounds ({})", _frame_index},
-                           Log_Level::LOG_WARNING,
-                           true,
-                           0,
-                           Log_Feature::MEMORY_ALLOCATION | Log_Feature::MEMORY_TRANSFER);
+        Logger::logMessage(Input_Format{ "Vulkan_Context::allocateStagingSpace: frame_index out of bounds ({})", _frame_index },
+            Log_Level::LOG_WARNING,
+            true,
+            0,
+            Log_Feature::MEMORY_ALLOCATION | Log_Feature::MEMORY_TRANSFER);
         _frame_index = _frame_index % MAX_FRAMES_IN_FLIGHT;
+    }
+
+    if (!is_frame_ready[_frame_index])
+    {
+        const_cast<Vulkan_Context*>(this)->prepareFrame(_frame_index);
     }
 
     std::lock_guard lock(context_mutex);
@@ -634,116 +732,117 @@ void *Vulkan_Context::allocateStagingSpace(uint32_t _frame_index, VkDeviceSize _
     constexpr VkDeviceSize ALIGNMENT = 256;
     VkDeviceSize aligned_size = (_size + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1);
 
-    if (staging_buffers[_frame_index] == VK_NULL_HANDLE || aligned_size > staging_capacities[_frame_index])
+    if (staging_buffers[_frame_index] == VK_NULL_HANDLE || current_offsets[_frame_index] + aligned_size > staging_capacities[_frame_index])
     {
-        constexpr VkDeviceSize INITIAL_STAGING_CAPACITY = 32 * 1024 * 1024;
-        VkDeviceSize calculated_size = std::max(staging_capacities[_frame_index] * 2, current_offsets[_frame_index] + aligned_size + 1024 * 1024);
-        VkDeviceSize new_capacity = std::max(INITIAL_STAGING_CAPACITY, calculated_size);
-
-        Logger::logMessage(Input_Format{"Vulkan_Context::allocateStagingSpace: Reallocating staging buffer for frame {} to new capacity {} bytes", _frame_index, new_capacity},
-                           Log_Level::LOG_WARNING,
-                           false,
-                           0,
-                           Log_Feature::MEMORY_ALLOCATION | Log_Feature::MEMORY_TRANSFER);
-
-        VkBufferCreateInfo buffer_create_information{
-            .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .size = new_capacity,
-            .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-            .queueFamilyIndexCount = 0,
-            .pQueueFamilyIndices = nullptr};
-
-        VkBuffer new_buffer = VK_NULL_HANDLE;
-        if (vkCreateBuffer(device, &buffer_create_information, nullptr, &new_buffer) != VK_SUCCESS)
+        if (staging_buffers[_frame_index] != VK_NULL_HANDLE && aligned_size <= staging_capacities[_frame_index])
         {
-            Logger::logMessage("Vulkan_Context::allocateStagingSpace: Failed to create new staging buffer",
-                               Log_Level::LOG_ERROR,
-                               true,
-                               0,
-                               Log_Feature::MEMORY_ALLOCATION | Log_Feature::MEMORY_TRANSFER);
-            throw std::runtime_error("Failed to create staging buffer");
-        }
-
-        VkMemoryRequirements memory_requirements;
-        vkGetBufferMemoryRequirements(device, new_buffer, &memory_requirements);
-
-        Memory_Allocation new_allocation = allocateMemory(memory_requirements, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-        if (vkBindBufferMemory(device, new_buffer, new_allocation.memory, new_allocation.offset) != VK_SUCCESS)
-        {
-            vkDestroyBuffer(device, new_buffer, nullptr);
-            allocator->free(new_allocation);
-            Logger::logMessage("Vulkan_Context::allocateStagingSpace: Failed to bind staging buffer memory",
-                               Log_Level::LOG_ERROR,
-                               true,
-                               0,
-                               Log_Feature::MEMORY_ALLOCATION | Log_Feature::MEMORY_TRANSFER);
-            throw std::runtime_error("Failed to bind staging memory");
-        }
-
-        void *new_mapped_pointer = nullptr;
-        if (vkMapMemory(device, new_allocation.memory, new_allocation.offset, new_capacity, 0, &new_mapped_pointer) != VK_SUCCESS)
-        {
-            vkDestroyBuffer(device, new_buffer, nullptr);
-            allocator->free(new_allocation);
-            Logger::logMessage("Vulkan_Context::allocateStagingSpace: Failed to map staging memory",
-                               Log_Level::LOG_ERROR,
-                               true,
-                               0,
-                               Log_Feature::MEMORY_ALLOCATION | Log_Feature::MEMORY_TRANSFER);
-            throw std::runtime_error("Failed to map staging memory");
-        }
-
-        if (staging_buffers[_frame_index] != VK_NULL_HANDLE)
-        {
-            if (current_offsets[_frame_index] > 0)
+            executePendingTransfers();
+            if (!is_frame_ready[_frame_index])
             {
-                std::memcpy(new_mapped_pointer, staging_mapped_pointers[_frame_index], current_offsets[_frame_index]);
+                const_cast<Vulkan_Context*>(this)->prepareFrame(_frame_index);
+            }
+            current_offsets[_frame_index] = 0;
+        }
+        else
+        {
+            constexpr VkDeviceSize INITIAL_STAGING_CAPACITY = 32 * 1024 * 1024;
+            VkDeviceSize calculated_size = std::max(staging_capacities[_frame_index] * 2, current_offsets[_frame_index] + aligned_size + 1024 * 1024);
+            VkDeviceSize new_capacity = std::max(INITIAL_STAGING_CAPACITY, calculated_size);
+
+            Logger::logMessage(Input_Format{ "Vulkan_Context::allocateStagingSpace: Reallocating staging buffer for frame {} to new capacity {} bytes", _frame_index, new_capacity },
+                Log_Level::LOG_WARNING,
+                false,
+                0,
+                Log_Feature::MEMORY_ALLOCATION | Log_Feature::MEMORY_TRANSFER);
+
+            VkBufferCreateInfo buffer_create_information{
+                .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .size = new_capacity,
+                .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+                .queueFamilyIndexCount = 0,
+                .pQueueFamilyIndices = nullptr };
+
+            VkBuffer new_buffer = VK_NULL_HANDLE;
+            if (vkCreateBuffer(device, &buffer_create_information, nullptr, &new_buffer) != VK_SUCCESS)
+            {
+                Logger::logMessage("Vulkan_Context::allocateStagingSpace: Failed to create new staging buffer",
+                    Log_Level::LOG_ERROR,
+                    true,
+                    0,
+                    Log_Feature::MEMORY_ALLOCATION | Log_Feature::MEMORY_TRANSFER);
+                throw std::runtime_error("Failed to create staging buffer");
             }
 
-            vkUnmapMemory(device, staging_allocations[_frame_index].memory);
-            staging_garbages[_frame_index].push_back(Staging_Garbage{
-                .buffer = staging_buffers[_frame_index],
-                .allocation = staging_allocations[_frame_index]});
+            VkMemoryRequirements memory_requirements;
+            vkGetBufferMemoryRequirements(device, new_buffer, &memory_requirements);
 
-            for (auto &task : pending_transfer_tasks)
+            Memory_Allocation new_allocation = allocateMemory(memory_requirements, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+            if (vkBindBufferMemory(device, new_buffer, new_allocation.memory, new_allocation.offset) != VK_SUCCESS)
             {
-                if (task.source_buffer == staging_buffers[_frame_index])
+                vkDestroyBuffer(device, new_buffer, nullptr);
+                allocator->free(new_allocation);
+                Logger::logMessage("Vulkan_Context::allocateStagingSpace: Failed to bind staging buffer memory",
+                    Log_Level::LOG_ERROR,
+                    true,
+                    0,
+                    Log_Feature::MEMORY_ALLOCATION | Log_Feature::MEMORY_TRANSFER);
+                throw std::runtime_error("Failed to bind staging memory");
+            }
+
+            void* new_mapped_pointer = new_allocation.mapped_pointer;
+            if (new_mapped_pointer == nullptr)
+            {
+                vkDestroyBuffer(device, new_buffer, nullptr);
+                allocator->free(new_allocation);
+                Logger::logMessage("Vulkan_Context::allocateStagingSpace: Failed to map staging memory",
+                    Log_Level::LOG_ERROR,
+                    true,
+                    0,
+                    Log_Feature::MEMORY_ALLOCATION | Log_Feature::MEMORY_TRANSFER);
+                throw std::runtime_error("Failed to map staging memory");
+            }
+
+            if (staging_buffers[_frame_index] != VK_NULL_HANDLE)
+            {
+                if (current_offsets[_frame_index] > 0)
                 {
-                    task.source_buffer = new_buffer;
+                    std::memcpy(new_mapped_pointer, staging_mapped_pointers[_frame_index], current_offsets[_frame_index]);
+                }
+
+                staging_garbages[_frame_index].push_back(Staging_Garbage{
+                    .buffer = staging_buffers[_frame_index],
+                    .allocation = staging_allocations[_frame_index] });
+
+                for (auto& task : pending_transfer_tasks)
+                {
+                    if (task.source_buffer == staging_buffers[_frame_index])
+                    {
+                        task.source_buffer = new_buffer;
+                    }
                 }
             }
-        }
 
-        staging_buffers[_frame_index] = new_buffer;
-        staging_allocations[_frame_index] = new_allocation;
-        staging_mapped_pointers[_frame_index] = new_mapped_pointer;
-        staging_capacities[_frame_index] = new_capacity;
-    }
-
-    if (current_offsets[_frame_index] + aligned_size > staging_capacities[_frame_index])
-    {
-        const_cast<Vulkan_Context*>(this)->executePendingTransfers();
-        if (!is_frame_ready[_frame_index])
-        {
-            const_cast<Vulkan_Context*>(this)->prepareFrame(_frame_index);
+            staging_buffers[_frame_index] = new_buffer;
+            staging_allocations[_frame_index] = new_allocation;
+            staging_mapped_pointers[_frame_index] = new_mapped_pointer;
+            staging_capacities[_frame_index] = new_capacity;
         }
-        current_offsets[_frame_index] = 0;
     }
 
     _out_buffer = staging_buffers[_frame_index];
     _out_offset = current_offsets[_frame_index];
-    void *target_pointer = static_cast<char *>(staging_mapped_pointers[_frame_index]) + _out_offset;
+    void* target_pointer = static_cast<char*>(staging_mapped_pointers[_frame_index]) + _out_offset;
     current_offsets[_frame_index] += aligned_size;
 
-    Logger::logMessage(Input_Format{"Vulkan_Context::allocateStagingSpace: Allocated {} bytes in staging buffer for frame {}", _size, _frame_index},
-                       Log_Level::LOG_DEBUG,
-                       true,
-                       0,
-                       Log_Feature::MEMORY_ALLOCATION | Log_Feature::MEMORY_TRANSFER);
+    Logger::logMessage(Input_Format{ "Vulkan_Context::allocateStagingSpace: Allocated {} bytes in staging buffer for frame {}", _size, _frame_index },
+        Log_Level::LOG_DEBUG,
+        true,
+        0,
+        Log_Feature::MEMORY_ALLOCATION | Log_Feature::MEMORY_TRANSFER);
 
     return target_pointer;
 }
@@ -835,22 +934,24 @@ void Vulkan_Context::executePendingTransfers() const
         pending_transfer_tasks.clear();
     }
 
-    VkCommandBufferAllocateInfo allocate_information{
-        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-        .pNext = nullptr,
-        .commandPool = command_pool,
-        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-        .commandBufferCount = 1};
-
-    VkCommandBuffer command_buffer = VK_NULL_HANDLE;
-    if (vkAllocateCommandBuffers(device, &allocate_information, &command_buffer) != VK_SUCCESS)
+    if (transfer_command_buffer == VK_NULL_HANDLE)
     {
-        Logger::logMessage("Vulkan_Context::executePendingTransfers: Failed to allocate command buffer",
-                           Log_Level::LOG_ERROR,
-                           true,
-                           0,
-                           Log_Feature::DEVICE_MANAGEMENT | Log_Feature::MEMORY_TRANSFER);
-        throw std::runtime_error("Failed to allocate command buffer");
+        VkCommandBufferAllocateInfo allocate_information{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .pNext = nullptr,
+            .commandPool = command_pool,
+            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1};
+
+        if (vkAllocateCommandBuffers(device, &allocate_information, &transfer_command_buffer) != VK_SUCCESS)
+        {
+            Logger::logMessage("Vulkan_Context::executePendingTransfers: Failed to allocate command buffer",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::DEVICE_MANAGEMENT | Log_Feature::MEMORY_TRANSFER);
+            throw std::runtime_error("Failed to allocate command buffer");
+        }
     }
 
     VkCommandBufferBeginInfo begin_information{
@@ -859,9 +960,8 @@ void Vulkan_Context::executePendingTransfers() const
         .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
         .pInheritanceInfo = nullptr};
 
-    if (vkBeginCommandBuffer(command_buffer, &begin_information) != VK_SUCCESS)
+    if (vkBeginCommandBuffer(transfer_command_buffer, &begin_information) != VK_SUCCESS)
     {
-        vkFreeCommandBuffers(device, command_pool, 1, &command_buffer);
         Logger::logMessage("Vulkan_Context::executePendingTransfers: Failed to begin command buffer",
                            Log_Level::LOG_ERROR,
                            true,
@@ -880,7 +980,7 @@ void Vulkan_Context::executePendingTransfers() const
 
         if (task.source_buffer == VK_NULL_HANDLE)
         {
-            vkCmdFillBuffer(command_buffer, task.destination_buffer, task.destination_offset, task.size, static_cast<uint32_t>(task.source_offset));
+            vkCmdFillBuffer(transfer_command_buffer, task.destination_buffer, task.destination_offset, task.size, static_cast<uint32_t>(task.source_offset));
         }
         else
         {
@@ -889,7 +989,7 @@ void Vulkan_Context::executePendingTransfers() const
                 .dstOffset = task.destination_offset,
                 .size = task.size};
 
-            vkCmdCopyBuffer(command_buffer, task.source_buffer, task.destination_buffer, 1, &copy_region);
+            vkCmdCopyBuffer(transfer_command_buffer, task.source_buffer, task.destination_buffer, 1, &copy_region);
         }
 
         VkBufferMemoryBarrier memory_barrier{
@@ -903,15 +1003,14 @@ void Vulkan_Context::executePendingTransfers() const
             .offset = task.destination_offset,
             .size = task.size};
 
-        vkCmdPipelineBarrier(command_buffer,
+        vkCmdPipelineBarrier(transfer_command_buffer,
                              VK_PIPELINE_STAGE_TRANSFER_BIT,
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
                              0, 0, nullptr, 1, &memory_barrier, 0, nullptr);
     }
 
-    if (vkEndCommandBuffer(command_buffer) != VK_SUCCESS)
+    if (vkEndCommandBuffer(transfer_command_buffer) != VK_SUCCESS)
     {
-        vkFreeCommandBuffers(device, command_pool, 1, &command_buffer);
         Logger::logMessage("Vulkan_Context::executePendingTransfers: Failed to end command buffer",
                            Log_Level::LOG_ERROR,
                            true,
@@ -927,13 +1026,12 @@ void Vulkan_Context::executePendingTransfers() const
         .pWaitSemaphores = nullptr,
         .pWaitDstStageMask = nullptr,
         .commandBufferCount = 1,
-        .pCommandBuffers = &command_buffer,
+        .pCommandBuffers = &transfer_command_buffer,
         .signalSemaphoreCount = 0,
         .pSignalSemaphores = nullptr};
 
     if (vkQueueSubmit(compute_queue, 1, &submit_information, VK_NULL_HANDLE) != VK_SUCCESS)
     {
-        vkFreeCommandBuffers(device, command_pool, 1, &command_buffer);
         Logger::logMessage("Vulkan_Context::executePendingTransfers: Failed to submit transfer queue",
                            Log_Level::LOG_ERROR,
                            true,
@@ -943,7 +1041,6 @@ void Vulkan_Context::executePendingTransfers() const
     }
 
     vkQueueWaitIdle(compute_queue);
-    vkFreeCommandBuffers(device, command_pool, 1, &command_buffer);
 }
 
 void Vulkan_Context::cleanGarbage(uint32_t _frame_index) const
@@ -1021,11 +1118,11 @@ void Vulkan_Context::prepareFrame(uint32_t _frame_index)
 
     if (device == VK_NULL_HANDLE || fences[target_frame] == VK_NULL_HANDLE)
     {
-        Logger::logMessage(Input_Format{"Vulkan_Context::prepareFrame: Invalid device or fence handle for frame {}", target_frame},
-                           Log_Level::LOG_ERROR,
-                           true,
-                           0,
-                           Log_Feature::DEVICE_MANAGEMENT | Log_Feature::SYNCHRONIZATION);
+        Logger::logMessage(Input_Format{ "Vulkan_Context::prepareFrame: Invalid device or fence handle for frame {}", target_frame },
+            Log_Level::LOG_ERROR,
+            true,
+            0,
+            Log_Feature::DEVICE_MANAGEMENT | Log_Feature::SYNCHRONIZATION);
         throw std::runtime_error("invalid handle");
     }
 
@@ -1036,6 +1133,7 @@ void Vulkan_Context::prepareFrame(uint32_t _frame_index)
     }
 
     cleanGarbage(target_frame);
+    resetStagingOffset(target_frame);
     is_frame_ready[target_frame] = true;
 }
 
@@ -1079,6 +1177,154 @@ void Vulkan_Context::copyBuffer(VkBuffer _source_buffer,
                        true,
                        0,
                        Log_Feature::MEMORY_TRANSFER);
+}
+
+void Vulkan_Context::copyBufferImmediate(VkBuffer _source_buffer,
+                                        VkBuffer _destination_buffer,
+                                        VkDeviceSize _size) const
+{
+    if (_source_buffer == VK_NULL_HANDLE || _destination_buffer == VK_NULL_HANDLE || _size == 0)
+    {
+        return;
+    }
+
+    std::lock_guard<std::recursive_mutex> lock(context_mutex);
+
+    if (immediate_copy_command_buffer == VK_NULL_HANDLE)
+    {
+        VkCommandBufferAllocateInfo allocate_information{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .pNext = nullptr,
+            .commandPool = command_pool,
+            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1};
+
+        if (vkAllocateCommandBuffers(device, &allocate_information, &immediate_copy_command_buffer) != VK_SUCCESS)
+        {
+            Logger::logMessage("Vulkan_Context::copyBufferImmediate: Failed to allocate command buffer",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::MEMORY_TRANSFER);
+            throw std::runtime_error("Failed to allocate command buffer");
+        }
+    }
+
+    VkCommandBufferBeginInfo begin_information{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .pNext = nullptr,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+        .pInheritanceInfo = nullptr};
+
+    if (vkBeginCommandBuffer(immediate_copy_command_buffer, &begin_information) != VK_SUCCESS)
+    {
+        Logger::logMessage("Vulkan_Context::copyBufferImmediate: Failed to begin command buffer",
+                           Log_Level::LOG_ERROR,
+                           true,
+                           0,
+                           Log_Feature::MEMORY_TRANSFER);
+        throw std::runtime_error("Failed to begin command buffer");
+    }
+
+    VkBufferCopy copy_region{
+        .srcOffset = 0,
+        .dstOffset = 0,
+        .size = _size};
+    vkCmdCopyBuffer(immediate_copy_command_buffer, _source_buffer, _destination_buffer, 1, &copy_region);
+
+    if (vkEndCommandBuffer(immediate_copy_command_buffer) != VK_SUCCESS)
+    {
+        Logger::logMessage("Vulkan_Context::copyBufferImmediate: Failed to end command buffer",
+                           Log_Level::LOG_ERROR,
+                           true,
+                           0,
+                           Log_Feature::MEMORY_TRANSFER);
+        throw std::runtime_error("Failed to end command buffer");
+    }
+
+    if (isTimelineSemaphoreSupported())
+    {
+        uint64_t signal_val = getNextTimelineValue();
+        VkSemaphore sem = getTimelineSemaphore();
+
+        VkTimelineSemaphoreSubmitInfo timeline_submit_info{
+            .sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
+            .pNext = nullptr,
+            .waitSemaphoreValueCount = 0,
+            .pWaitSemaphoreValues = nullptr,
+            .signalSemaphoreValueCount = 1,
+            .pSignalSemaphoreValues = &signal_val};
+
+        VkSubmitInfo submit_information{
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .pNext = &timeline_submit_info,
+            .waitSemaphoreCount = 0,
+            .pWaitSemaphores = nullptr,
+            .pWaitDstStageMask = nullptr,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &immediate_copy_command_buffer,
+            .signalSemaphoreCount = 1,
+            .pSignalSemaphores = &sem};
+
+        if (vkQueueSubmit(compute_queue, 1, &submit_information, VK_NULL_HANDLE) != VK_SUCCESS)
+        {
+            Logger::logMessage("Vulkan_Context::copyBufferImmediate: Failed to submit copy command",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::MEMORY_TRANSFER);
+            throw std::runtime_error("Failed to submit copy command");
+        }
+
+        waitTimelineSemaphore(signal_val);
+    }
+    else
+    {
+        if (immediate_copy_fence == VK_NULL_HANDLE)
+        {
+            VkFenceCreateInfo fence_create_information{
+                .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0};
+
+            if (vkCreateFence(device, &fence_create_information, nullptr, &immediate_copy_fence) != VK_SUCCESS)
+            {
+                Logger::logMessage("Vulkan_Context::copyBufferImmediate: Failed to create fence",
+                                   Log_Level::LOG_ERROR,
+                                   true,
+                                   0,
+                                   Log_Feature::SYNCHRONIZATION);
+                throw std::runtime_error("Failed to create fence");
+            }
+        }
+        else
+        {
+            vkResetFences(device, 1, &immediate_copy_fence);
+        }
+
+        VkSubmitInfo submit_information{
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .pNext = nullptr,
+            .waitSemaphoreCount = 0,
+            .pWaitSemaphores = nullptr,
+            .pWaitDstStageMask = nullptr,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &immediate_copy_command_buffer,
+            .signalSemaphoreCount = 0,
+            .pSignalSemaphores = nullptr};
+
+        if (vkQueueSubmit(compute_queue, 1, &submit_information, immediate_copy_fence) != VK_SUCCESS)
+        {
+            Logger::logMessage("Vulkan_Context::copyBufferImmediate: Failed to submit copy command to queue",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::MEMORY_TRANSFER);
+            throw std::runtime_error("Failed to submit copy command");
+        }
+
+        vkWaitForFences(device, 1, &immediate_copy_fence, VK_TRUE, UINT64_MAX);
+    }
 }
 
 void Vulkan_Context::fillBuffer(VkBuffer _destination_buffer,
@@ -1142,7 +1388,7 @@ void Vulkan_Context::waitTimelineSemaphore(uint64_t target_value, uint64_t timeo
     }
 }
 
-void *Vulkan_Context::ensureReadbackStagingBuffer(VkDeviceSize required_size, VkBuffer &out_buffer) const
+void* Vulkan_Context::ensureReadbackStagingBuffer(VkDeviceSize required_size, VkBuffer& out_buffer) const
 {
     std::lock_guard lock(context_mutex);
 
@@ -1162,7 +1408,6 @@ void *Vulkan_Context::ensureReadbackStagingBuffer(VkDeviceSize required_size, Vk
         if (readback_staging_buffer != VK_NULL_HANDLE)
         {
             vkDeviceWaitIdle(device);
-            vkUnmapMemory(device, readback_staging_allocation.memory);
             vkDestroyBuffer(device, readback_staging_buffer, nullptr);
             allocator->free(readback_staging_allocation);
             readback_staging_buffer = VK_NULL_HANDLE;
@@ -1178,15 +1423,15 @@ void *Vulkan_Context::ensureReadbackStagingBuffer(VkDeviceSize required_size, Vk
             .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT,
             .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
             .queueFamilyIndexCount = 0,
-            .pQueueFamilyIndices = nullptr};
+            .pQueueFamilyIndices = nullptr };
 
         if (vkCreateBuffer(device, &buffer_create_info, nullptr, &readback_staging_buffer) != VK_SUCCESS)
         {
             Logger::logMessage("Vulkan_Context::ensureReadbackStagingBuffer: Failed to create readback staging buffer",
-                               Log_Level::LOG_ERROR,
-                               true,
-                               0,
-                               Log_Feature::MEMORY_ALLOCATION | Log_Feature::MEMORY_TRANSFER);
+                Log_Level::LOG_ERROR,
+                true,
+                0,
+                Log_Feature::MEMORY_ALLOCATION | Log_Feature::MEMORY_TRANSFER);
             throw std::runtime_error("Vulkan_Context::ensureReadbackStagingBuffer: Failed to create readback staging buffer");
         }
 
@@ -1203,7 +1448,8 @@ void *Vulkan_Context::ensureReadbackStagingBuffer(VkDeviceSize required_size, Vk
             throw std::runtime_error("Vulkan_Context::ensureReadbackStagingBuffer: Failed to bind memory");
         }
 
-        if (vkMapMemory(device, readback_staging_allocation.memory, readback_staging_allocation.offset, new_capacity, 0, &readback_mapped_pointer) != VK_SUCCESS)
+        readback_mapped_pointer = readback_staging_allocation.mapped_pointer;
+        if (readback_mapped_pointer == nullptr)
         {
             vkDestroyBuffer(device, readback_staging_buffer, nullptr);
             allocator->free(readback_staging_allocation);
@@ -1212,11 +1458,11 @@ void *Vulkan_Context::ensureReadbackStagingBuffer(VkDeviceSize required_size, Vk
         }
 
         readback_staging_capacity = new_capacity;
-        Logger::logMessage(Input_Format{"Vulkan_Context::ensureReadbackStagingBuffer: Allocated & persistently mapped readback staging buffer of {} MB", new_capacity / (1024 * 1024)},
-                           Log_Level::LOG_INFO,
-                           true,
-                           0,
-                           Log_Feature::MEMORY_ALLOCATION | Log_Feature::MEMORY_TRANSFER);
+        Logger::logMessage(Input_Format{ "Vulkan_Context::ensureReadbackStagingBuffer: Allocated & persistently mapped readback staging buffer of {} MB", new_capacity / (1024 * 1024) },
+            Log_Level::LOG_INFO,
+            true,
+            0,
+            Log_Feature::MEMORY_ALLOCATION | Log_Feature::MEMORY_TRANSFER);
     }
 
     out_buffer = readback_staging_buffer;

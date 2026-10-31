@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "helper/logger.h"
+#include "ops/loss/loss_ops.h"
 
 
 Fused_Cross_Entropy::Fused_Cross_Entropy(int32_t ignore_idx) noexcept
@@ -21,12 +22,12 @@ Fused_Cross_Entropy::Fused_Cross_Entropy(int32_t ignore_idx) noexcept
 float Fused_Cross_Entropy::computeLoss(const Tensor& prediction_tensor, const Tensor& target_tensor) const
 {
         Tensor dummy_grad;
-        return prediction_tensor.fusedCrossEntropyLoss(target_tensor, dummy_grad, 0);
+        return ops::loss::fusedCrossEntropy(prediction_tensor, target_tensor, dummy_grad, 0);
     }
 
 void Fused_Cross_Entropy::computeGradient(const Tensor& prediction_tensor, const Tensor& target_tensor, Tensor& gradient_out) const
 {
-        prediction_tensor.fusedCrossEntropyLoss(target_tensor, gradient_out, 0);
+        ops::loss::fusedCrossEntropy(prediction_tensor, target_tensor, gradient_out, 0);
     }
 
 Tensor Fused_Cross_Entropy::computeGradient(const Tensor& prediction_tensor, const Tensor& target_tensor) const
@@ -38,12 +39,12 @@ Tensor Fused_Cross_Entropy::computeGradient(const Tensor& prediction_tensor, con
 
 float Fused_Cross_Entropy::computeLossAndGradient(const Tensor& prediction_tensor, const Tensor& target_tensor, Tensor& gradient_out) const
 {
-        return prediction_tensor.fusedCrossEntropyLoss(target_tensor, gradient_out, 0);
+        return ops::loss::fusedCrossEntropy(prediction_tensor, target_tensor, gradient_out, 0);
     }
 
 float Fused_Cross_Entropy::computeLossAndGradient(const Tensor& prediction_tensor, const Tensor& target_tensor, Tensor& gradient_out, uint32_t valid_tokens) const
 {
-        return prediction_tensor.fusedCrossEntropyLoss(target_tensor, gradient_out, valid_tokens);
+        return ops::loss::fusedCrossEntropy(prediction_tensor, target_tensor, gradient_out, valid_tokens);
     }
 
 float Fused_Cross_Entropy::computeLossAndGradient(const Tensor& prediction_tensor, const std::vector<int32_t>& target_indices, Tensor& gradient_out) const
@@ -95,8 +96,8 @@ float Fused_Cross_Entropy::computeLossAndGradient(const Tensor& prediction_tenso
                     id = -100;
                 }
             }
-            return prediction_tensor.fusedCrossEntropyLoss(masked_targets, gradient_out, valid_tokens);
+            return ops::loss::fusedCrossEntropy(prediction_tensor, masked_targets, gradient_out, valid_tokens);
         }
 
-        return prediction_tensor.fusedCrossEntropyLoss(target_indices, gradient_out, valid_tokens);
+        return ops::loss::fusedCrossEntropy(prediction_tensor, target_indices, gradient_out, valid_tokens);
     }

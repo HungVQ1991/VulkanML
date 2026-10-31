@@ -43,8 +43,23 @@ enum class Layer_Type
     RMSNORM,
     SWIGLU,
     EMBEDDING,
-    TRANSFORMER_BLOCK,
+    TRANSFORMER_BLOCK, SIGMOID, DROPOUT,
+    UP_SAMPLE_2D,
+    U_NET,
+    INSTANCE_NORM_2D,
+    LEAKY_RELU,
+    NN_UNET,
+    MULTI_SCALE_RESNET_18,
+    AVG_POOL_2D,
+    TERNARY_LINEAR,
     LAYER_TYPE_END
+};
+
+enum class Hook_Type
+{
+    FORWARD,
+    PRE_BACKWARD,
+    POST_BACKWARD
 };
 
 class ILayer
@@ -187,6 +202,7 @@ public:
     virtual const Tensor &getOutput() const { return emptyTensor(); }
     virtual std::vector<std::pair<Tensor *, Tensor *>> getParametersAndGradients() { return {}; }
     virtual std::vector<std::pair<Tensor *, Tensor *>> getParamsAndGrads() { return getParametersAndGradients(); }
+    virtual std::vector<const Tensor *> getNoDecayParameters() const { return {}; }
     virtual std::vector<Shape> getPopulationParameterDims() const { return {}; }
     virtual std::vector<bool> getPopulationParameterIsEvolvable() const { return std::vector<bool>(getPopulationParameterDims().size(), true); }
     virtual std::vector<float> getPopulationParameter(size_t param_index) const { return {}; }
@@ -202,4 +218,242 @@ public:
     virtual void setMixedPrecision(bool _enable) noexcept { is_mixed_precision_enabled = _enable; }
     virtual bool isMixedPrecisionEnabled() const noexcept { return is_mixed_precision_enabled; }
     virtual void invalidateWeightCache() noexcept {}
+
+public:
+
+    using Hook_Fn = std::function<Tensor(const Tensor &)>;
+    using Void_Hook_Fn = std::function<void(const Tensor &)>;
+
+private:
+    struct Hook_Entry
+    {
+        uint64_t id = 0;
+        Hook_Fn callback;
+    };
+
+    std::vector<Hook_Entry> forward_hooks;
+    std::vector<Hook_Entry> pre_backward_hooks;
+    std::vector<Hook_Entry> post_backward_hooks;
+    inline static std::atomic<uint64_t> global_next_hook_id{1};
+
+public:
+    bool hasForwardHooks() const noexcept { return !forward_hooks.empty(); }
+    bool hasPreBackwardHooks() const noexcept { return !pre_backward_hooks.empty(); }
+    bool hasPostBackwardHooks() const noexcept { return !post_backward_hooks.empty(); }
+
+    Tensor applyForwardHooks(Tensor tensor) const
+    {
+        for (const auto &entry : forward_hooks)
+        {
+            Tensor result = entry.callback(tensor);
+            if (!result.isEmpty())
+            {
+                tensor = std::move(result);
+            }
+        }
+        return tensor;
+    }
+
+    Tensor applyPreBackwardHooks(Tensor tensor) const
+    {
+        for (const auto &entry : pre_backward_hooks)
+        {
+            Tensor result = entry.callback(tensor);
+            if (!result.isEmpty())
+            {
+                tensor = std::move(result);
+            }
+        }
+        return tensor;
+    }
+
+    Tensor applyPostBackwardHooks(Tensor tensor) const
+    {
+        for (const auto &entry : post_backward_hooks)
+        {
+            Tensor result = entry.callback(tensor);
+            if (!result.isEmpty())
+            {
+                tensor = std::move(result);
+            }
+        }
+        return tensor;
+    }
+
+    void removeHook(uint64_t id, Hook_Type type)
+    {
+        auto remove_from = [id](std::vector<Hook_Entry> &hooks) {
+            std::erase_if(hooks, [id](const Hook_Entry &entry) {
+                return entry.id == id;
+            });
+        };
+
+        switch (type)
+        {
+        case Hook_Type::FORWARD:
+            remove_from(forward_hooks);
+            break;
+        case Hook_Type::PRE_BACKWARD:
+            remove_from(pre_backward_hooks);
+            break;
+        case Hook_Type::POST_BACKWARD:
+            remove_from(post_backward_hooks);
+            break;
+        }
+    }
+
+    void clearHooks() noexcept
+    {
+        forward_hooks.clear();
+        pre_backward_hooks.clear();
+        post_backward_hooks.clear();
+    }
+
+    class Scoped_Hook
+    {
+    private:
+        ILayer *layer = nullptr;
+        uint64_t hook_id = 0;
+        Hook_Type hook_type = Hook_Type::FORWARD;
+
+    public:
+        Scoped_Hook() noexcept = default;
+
+        Scoped_Hook(ILayer *target_layer, uint64_t id, Hook_Type type) noexcept
+            : layer(target_layer), hook_id(id), hook_type(type)
+        {
+        }
+
+        ~Scoped_Hook()
+        {
+            release();
+        }
+
+        Scoped_Hook(const Scoped_Hook &) = delete;
+        Scoped_Hook &operator=(const Scoped_Hook &) = delete;
+
+        Scoped_Hook(Scoped_Hook &&other) noexcept
+            : layer(other.layer), hook_id(other.hook_id), hook_type(other.hook_type)
+        {
+            other.layer = nullptr;
+            other.hook_id = 0;
+        }
+
+        Scoped_Hook &operator=(Scoped_Hook &&other) noexcept
+        {
+            if (this != &other)
+            {
+                release();
+                layer = other.layer;
+                hook_id = other.hook_id;
+                hook_type = other.hook_type;
+                other.layer = nullptr;
+                other.hook_id = 0;
+            }
+            return *this;
+        }
+
+        void release()
+        {
+            if (layer && hook_id != 0)
+            {
+                layer->removeHook(hook_id, hook_type);
+                layer = nullptr;
+                hook_id = 0;
+            }
+        }
+
+        void unregister()
+        {
+            release();
+        }
+
+        bool isActive() const noexcept
+        {
+            return layer != nullptr && hook_id != 0;
+        }
+
+        uint64_t getId() const noexcept
+        {
+            return hook_id;
+        }
+
+        Hook_Type getType() const noexcept
+        {
+            return hook_type;
+        }
+
+        ILayer *getLayer() const noexcept
+        {
+            return layer;
+        }
+    };
+
+    template <typename Callback_T>
+        requires std::is_invocable_v<Callback_T, const Tensor &>
+    Scoped_Hook registerForwardHook(Callback_T &&callback)
+    {
+        using Ret_T = std::invoke_result_t<Callback_T, const Tensor &>;
+        uint64_t id = global_next_hook_id.fetch_add(1);
+        if constexpr (std::is_void_v<Ret_T>)
+        {
+            forward_hooks.push_back(Hook_Entry{id, [fn = std::forward<Callback_T>(callback)](const Tensor &t) -> Tensor {
+                fn(t);
+                return Tensor{};
+            }});
+        }
+        else
+        {
+            forward_hooks.push_back(Hook_Entry{id, Hook_Fn(std::forward<Callback_T>(callback))});
+        }
+        return Scoped_Hook(this, id, Hook_Type::FORWARD);
+    }
+
+    template <typename Callback_T>
+        requires std::is_invocable_v<Callback_T, const Tensor &>
+    Scoped_Hook registerBackwardHook(Callback_T &&callback, Hook_Type type = Hook_Type::PRE_BACKWARD)
+    {
+        using Ret_T = std::invoke_result_t<Callback_T, const Tensor &>;
+        uint64_t id = global_next_hook_id.fetch_add(1);
+        Hook_Fn fn_target;
+        if constexpr (std::is_void_v<Ret_T>)
+        {
+            fn_target = [fn = std::forward<Callback_T>(callback)](const Tensor &t) -> Tensor {
+                fn(t);
+                return Tensor{};
+            };
+        }
+        else
+        {
+            fn_target = Hook_Fn(std::forward<Callback_T>(callback));
+        }
+
+        if (type == Hook_Type::PRE_BACKWARD)
+        {
+            pre_backward_hooks.push_back(Hook_Entry{id, std::move(fn_target)});
+        }
+        else
+        {
+            post_backward_hooks.push_back(Hook_Entry{id, std::move(fn_target)});
+        }
+        return Scoped_Hook(this, id, type);
+    }
+
+    template <typename Callback_T>
+        requires std::is_invocable_v<Callback_T, const Tensor &>
+    Scoped_Hook registerPreBackwardHook(Callback_T &&callback)
+    {
+        return registerBackwardHook(std::forward<Callback_T>(callback), Hook_Type::PRE_BACKWARD);
+    }
+
+    template <typename Callback_T>
+        requires std::is_invocable_v<Callback_T, const Tensor &>
+    Scoped_Hook registerPostBackwardHook(Callback_T &&callback)
+    {
+        return registerBackwardHook(std::forward<Callback_T>(callback), Hook_Type::POST_BACKWARD);
+    }
 };
+
+using Hook_Fn = ILayer::Hook_Fn;
+using Void_Hook_Fn = ILayer::Void_Hook_Fn;
+using Scoped_Hook = ILayer::Scoped_Hook;

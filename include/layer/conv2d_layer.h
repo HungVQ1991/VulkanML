@@ -79,7 +79,9 @@ public:
     std::vector<float> getPopulationParameter(size_t param_index) const override;
 
     std::vector<Shape> getPopulationParameterDims() const override { return { Shape{ output_channels, input_channels, kernel_size, kernel_size }, Shape{ 1, output_channels } }; }
-    std::vector<bool> getPopulationParameterIsEvolvable() const override { return { true, true }; }    std::vector<std::pair<Tensor *, Tensor *>> getParametersAndGradients() override;
+    std::vector<bool> getPopulationParameterIsEvolvable() const override { return { true, true }; }
+    std::vector<std::pair<Tensor *, Tensor *>> getParametersAndGradients() override;
+    std::vector<const Tensor *> getNoDecayParameters() const override { return { &biases }; }
 
     const Tensor &getWeightsGradient() const override { return weights_gradient_tensor; }
     const Tensor &getBiasesGradient() const noexcept { return biases_gradient_tensor; }

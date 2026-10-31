@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "cost_function/fused_cce_cost.h"
+#include "ops/loss/loss_ops.h"
 #include "engine/execution_engine.h"
 #include "engine/loss_scaler.h"
 #include "helper/logger.h"
@@ -458,7 +459,7 @@ float Causal_LM::computeLossAndGradient(const Tensor& logits, const std::vector<
             valid++;
         }
     }
-    return logits.fusedCrossEntropyLoss(target_token_ids, d_logits, valid);
+    return ops::loss::fusedCrossEntropy(logits, target_token_ids, d_logits, valid);
 }
 
 float Causal_LM::computeLossAndGradient(const Tensor& logits, const Tensor& target_tensor, Tensor& d_logits, uint32_t valid_tokens) const
@@ -474,7 +475,7 @@ float Causal_LM::computeLossAndGradient(const Tensor& logits, const Tensor& targ
         }
         return cost_function->computeLossAndGradient(logits, target_tensor, d_logits);
     }
-    return logits.fusedCrossEntropyLoss(target_tensor, d_logits, valid_tokens);
+    return ops::loss::fusedCrossEntropy(logits, target_tensor, d_logits, valid_tokens);
 }
 
 float Causal_LM::clipGradients(float max_norm)

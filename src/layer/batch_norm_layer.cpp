@@ -17,6 +17,7 @@
 #include "helper/logger.h"
 #include "helper/magic_enum.hpp"
 #include "math/tensor.h"
+#include "ops/normalization/batchnorm.h"
 
 
 void Batch_Norm_Layer::initializeParameters()
@@ -87,7 +88,8 @@ Tensor Batch_Norm_Layer::forward(const Tensor &_input_tensor)
             input_tensor.setExecutionTarget(execution_target);
         }
 
-        input_tensor.batchNormForward(
+        ops::normalization::batchNormForward(
+            input_tensor,
             gamma,
             beta,
             running_mean,
@@ -121,7 +123,8 @@ Tensor Batch_Norm_Layer::forward(const Tensor& _batched_input, const std::vector
         Tensor normalized_input_tensor(getExecutionTarget());
         Tensor output_tensor_result(getExecutionTarget());
 
-        _batched_input.batchNormForward(
+        ops::normalization::batchNormForward(
+            _batched_input,
             _batched_params[0],
             _batched_params[1],
             const_cast<Tensor &>(_batched_params[2]),
@@ -157,9 +160,10 @@ Tensor Batch_Norm_Layer::backward(const Tensor &_output_gradient)
                            1,
                            Log_Feature::NORMALIZATION_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
-        if (!is_accumulated)
+        if (!is_training)
         {
-            input_tensor.batchNormBackward(
+            ops::normalization::batchNormBackward(
+                input_tensor,
                 _output_gradient,
                 gamma,
                 batch_variance,
@@ -167,13 +171,34 @@ Tensor Batch_Norm_Layer::backward(const Tensor &_output_gradient)
                 gamma_gradient_tensor,
                 beta_gradient_tensor,
                 input_gradient_tensor,
-                epsilon);
+                epsilon,
+                false,
+                running_variance);
+            logBufferAddress(&input_tensor, "input_tensor (Backward Eval)");
+            return input_gradient_tensor;
+        }
+
+        if (!is_accumulated)
+        {
+            ops::normalization::batchNormBackward(
+                input_tensor,
+                _output_gradient,
+                gamma,
+                batch_variance,
+                normalized_input,
+                gamma_gradient_tensor,
+                beta_gradient_tensor,
+                input_gradient_tensor,
+                epsilon,
+                true,
+                running_variance);
         }
         else
         {
             Tensor step_gamma_grad(gamma_gradient_tensor.getShape(), execution_target);
             Tensor step_beta_grad(beta_gradient_tensor.getShape(), execution_target);
-            input_tensor.batchNormBackward(
+            ops::normalization::batchNormBackward(
+                input_tensor,
                 _output_gradient,
                 gamma,
                 batch_variance,
@@ -181,7 +206,9 @@ Tensor Batch_Norm_Layer::backward(const Tensor &_output_gradient)
                 step_gamma_grad,
                 step_beta_grad,
                 input_gradient_tensor,
-                epsilon);
+                epsilon,
+                true,
+                running_variance);
             gamma_gradient_tensor = gamma_gradient_tensor + step_gamma_grad;
             beta_gradient_tensor = beta_gradient_tensor + step_beta_grad;
         }

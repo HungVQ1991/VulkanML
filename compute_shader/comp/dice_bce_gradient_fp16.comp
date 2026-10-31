@@ -1,0 +1,55 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer Pred_Buffer {
+    float16_t pred_data[];
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer Target_Buffer {
+    float16_t target_data[];
+};
+
+layout(std430, set = 0, binding = 2) writeonly buffer Grad_Buffer {
+    float16_t grad_data[];
+};
+
+layout(std430, set = 0, binding = 3) readonly buffer Stats_Buffer {
+    float stats_data[];
+};
+
+layout(push_constant) uniform Push_Constants {
+    uint total_elements;
+    float dice_weight;
+    float bce_weight;
+    float epsilon;
+} pc;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.total_elements) return;
+
+    float p = clamp(float(pred_data[idx]), pc.epsilon, 1.0f - pc.epsilon);
+    float y = float(target_data[idx]);
+
+    float total_inter = stats_data[1];
+    float total_pred = stats_data[2];
+    float total_target = stats_data[3];
+
+    float denom = max(total_pred + total_target + pc.epsilon, 1e-4f);
+    float numer = 2.0f * total_inter + pc.epsilon;
+    float dice_grad = (numer - 2.0f * y * denom) / (denom * denom);
+
+    float p_safe = clamp(p, 1e-4f, 1.0f - 1e-4f);
+    float bce_grad = (p - y) / (p_safe * (1.0f - p_safe) * float(pc.total_elements));
+
+    float grad = pc.dice_weight * dice_grad + pc.bce_weight * bce_grad;
+    if (isnan(grad) || isinf(grad)) {
+        grad = 0.0f;
+    } else {
+        grad = clamp(grad, -65504.0f, 65504.0f);
+    }
+    grad_data[idx] = float16_t(grad);
+}

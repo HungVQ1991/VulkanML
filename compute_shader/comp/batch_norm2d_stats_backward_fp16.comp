@@ -21,7 +21,31 @@ shared float shared_db[256];
 void main() {
     uint tid = gl_LocalInvocationID.x;
     uint C = pc.channels;
+    uint M = pc.spatial_count;
     uint total_elements = pc.total_elements;
+
+    if (C > 256) {
+        for (uint c_base = 0; c_base < C; c_base += 256) {
+            uint c = c_base + tid;
+            if (c < C) {
+                float dg = 0.0;
+                float db = 0.0;
+                for (uint m = 0; m < M; ++m) {
+                    uint idx = m * C + c;
+                    float dy = float(dY[idx]);
+                    dg += dy * x_hat[idx];
+                    db += dy;
+                }
+                if (isnan(dg) || isinf(dg)) dg = 0.0;
+                if (isnan(db) || isinf(db)) db = 0.0;
+                dg = clamp(dg, -1e5, 1e5);
+                db = clamp(db, -1e5, 1e5);
+                dgamma[c] = dg;
+                dbeta[c] = db;
+            }
+        }
+        return;
+    }
 
     uint P_STEP = 256 / C;
     if (P_STEP == 0) P_STEP = 1;
@@ -50,6 +74,10 @@ void main() {
             tot_dg += shared_dg[tid + p * C];
             tot_db += shared_db[tid + p * C];
         }
+        if (isnan(tot_dg) || isinf(tot_dg)) tot_dg = 0.0;
+        if (isnan(tot_db) || isinf(tot_db)) tot_db = 0.0;
+        tot_dg = clamp(tot_dg, -1e5, 1e5);
+        tot_db = clamp(tot_db, -1e5, 1e5);
         dgamma[tid] = tot_dg;
         dbeta[tid] = tot_db;
     }

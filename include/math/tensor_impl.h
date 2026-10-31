@@ -42,6 +42,15 @@ public:
     virtual Mutable_Storage_Handle getStorage() = 0;
     virtual const std::vector<float> &getData() const noexcept = 0;
     virtual void uploadData(const std::vector<float> &host_data) = 0;
+    virtual const std::vector<uint32_t> &getPackedData() const
+    {
+        static const std::vector<uint32_t> empty_vec;
+        return empty_vec;
+    }
+    virtual void uploadPackedData(const std::vector<uint32_t> &)
+    {
+        throw std::invalid_argument("uploadPackedData not supported on this tensor type");
+    }
     virtual bool isEmpty() const noexcept = 0;
     virtual std::shared_ptr<gpu::vector> getVector() { return {}; }
     virtual void zero() = 0;

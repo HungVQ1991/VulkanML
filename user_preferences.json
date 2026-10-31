@@ -12,7 +12,8 @@
   },
   "memory": {
     "staging_pool_initial_size_mb": 64,
-    "enable_timeline_semaphore": true
+    "enable_timeline_semaphore": true,
+    "enable_push_descriptor": true
   },
   "logging": {
     "enable_logging": true,

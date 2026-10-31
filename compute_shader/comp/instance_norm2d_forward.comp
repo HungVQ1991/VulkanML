@@ -1,0 +1,98 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer InputX { float X[]; };
+layout(std430, binding = 1) readonly buffer Gamma { float gamma[]; };
+layout(std430, binding = 2) readonly buffer Beta { float beta[]; };
+layout(std430, binding = 3) writeonly buffer SavedMean { float saved_mean[]; };
+layout(std430, binding = 4) writeonly buffer SavedInvStd { float saved_inv_std[]; };
+layout(std430, binding = 5) writeonly buffer OutputY { float Y[]; };
+layout(std430, binding = 6) writeonly buffer NormX { float normalized_input[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint batch_size;
+    uint spatial_count;
+    uint channels;
+    float epsilon;
+} pc;
+
+shared float s_data[256];
+shared float s_mean;
+shared float s_inv_std;
+shared float s_gamma;
+shared float s_beta;
+
+void main() {
+    uint c = gl_WorkGroupID.x;
+    uint b = gl_WorkGroupID.y;
+    if (c >= pc.channels || b >= pc.batch_size) return;
+
+    uint tid = gl_LocalInvocationID.x;
+    uint M = pc.spatial_count;
+    uint C = pc.channels;
+    uint batch_offset = b * (M * C);
+
+    float sum = 0.0;
+    for (uint m = tid; m < M; m += 256) {
+        sum += X[batch_offset + m * C + c];
+    }
+    s_data[tid] = sum;
+    barrier();
+
+    for (uint stride = 128; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            s_data[tid] += s_data[tid + stride];
+        }
+        barrier();
+    }
+
+    if (tid == 0) {
+        float mean_val = s_data[0] / float(M);
+        if (isnan(mean_val) || isinf(mean_val)) mean_val = 0.0;
+        s_mean = mean_val;
+        saved_mean[b * C + c] = mean_val;
+        s_gamma = gamma[c];
+        s_beta = beta[c];
+    }
+    barrier();
+
+    float mean_val = s_mean;
+    float sq_sum = 0.0;
+    for (uint m = tid; m < M; m += 256) {
+        float diff = X[batch_offset + m * C + c] - mean_val;
+        sq_sum += diff * diff;
+    }
+    s_data[tid] = sq_sum;
+    barrier();
+
+    for (uint stride = 128; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            s_data[tid] += s_data[tid + stride];
+        }
+        barrier();
+    }
+
+    if (tid == 0) {
+        float var_val = s_data[0] / float(M);
+        if (isnan(var_val) || isinf(var_val) || var_val < 0.0) var_val = 0.0;
+        float inv_std = 1.0 / sqrt(var_val + pc.epsilon);
+        if (isnan(inv_std) || isinf(inv_std)) inv_std = 0.0;
+        inv_std = min(inv_std, 100.0);
+        s_inv_std = inv_std;
+        saved_inv_std[b * C + c] = inv_std;
+    }
+    barrier();
+
+    float inv_std_val = s_inv_std;
+    float g = s_gamma;
+    float bt = s_beta;
+
+    for (uint m = tid; m < M; m += 256) {
+        uint idx = batch_offset + m * C + c;
+        float x = X[idx];
+        float norm = (x - mean_val) * inv_std_val;
+        normalized_input[idx] = norm;
+        Y[idx] = g * norm + bt;
+    }
+}

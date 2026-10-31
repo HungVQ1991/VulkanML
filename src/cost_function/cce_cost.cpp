@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "helper/logger.h"
+#include "ops/loss/loss_ops.h"
 
 
 Cce_Cost::Cce_Cost(float _epsilon, Execution_Target _execution_target)
@@ -58,7 +59,7 @@ float Cce_Cost::computeLoss(const Tensor &_prediction_matrix, const Tensor &_tar
             loss_matrix.setExecutionTarget(_prediction_matrix.getExecutionTarget());
         }
 
-        _prediction_matrix.cceLoss(_target_matrix, loss_matrix, epsilon);
+        ops::loss::cce(_prediction_matrix, _target_matrix, loss_matrix, epsilon);
         return loss_matrix.getScalar() / static_cast<float>(batch_size);
     }
 

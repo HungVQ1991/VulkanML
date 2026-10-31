@@ -17,6 +17,7 @@
 #include "helper/logger.h"
 #include "helper/magic_enum.hpp"
 #include "math/tensor.h"
+#include "ops/linear/linear.h"
 
 
 Linear_Layer::Linear_Layer()
@@ -110,7 +111,7 @@ Tensor Linear_Layer::forward(const Tensor &_input_tensor)
                             Log_Feature::DENSE_COMPUTE | Log_Feature::FORWARD_EVALUATION);
 
         input_tensor = eff_input;
-        input_tensor.linearForward(weights, biases, output_tensor);
+        ops::linear::linearForward(input_tensor, weights, biases, output_tensor);
 
         if (cache_is_3d)
         {
@@ -170,15 +171,15 @@ Tensor Linear_Layer::backward(const Tensor &_output_gradient)
         }
 
         Logger::logMessage(Input_Format{"Linear_Layer::backward: output_gradient rows={}, columns={}",
-                                        eff_grad.getRows(),
-                                        eff_grad.getColumns()},
+                                         eff_grad.getRows(),
+                                         eff_grad.getColumns()},
                            Log_Level::LOG_DEBUG,
                            true,
                            1,
                            Log_Feature::DENSE_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
-        eff_grad.linearBackwardInput(weights, input_gradient_tensor);
-        input_tensor.linearBackwardWeightBias(eff_grad, weights_gradient_tensor, biases_gradient_tensor, is_accumulated);
+        ops::linear::linearBackwardInput(eff_grad, weights, input_gradient_tensor);
+        ops::linear::linearBackwardWeightBias(input_tensor, eff_grad, weights_gradient_tensor, biases_gradient_tensor, is_accumulated);
 
         if (cache_is_3d)
         {

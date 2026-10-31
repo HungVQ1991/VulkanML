@@ -1,0 +1,44 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(std430, binding = 0) readonly buffer MasterWeights {
+    float w_master[];
+};
+
+layout(std430, binding = 1) readonly buffer GammaBuffer {
+    float gamma;
+    float inv_gamma;
+};
+
+layout(std430, binding = 2) writeonly buffer PackedWeights {
+    uint packed_data[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint K;
+    uint N;
+    uint words_per_row;
+} pcs;
+
+void main() {
+    uint word_idx = gl_GlobalInvocationID.x;
+    uint n = gl_GlobalInvocationID.y;
+
+    if (word_idx >= pcs.words_per_row || n >= pcs.N) return;
+
+    uint packed_word = 0u;
+    uint k_start = word_idx * 16u;
+
+    for (uint b = 0u; b < 16u; ++b) {
+        uint k = k_start + b;
+        if (k < pcs.K) {
+            float w = w_master[k * pcs.N + n];
+            precise float q = clamp(sign(w) * floor(abs(w) * inv_gamma + 0.5), -1.0, 1.0);
+            uint code = uint(int(q)) & 3u;
+            packed_word |= (code << (b * 2u));
+        }
+    }
+
+    packed_data[n * pcs.words_per_row + word_idx] = packed_word;
+}

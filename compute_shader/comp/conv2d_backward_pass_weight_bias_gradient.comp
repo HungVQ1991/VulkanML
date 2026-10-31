@@ -59,7 +59,8 @@ void main() {
                 for (int out_y = 0; out_y < min_out_y; out_y++) {
                     uint go_ptr = n_out_base + uint(out_y) * out_row_stride;
                     for (uint out_x = 0; out_x < params.out_w; out_x++) {
-                        bias_sum += grad_output[go_ptr + out_x * params.out_c];
+                        float go = grad_output[go_ptr + out_x * params.out_c];
+                        if (!isnan(go) && !isinf(go)) bias_sum += go;
                     }
                 }
             }
@@ -73,7 +74,8 @@ void main() {
                 // Left out-of-bounds cols
                 if (is_bias_thread) {
                     for (int out_x = 0; out_x < min_out_x; out_x++) {
-                        bias_sum += grad_output[out_y_base + uint(out_x) * params.out_c];
+                        float go = grad_output[out_y_base + uint(out_x) * params.out_c];
+                        if (!isnan(go) && !isinf(go)) bias_sum += go;
                     }
                 }
 
@@ -85,8 +87,10 @@ void main() {
                 for (int out_x = min_out_x; out_x < max_out_x; out_x++) {
                     float go_val = grad_output[go_ptr];
                     float in_val = input_data[in_ptr];
-                    weight_sum += in_val * go_val;
-                    if (is_bias_thread) {
+                    if (!isnan(go_val) && !isinf(go_val) && !isnan(in_val) && !isinf(in_val)) {
+                        weight_sum += in_val * go_val;
+                    }
+                    if (is_bias_thread && !isnan(go_val) && !isinf(go_val)) {
                         bias_sum += go_val;
                     }
                     go_ptr += params.out_c;
@@ -96,7 +100,8 @@ void main() {
                 // Right out-of-bounds cols
                 if (is_bias_thread) {
                     for (int out_x = max_out_x; out_x < int(params.out_w); out_x++) {
-                        bias_sum += grad_output[out_y_base + uint(out_x) * params.out_c];
+                        float go = grad_output[out_y_base + uint(out_x) * params.out_c];
+                        if (!isnan(go) && !isinf(go)) bias_sum += go;
                     }
                 }
             }
@@ -106,7 +111,8 @@ void main() {
                 for (int out_y = max_out_y; out_y < int(params.out_h); out_y++) {
                     uint go_ptr = n_out_base + uint(out_y) * out_row_stride;
                     for (uint out_x = 0; out_x < params.out_w; out_x++) {
-                        bias_sum += grad_output[go_ptr + out_x * params.out_c];
+                        float go = grad_output[go_ptr + out_x * params.out_c];
+                        if (!isnan(go) && !isinf(go)) bias_sum += go;
                     }
                 }
             }
@@ -127,15 +133,20 @@ void main() {
                     uint go_ptr = out_y_base + out_x * params.out_c;
                     float go_val = grad_output[go_ptr];
 
-                    if (is_bias_thread) {
-                        bias_sum += go_val;
-                    }
+                    if (!isnan(go_val) && !isinf(go_val)) {
+                        if (is_bias_thread) {
+                            bias_sum += go_val;
+                        }
 
-                    if (valid_y) {
-                        int in_x = int(out_x * params.stride + kx) - int(params.padding);
-                        if (in_x >= 0 && in_x < int(params.in_w)) {
-                            uint in_ptr = in_y_base + uint(in_x) * params.in_c;
-                            weight_sum += input_data[in_ptr] * go_val;
+                        if (valid_y) {
+                            int in_x = int(out_x * params.stride + kx) - int(params.padding);
+                            if (in_x >= 0 && in_x < int(params.in_w)) {
+                                uint in_ptr = in_y_base + uint(in_x) * params.in_c;
+                                float in_val = input_data[in_ptr];
+                                if (!isnan(in_val) && !isinf(in_val)) {
+                                    weight_sum += in_val * go_val;
+                                }
+                            }
                         }
                     }
                 }
@@ -148,9 +159,19 @@ void main() {
                  in_c_idx * params.out_c +
                  out_c_idx;
                  
+    if (isnan(weight_sum) || isinf(weight_sum)) {
+        weight_sum = 0.0f;
+    } else {
+        weight_sum = clamp(weight_sum, -10000.0f, 10000.0f);
+    }
     grad_weight[w_idx] = weight_sum;
 
     if (is_bias_thread) {
+        if (isnan(bias_sum) || isinf(bias_sum)) {
+            bias_sum = 0.0f;
+        } else {
+            bias_sum = clamp(bias_sum, -10000.0f, 10000.0f);
+        }
         grad_bias[out_c_idx] = bias_sum;
     }
 }

@@ -1,0 +1,67 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly restrict buffer Grad_Output_Buffer {
+    float16_t grad_output[];
+};
+
+layout(std430, set = 0, binding = 1) writeonly restrict buffer Grad_Input_Buffer {
+    float16_t grad_input[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint batch_size;
+    uint in_h;
+    uint in_w;
+    uint channels;
+    uint out_h;
+    uint out_w;
+    uint scale_factor;
+} pc;
+
+void main() {
+    uint c_idx = gl_GlobalInvocationID.x;
+    uint in_w_idx = gl_GlobalInvocationID.y;
+    uint n_in_h_idx = gl_GlobalInvocationID.z;
+
+    if (c_idx >= pc.channels || in_w_idx >= pc.in_w) return;
+
+    uint n_idx = n_in_h_idx / pc.in_h;
+    uint in_h_idx = n_in_h_idx % pc.in_h;
+
+    if (n_idx >= pc.batch_size) return;
+
+    float sum_grad = 0.0;
+    uint base_out_h = in_h_idx * pc.scale_factor;
+    uint base_out_w = in_w_idx * pc.scale_factor;
+
+    for (uint sy = 0; sy < pc.scale_factor; ++sy) {
+        uint oh = base_out_h + sy;
+        if (oh >= pc.out_h) continue;
+        uint out_h_offset = n_idx * (pc.out_h * pc.out_w * pc.channels) + oh * (pc.out_w * pc.channels);
+
+        for (uint sx = 0; sx < pc.scale_factor; ++sx) {
+            uint ow = base_out_w + sx;
+            if (ow >= pc.out_w) continue;
+            uint out_idx = out_h_offset + ow * pc.channels + c_idx;
+            float val = float(grad_output[out_idx]);
+            if (!isnan(val) && !isinf(val)) {
+                sum_grad += val;
+            }
+        }
+    }
+
+    uint in_idx = n_idx * (pc.in_h * pc.in_w * pc.channels) +
+                  in_h_idx * (pc.in_w * pc.channels) +
+                  in_w_idx * pc.channels + c_idx;
+
+    if (isnan(sum_grad) || isinf(sum_grad)) {
+        sum_grad = 0.0f;
+    } else {
+        sum_grad = clamp(sum_grad, -65504.0f, 65504.0f);
+    }
+    grad_input[in_idx] = float16_t(sum_grad);
+}

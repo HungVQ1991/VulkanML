@@ -1,0 +1,68 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_KHR_cooperative_matrix : require
+
+#define TILE_M 16
+#define TILE_N 16
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly restrict buffer OutputBuffer {
+    float16_t Y[];
+};
+
+layout(std430, set = 0, binding = 1) readonly restrict buffer GradOutputBuffer {
+    float16_t dY[];
+};
+
+layout(std430, set = 0, binding = 2) writeonly restrict buffer GradInputBuffer {
+    float16_t dX[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint total_elements;
+} pc;
+
+shared float16_t smem_out[TILE_M * TILE_N];
+
+void main() {
+    uint lane_id = gl_LocalInvocationID.x;
+    uint tile_base = gl_WorkGroupID.x * (TILE_M * TILE_N);
+
+    if (tile_base >= pc.total_elements) return;
+
+    for (uint i = 0; i < 8; ++i) {
+        uint idx = lane_id * 8 + i;
+        uint global_idx = tile_base + idx;
+        if (global_idx < pc.total_elements) {
+            float y = float(Y[global_idx]);
+            float dy = float(dY[global_idx]);
+            float grad = dy * y * (1.0f - y);
+            if (isnan(grad) || isinf(grad)) {
+                grad = 0.0f;
+            } else {
+                grad = clamp(grad, -65504.0f, 65504.0f);
+            }
+            smem_out[idx] = float16_t(grad);
+        } else {
+            smem_out[idx] = float16_t(0.0);
+        }
+    }
+    barrier();
+
+    if (tile_base + (TILE_M * TILE_N) <= pc.total_elements) {
+        coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> res;
+        coopMatLoad(res, smem_out, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+        coopMatStore(res, dX, tile_base, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+    } else {
+        for (uint i = 0; i < 8; ++i) {
+            uint idx = lane_id * 8 + i;
+            uint global_idx = tile_base + idx;
+            if (global_idx < pc.total_elements) {
+                dX[global_idx] = smem_out[idx];
+            }
+        }
+    }
+}

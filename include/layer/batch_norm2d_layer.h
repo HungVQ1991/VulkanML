@@ -68,7 +68,9 @@ public:
     std::vector<float> getPopulationParameter(size_t param_index) const override;
 
     std::vector<Shape> getPopulationParameterDims() const noexcept override { return { Shape{1, channels}, Shape{1, channels}, Shape{1, channels}, Shape{1, channels}}; }
-    std::vector<bool> getPopulationParameterIsEvolvable() const override { return { true, true, false, false }; }    std::vector<std::pair<Tensor *, Tensor *>> getParametersAndGradients() override;
+    std::vector<bool> getPopulationParameterIsEvolvable() const override { return { true, true, false, false }; }
+    std::vector<std::pair<Tensor *, Tensor *>> getParametersAndGradients() override;
+    std::vector<const Tensor *> getNoDecayParameters() const override { return { &gamma, &beta }; }
 
     const Tensor &getWeightsGradient() const override { return gamma_gradient_tensor; }
     const Tensor &getGammaGradient() const noexcept { return gamma_gradient_tensor; }
@@ -116,5 +118,5 @@ public:
     void setEpsilon(float _epsilon) noexcept;
     void setIsForwardCompleted(bool _is_completed) noexcept;
     void setTrainingMode(bool _is_training) override;
-
-};;
+    void sanitizeRunningStats();
+};

@@ -35,14 +35,16 @@ private:
     Execution_Target execution_target = Execution_Target::CPU;
 
 public:
-    using ILayer::forward;    explicit Res_Net_Block_2d_Layer(Execution_Target _execution_target = Execution_Target::CPU);
+    using ILayer::forward;    
+    explicit Res_Net_Block_2d_Layer(Execution_Target _execution_target = Execution_Target::CPU);
     Res_Net_Block_2d_Layer(
         uint32_t _height,
         uint32_t _width,
         uint32_t _in_channels,
         uint32_t _out_channels,
         uint32_t _stride = 1,
-        Execution_Target _execution_target = Execution_Target::CPU);
+        Execution_Target _execution_target = Execution_Target::CPU,
+        bool _use_resnet_d = true);
 
 
     ~Res_Net_Block_2d_Layer() noexcept override = default;
@@ -87,6 +89,8 @@ public:
     void loadCheckpoint(std::ifstream &_input_file_stream) override;
     std::function<float(std::mt19937&)> getPopulationParameterInitializer(size_t param_index) const override;
     std::vector<std::pair<Tensor *, Tensor *>> getParametersAndGradients() override;
+    std::vector<const Tensor *> getNoDecayParameters() const override;
+    void zeroInitLastBatchNorm();
     std::vector<float> getPopulationParameter(size_t param_index) const override;
 
     std::vector<Shape> getPopulationParameterDims() const override
@@ -175,9 +179,11 @@ public:
     void setFinalOutput(const Tensor &_tensor);
     void setSumTensor(const Tensor &_tensor);
 
-    void setInput(const Tensor &_tensor) { input_tensor = _tensor; }    void setExecutionTarget(Execution_Target _new_execution_target) override;
+    void setInput(const Tensor &_tensor) { input_tensor = _tensor; }
+    void setExecutionTarget(Execution_Target _new_execution_target) override;
     void setAccumulated(bool _is_accumulated) noexcept override;
     void setTrainingMode(bool _is_training) override;
+    void setMixedPrecision(bool _enable) noexcept override;
+    void invalidateWeightCache() noexcept override;
     void setIsForwardCompleted(bool _is_completed) noexcept;
-
-};;
+};

@@ -1,3 +1,5 @@
+#include "math/cpu_tensor_impl.h"
+#include "math/gpu_tensor_impl.h"
 #include <cassert>
 #include <cmath>
 #include <cstdio>
@@ -33,6 +35,19 @@
 #include "tokenizer/bpe_tokenizer.h"
 #include "helper/llm.h"
 #include "llm/binary_dataset.h"
+#include "cost_function/dice_bce_cost.h"
+#include "cost_function/dice_cost.h"
+#include "layer/instance_norm2d_layer.h"
+#include "layer/leaky_relu_layer.h"
+#include "layer/upsample2d_layer.h"
+#include "layer/nn_unet_layer.h"
+#include "layer/u_net_layer.h"
+#include "ops/loss/dice_bce.h"
+#include "ops/normalization/instancenorm.h"
+#include "ops/activation/activation.h"
+#include "ops/vision/pooling.h"
+#include "chexlocalize/chest_seg_dataset.h"
+#include <unordered_set>
 
 bool nearlyEqual(float a, float b, float eps = 1e-3f)
 {
@@ -3531,6 +3546,2618 @@ void runTestSuite(Execution_Target exec_target, const std::string& target_name)
     std::cout << "  Tensor Interface Unification:       " << (testTensorInterfaceUnification(exec_target) ? "PASS" : "FAIL") << "\n\n";
 }
 
+
+bool testTernaryComputingPhase1()
+{
+    // 1. Test sizing: getTensorStorageBytes with row-padding K
+    size_t N = 3;
+    if (getTensorStorageBytes(Data_Type::TERNARY_INT2, Shape({N, 1})) != 12) return false;
+    if (getTensorStorageBytes(Data_Type::TERNARY_INT2, Shape({N, 15})) != 12) return false;
+    if (getTensorStorageBytes(Data_Type::TERNARY_INT2, Shape({N, 16})) != 12) return false;
+    if (getTensorStorageBytes(Data_Type::TERNARY_INT2, Shape({N, 17})) != 24) return false;
+    if (getTensorStorageBytes(Data_Type::TERNARY_INT2, Shape({N, 33})) != 36) return false;
+
+    // 2. Test bit-exact pack & unpack
+    size_t test_rows = 2;
+    size_t test_cols = 33;
+    std::vector<float> original(test_rows * test_cols);
+    for (size_t i = 0; i < original.size(); ++i)
+    {
+        int mod = static_cast<int>(i % 3);
+        original[i] = (mod == 0) ? -1.0f : ((mod == 1) ? 0.0f : 1.0f);
+    }
+    size_t words_per_row = (test_cols + 15) / 16;
+    std::vector<uint32_t> packed(test_rows * words_per_row, 0);
+    Cpu_Tensor_Impl::packTernary(original.data(), packed.data(), test_rows, test_cols);
+
+    std::vector<float> unpacked(test_rows * test_cols, 0.0f);
+    float gamma = 0.75f;
+    Cpu_Tensor_Impl::unpackTernary(packed.data(), unpacked.data(), test_rows, test_cols, gamma);
+
+    for (size_t i = 0; i < original.size(); ++i)
+    {
+        float expected = original[i] * gamma;
+        if (std::fabs(unpacked[i] - expected) > 1e-6f)
+        {
+            return false;
+        }
+    }
+
+    // 3. Test math: ternaryMatmul vs FP32 GEMM
+    size_t M = 2, K = 32, N_out = 4;
+    std::vector<float> A(M * K);
+    for (size_t i = 0; i < A.size(); ++i) A[i] = static_cast<float>(i % 7) - 3.0f;
+
+    std::vector<float> W_raw(N_out * K);
+    for (size_t i = 0; i < W_raw.size(); ++i)
+    {
+        int mod = static_cast<int>(i % 3);
+        W_raw[i] = (mod == 0) ? -1.0f : ((mod == 1) ? 0.0f : 1.0f);
+    }
+    std::vector<float> biases = {0.5f, -0.5f, 1.0f, -1.0f};
+
+    size_t w_words_per_row = (K + 15) / 16;
+    std::vector<uint32_t> B_packed(N_out * w_words_per_row);
+    Cpu_Tensor_Impl::packTernary(W_raw.data(), B_packed.data(), N_out, K);
+
+    std::vector<float> C_ternary(M * N_out, 0.0f);
+    float test_gamma = 0.4f;
+    Cpu_Tensor_Impl::ternaryMatmul(A.data(), B_packed.data(), C_ternary.data(), M, K, N_out, test_gamma, biases.data());
+
+    std::vector<float> C_ref(M * N_out, 0.0f);
+    for (size_t m = 0; m < M; ++m)
+    {
+        for (size_t n = 0; n < N_out; ++n)
+        {
+            float sum = biases[n];
+            for (size_t k = 0; k < K; ++k)
+            {
+                sum += A[m * K + k] * (W_raw[n * K + k] * test_gamma);
+            }
+            C_ref[m * N_out + n] = sum;
+        }
+    }
+
+    for (size_t i = 0; i < C_ternary.size(); ++i)
+    {
+        if (std::fabs(C_ternary[i] - C_ref[i]) > 1e-4f)
+        {
+            return false;
+        }
+    }
+
+    // 4. Negative tests on Tensor with TERNARY_INT2
+    Tensor t_ternary(Shape({N_out, K}), Data_Type::TERNARY_INT2);
+    bool caught_add = false;
+    try { auto res = t_ternary + t_ternary; (void)res; } catch (const std::invalid_argument&) { caught_add = true; }
+    if (!caught_add) return false;
+
+    bool caught_relu = false;
+    try { auto res = t_ternary.relu(); (void)res; } catch (const std::invalid_argument&) { caught_relu = true; }
+    if (!caught_relu) return false;
+
+    bool caught_transpose = false;
+    try { auto res = t_ternary.transpose(); (void)res; } catch (const std::invalid_argument&) { caught_transpose = true; }
+    if (!caught_transpose) return false;
+
+    return true;
+}
+
+
+bool testTernaryComputingPhase2()
+{
+    auto &engine = Execution_Engine::getInstance();
+    auto &context = engine.getContext();
+    if (!context.isFloat16Supported() || !context.isFloat16Enabled())
+    {
+        std::cout << "[INFO: GPU does not enable/support FP16, skipping Ternary Phase 2 test] ";
+        return true;
+    }
+
+    // 1. Pipeline verification
+    auto pipe_p1 = engine.getNetwork().getPipeline(Compute_Pipeline::REDUCE_ABSMEAN_PASS1);
+    auto pipe_p2 = engine.getNetwork().getPipeline(Compute_Pipeline::REDUCE_ABSMEAN_PASS2);
+    auto pipe_fq = engine.getNetwork().getPipeline(Compute_Pipeline::FAKEQUANT_TERNARY);
+    auto pipe_qp = engine.getNetwork().getPipeline(Compute_Pipeline::QUANTIZE_PACK_TERNARY);
+    auto pipe_tg = engine.getNetwork().getPipeline(Compute_Pipeline::MATMUL_TERNARY_FP16);
+
+    if (pipe_p1 == VK_NULL_HANDLE || pipe_p2 == VK_NULL_HANDLE || pipe_fq == VK_NULL_HANDLE ||
+        pipe_qp == VK_NULL_HANDLE || pipe_tg == VK_NULL_HANDLE)
+    {
+        std::cout << "[ERROR: One or more Ternary pipelines failed to compile] ";
+        return false;
+    }
+
+    // 2. Test Reduction: W_master [K=64, N=128]
+    uint32_t K = 64;
+    uint32_t N = 128;
+    uint32_t total_elements = K * N;
+
+    std::vector<float> host_w(total_elements);
+    double cpu_sum_abs = 0.0;
+    for (size_t i = 0; i < total_elements; ++i)
+    {
+        float val = std::sin(static_cast<float>(i + 1) * 0.123f);
+        host_w[i] = val;
+        cpu_sum_abs += std::fabs(val);
+    }
+    float cpu_gamma = std::max(static_cast<float>(cpu_sum_abs / static_cast<double>(total_elements)), 1e-5f);
+    float cpu_inv_gamma = 1.0f / cpu_gamma;
+
+    auto w_buf = std::make_shared<gpu::vector>(context, total_elements, Data_Type::FLOAT32);
+    w_buf->uploadData(host_w);
+
+    uint32_t num_workgroups = std::min((total_elements + 255u) / 256u, 1024u);
+    auto partials_buf = std::make_shared<gpu::vector>(context, num_workgroups, Data_Type::FLOAT32);
+
+    auto gamma_buf = std::make_shared<gpu::vector>(context);
+    gamma_buf->allocateMemoryByBytes(sizeof(float) * 2, Data_Type::FLOAT32, 2);
+
+    // Pass 1: Reduce absmean pass 1
+    {
+        Compute_Node node;
+        node.pipeline_id = Compute_Pipeline::REDUCE_ABSMEAN_PASS1;
+        node.buffers = { w_buf, partials_buf };
+        struct PushConsts { uint32_t total; } pcs{ total_elements };
+        const auto *ptr = reinterpret_cast<const uint8_t *>(&pcs);
+        node.push_constants_data.assign(ptr, ptr + sizeof(pcs));
+        node.workgroup_count_x = num_workgroups;
+        engine.getCurrentGraph().addNode(std::move(node));
+    }
+    engine.executeGraph(VK_NULL_HANDLE, Execution_Stage::FORWARD);
+    engine.waitIdle();
+
+    // Pass 2: Reduce absmean pass 2
+    {
+        Compute_Node node;
+        node.pipeline_id = Compute_Pipeline::REDUCE_ABSMEAN_PASS2;
+        node.buffers = { partials_buf, gamma_buf };
+        struct PushConsts { uint32_t num_partials; uint32_t total; } pcs{ num_workgroups, total_elements };
+        const auto *ptr = reinterpret_cast<const uint8_t *>(&pcs);
+        node.push_constants_data.assign(ptr, ptr + sizeof(pcs));
+        node.workgroup_count_x = 1;
+        engine.getCurrentGraph().addNode(std::move(node));
+    }
+    engine.executeGraph(VK_NULL_HANDLE, Execution_Stage::FORWARD);
+    engine.waitIdle();
+
+    std::vector<float> host_gamma(2, 0.0f);
+    gamma_buf->downloadData(host_gamma);
+    float gpu_gamma = host_gamma[0];
+    float gpu_inv_gamma = host_gamma[1];
+
+    if (std::fabs(gpu_gamma - cpu_gamma) / cpu_gamma > 1e-4f)
+    {
+        std::cout << "[ERROR: Gamma mismatch: GPU=" << gpu_gamma << ", CPU=" << cpu_gamma << "] ";
+        return false;
+    }
+    if (std::fabs(gpu_inv_gamma - cpu_inv_gamma) / cpu_inv_gamma > 1e-4f)
+    {
+        std::cout << "[ERROR: InvGamma mismatch: GPU=" << gpu_inv_gamma << ", CPU=" << cpu_inv_gamma << "] ";
+        return false;
+    }
+
+    // 3. Test FakeQuant: FP32 [K][N] -> FP16 [K][N]
+    auto w_eff_buf = std::make_shared<gpu::vector>(context, total_elements, Data_Type::FLOAT16);
+    {
+        Compute_Node node;
+        node.pipeline_id = Compute_Pipeline::FAKEQUANT_TERNARY;
+        node.buffers = { w_buf, gamma_buf, w_eff_buf };
+        struct PushConsts { uint32_t total; } pcs{ total_elements };
+        const auto *ptr = reinterpret_cast<const uint8_t *>(&pcs);
+        node.push_constants_data.assign(ptr, ptr + sizeof(pcs));
+        node.workgroup_count_x = (total_elements + 255u) / 256u;
+        engine.getCurrentGraph().addNode(std::move(node));
+    }
+
+    engine.executeGraph(VK_NULL_HANDLE, Execution_Stage::FORWARD);
+    engine.waitIdle();
+
+    std::vector<float16_t> host_w_eff(total_elements);
+    w_eff_buf->downloadData(host_w_eff);
+
+    for (size_t i = 0; i < total_elements; ++i)
+    {
+        float w = host_w[i];
+        float q = std::clamp(std::floor(std::fabs(w) * cpu_inv_gamma + 0.5f) * (w >= 0.0f ? 1.0f : -1.0f), -1.0f, 1.0f);
+        float expected = q * cpu_gamma;
+        float actual = static_cast<float>(host_w_eff[i]);
+        if (std::fabs(actual - expected) > 1e-3f * (std::fabs(expected) + 1.0f))
+        {
+            std::cout << "[ERROR: FakeQuant mismatch at " << i << ": expected " << expected << ", got " << actual << "] ";
+            return false;
+        }
+    }
+
+    // 4. Test Quantize Pack: FP32 [K][N] -> 2-bit [N][ceil(K/16)]
+    uint32_t words_per_row = (K + 15u) / 16u;
+    uint32_t total_words = N * words_per_row;
+    auto packed_buf = std::make_shared<gpu::vector>(context);
+    packed_buf->allocateMemoryByBytes(total_words * sizeof(uint32_t), Data_Type::TERNARY_INT2, total_words);
+
+    {
+        Compute_Node node;
+        node.pipeline_id = Compute_Pipeline::QUANTIZE_PACK_TERNARY;
+        node.buffers = { w_buf, gamma_buf, packed_buf };
+        struct PushConsts { uint32_t K; uint32_t N; uint32_t words_per_row; } pcs{ K, N, words_per_row };
+        const auto *ptr = reinterpret_cast<const uint8_t *>(&pcs);
+        node.push_constants_data.assign(ptr, ptr + sizeof(pcs));
+        node.workgroup_count_x = (words_per_row + 15u) / 16u;
+        node.workgroup_count_y = (N + 15u) / 16u;
+        engine.getCurrentGraph().addNode(std::move(node));
+    }
+
+    engine.executeGraph(VK_NULL_HANDLE, Execution_Stage::FORWARD);
+    engine.waitIdle();
+
+    std::vector<uint32_t> gpu_packed(total_words, 0);
+    packed_buf->downloadData(gpu_packed);
+
+    // Compute CPU golden reference packing
+    std::vector<uint32_t> cpu_packed(total_words, 0);
+    for (uint32_t n = 0; n < N; ++n)
+    {
+        for (uint32_t w_idx = 0; w_idx < words_per_row; ++w_idx)
+        {
+            uint32_t word = 0u;
+            for (uint32_t b = 0; b < 16; ++b)
+            {
+                uint32_t k = w_idx * 16 + b;
+                if (k < K)
+                {
+                    float w = host_w[k * N + n];
+                    float q = std::clamp(std::floor(std::fabs(w) * cpu_inv_gamma + 0.5f) * (w >= 0.0f ? 1.0f : -1.0f), -1.0f, 1.0f);
+                    uint32_t code = static_cast<uint32_t>(static_cast<int>(q)) & 3u;
+                    word |= (code << (b * 2u));
+                }
+            }
+            cpu_packed[n * words_per_row + w_idx] = word;
+        }
+    }
+
+    for (size_t i = 0; i < total_words; ++i)
+    {
+        if (gpu_packed[i] != cpu_packed[i])
+        {
+            std::cout << "[ERROR: QuantizePack bit-exact mismatch at word " << i << ": GPU=" << gpu_packed[i] << ", CPU=" << cpu_packed[i] << "] ";
+            return false;
+        }
+    }
+
+    // 5. Test Inference T-GEMM: Y = X * W_p^T * gamma + bias
+    uint32_t M = 4;
+    std::vector<float16_t> host_x(M * K);
+    for (size_t i = 0; i < host_x.size(); ++i)
+    {
+        host_x[i] = static_cast<float16_t>(std::cos(static_cast<float>(i) * 0.2f) * 2.0f);
+    }
+    std::vector<float16_t> host_bias(N);
+    for (size_t i = 0; i < N; ++i)
+    {
+        host_bias[i] = static_cast<float16_t>(0.1f * static_cast<float>(i % 5));
+    }
+
+    auto x_buf = std::make_shared<gpu::vector>(context, M * K, Data_Type::FLOAT16);
+    x_buf->uploadData(host_x);
+
+    auto bias_buf = std::make_shared<gpu::vector>(context, N, Data_Type::FLOAT16);
+    bias_buf->uploadData(host_bias);
+
+    auto y_buf = std::make_shared<gpu::vector>(context, M * N, Data_Type::FLOAT16);
+
+    {
+        Compute_Node node;
+        node.pipeline_id = Compute_Pipeline::MATMUL_TERNARY_FP16;
+        node.buffers = { x_buf, packed_buf, bias_buf, gamma_buf, y_buf };
+        struct PushConsts { uint32_t M; uint32_t K; uint32_t N; uint32_t words_per_row; uint32_t has_bias; }
+            pcs{ M, K, N, words_per_row, 1u };
+        const auto *ptr = reinterpret_cast<const uint8_t *>(&pcs);
+        node.push_constants_data.assign(ptr, ptr + sizeof(pcs));
+        node.workgroup_count_x = (N + 15u) / 16u;
+        node.workgroup_count_y = (M + 15u) / 16u;
+        engine.getCurrentGraph().addNode(std::move(node));
+    }
+
+    engine.executeGraph(VK_NULL_HANDLE, Execution_Stage::FORWARD);
+    engine.waitIdle();
+
+    std::vector<float16_t> gpu_y(M * N);
+    y_buf->downloadData(gpu_y);
+
+    // Compute CPU golden reference T-GEMM
+    for (uint32_t m = 0; m < M; ++m)
+    {
+        for (uint32_t n = 0; n < N; ++n)
+        {
+            float acc = 0.0f;
+            for (uint32_t w_idx = 0; w_idx < words_per_row; ++w_idx)
+            {
+                uint32_t pval = cpu_packed[n * words_per_row + w_idx];
+                for (uint32_t b = 0; b < 16; ++b)
+                {
+                    uint32_t k = w_idx * 16 + b;
+                    if (k < K)
+                    {
+                        uint32_t code = (pval >> (b * 2u)) & 3u;
+                        int weight = static_cast<int>(code & 1u) * (1 - static_cast<int>(code & 2u));
+                        acc += static_cast<float>(host_x[m * K + k]) * static_cast<float>(weight);
+                    }
+                }
+            }
+            acc = acc * cpu_gamma + static_cast<float>(host_bias[n]);
+            float actual = static_cast<float>(gpu_y[m * N + n]);
+            if (std::fabs(actual - acc) > 5e-2f * (std::fabs(acc) + 1.0f))
+            {
+                std::cout << "[ERROR: TGEMM mismatch at (" << m << ", " << n << "): GPU=" << actual << ", CPU=" << acc << "] ";
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+bool testTernaryComputingPhase4()
+{
+    // 1. CPU Layer Forward, Backward & State Machine
+    {
+        size_t K = 32;
+        size_t N = 16;
+        size_t M = 4;
+        Ternary_Linear_Layer layer(K, N, Execution_Target::CPU);
+
+        auto params_and_grads = layer.getParametersAndGradients();
+        if (params_and_grads.size() != 2) return false;
+        if (params_and_grads[0].first->getShape() != Shape{ K, N }) return false;
+        if (params_and_grads[1].first->getShape() != Shape{ 1, N }) return false;
+
+        std::vector<float> input_data(M * K, 1.0f);
+        Tensor in(M, K, input_data, Execution_Target::CPU);
+        Tensor out = layer.forward(in);
+        if (out.getShape() != Shape{ M, N }) return false;
+
+        std::vector<float> grad_data(M * N, 0.5f);
+        Tensor grad_out(M, N, grad_data, Execution_Target::CPU);
+        Tensor grad_in = layer.backward(grad_out);
+        if (grad_in.getShape() != Shape{ M, K }) return false;
+
+        const auto &w_grad = layer.getWeightsGradient().getData();
+        bool has_grad = false;
+        for (float g : w_grad)
+        {
+            if (std::abs(g) > 1e-6f)
+            {
+                has_grad = true;
+                break;
+            }
+        }
+        if (!has_grad) return false;
+
+        // Inference Baking
+        layer.prepareInference();
+        if (!layer.hasPackedInference()) return false;
+        Tensor out_infer = layer.forward(in);
+        if (out_infer.getShape() != Shape{ M, N }) return false;
+
+        // State Machine transition: setTrainingMode(true) should reactivate training path
+        layer.setTrainingMode(true);
+        if (layer.hasPackedInference()) return false;
+        Tensor out_train = layer.forward(in);
+        if (out_train.getShape() != Shape{ M, N }) return false;
+
+        // Serialization: Checkpoint save & load
+        std::string ckpt_path = "test_ternary_ckpt.bin";
+        {
+            std::ofstream ofs(ckpt_path, std::ios::binary);
+            layer.saveCheckpoint(ofs);
+        }
+        Ternary_Linear_Layer loaded_ckpt(K, N, Execution_Target::CPU);
+        {
+            std::ifstream ifs(ckpt_path, std::ios::binary);
+            loaded_ckpt.loadCheckpoint(ifs);
+        }
+        std::remove(ckpt_path.c_str());
+        if (loaded_ckpt.getWeights().getShape() != Shape{ K, N }) return false;
+
+        // Serialization: Inference save & load
+        layer.prepareInference();
+        std::string infer_path = "test_ternary_infer.bin";
+        {
+            std::ofstream ofs(infer_path, std::ios::binary);
+            layer.saveInference(ofs);
+        }
+        Ternary_Linear_Layer loaded_infer(K, N, Execution_Target::CPU);
+        {
+            std::ifstream ifs(infer_path, std::ios::binary);
+            loaded_infer.loadInference(ifs);
+        }
+        std::remove(infer_path.c_str());
+        if (!loaded_infer.hasPackedInference()) return false;
+        Tensor out_loaded = loaded_infer.forward(in);
+        if (out_loaded.getShape() != Shape{ M, N }) return false;
+
+        // Strict inference mode: backward and setTrainingMode(true) must throw
+        bool threw_on_backward = false;
+        try
+        {
+            loaded_infer.backward(grad_out);
+        }
+        catch (const std::runtime_error &)
+        {
+            threw_on_backward = true;
+        }
+        if (!threw_on_backward) return false;
+
+        bool threw_on_train = false;
+        try
+        {
+            loaded_infer.setTrainingMode(true);
+        }
+        catch (const std::runtime_error &)
+        {
+            threw_on_train = true;
+        }
+        if (!threw_on_train) return false;
+    }
+
+    // 2. GPU Layer Forward, Backward & State Machine
+    {
+        auto &engine = Execution_Engine::getInstance();
+        auto &context = engine.getContext();
+        if (context.isFloat16Supported() && context.isFloat16Enabled())
+        {
+            size_t K = 64;
+            size_t N = 32;
+            size_t M = 4;
+            Ternary_Linear_Layer gpu_layer(K, N, Execution_Target::VULKAN_GPU);
+
+            std::vector<float> input_data(M * K, 0.5f);
+            Tensor in(M, K, input_data, Execution_Target::VULKAN_GPU);
+            Tensor out = gpu_layer.forward(in);
+            engine.executeGraph();
+            engine.waitIdle();
+            if (out.getShape() != Shape{ M, N }) return false;
+
+            std::vector<float> grad_data(M * N, 0.2f);
+            Tensor grad_out(M, N, grad_data, Execution_Target::VULKAN_GPU);
+            Tensor grad_in = gpu_layer.backward(grad_out);
+            engine.executeGraph();
+            engine.waitIdle();
+            if (grad_in.getShape() != Shape{ M, K }) return false;
+
+            gpu_layer.prepareInference();
+            engine.executeGraph();
+            engine.waitIdle();
+            if (!gpu_layer.hasPackedInference()) return false;
+
+            Tensor out_infer = gpu_layer.forward(in);
+            engine.executeGraph();
+            engine.waitIdle();
+            if (out_infer.getShape() != Shape{ M, N }) return false;
+
+            // GPU Inference Serialization
+            std::string gpu_infer_path = "test_ternary_gpu_infer.bin";
+            {
+                std::ofstream ofs(gpu_infer_path, std::ios::binary);
+                gpu_layer.saveInference(ofs);
+            }
+            Ternary_Linear_Layer loaded_gpu(K, N, Execution_Target::VULKAN_GPU);
+            {
+                std::ifstream ifs(gpu_infer_path, std::ios::binary);
+                loaded_gpu.loadInference(ifs);
+            }
+            std::remove(gpu_infer_path.c_str());
+            if (!loaded_gpu.hasPackedInference()) return false;
+
+            Tensor out_loaded_gpu = loaded_gpu.forward(in);
+            engine.executeGraph();
+            engine.waitIdle();
+            if (out_loaded_gpu.getShape() != Shape{ M, N }) return false;
+        }
+    }
+
+    return true;
+}
+
+bool testTernaryComputingPhase5()
+{
+    // 1. Train -> Pack -> Infer Drift Verification
+    {
+        size_t K = 128;
+        size_t N = 64;
+        size_t M = 8;
+
+        // CPU Drift Check
+        {
+            Ternary_Linear_Layer cpu_layer(K, N, Execution_Target::CPU);
+            std::vector<float> in_data(M * K);
+            for (size_t i = 0; i < in_data.size(); ++i)
+            {
+                in_data[i] = std::sin(static_cast<float>(i) * 0.1f);
+            }
+            Tensor in(M, K, in_data, Execution_Target::CPU);
+
+            Tensor out_fake = cpu_layer.forward(in);
+            auto data_fake = out_fake.getData();
+
+            cpu_layer.prepareInference();
+            Tensor out_infer = cpu_layer.forward(in);
+            auto data_infer = out_infer.getData();
+
+            double diff_sq = 0.0;
+            double norm_sq = 0.0;
+            for (size_t i = 0; i < data_fake.size(); ++i)
+            {
+                double d = data_infer[i] - data_fake[i];
+                diff_sq += d * d;
+                norm_sq += data_fake[i] * data_fake[i];
+            }
+            double rel_err = std::sqrt(diff_sq) / (std::sqrt(norm_sq) + 1e-6);
+            if (rel_err > 1e-3)
+            {
+                std::cout << "[ERROR: CPU Train -> Infer drift error: " << rel_err << "] ";
+                return false;
+            }
+        }
+
+        // GPU Drift Check
+        auto &engine = Execution_Engine::getInstance();
+        auto &context = engine.getContext();
+        if (context.isFloat16Supported() && context.isFloat16Enabled())
+        {
+            Ternary_Linear_Layer gpu_layer(K, N, Execution_Target::VULKAN_GPU);
+            std::vector<float> in_data(M * K);
+            for (size_t i = 0; i < in_data.size(); ++i)
+            {
+                in_data[i] = std::sin(static_cast<float>(i) * 0.1f);
+            }
+            Tensor in(M, K, in_data, Execution_Target::VULKAN_GPU);
+
+            Tensor out_fake = gpu_layer.forward(in);
+            engine.executeGraph();
+            engine.waitIdle();
+            auto data_fake = out_fake.getData();
+
+            gpu_layer.prepareInference();
+            engine.executeGraph();
+            engine.waitIdle();
+
+            Tensor out_infer = gpu_layer.forward(in);
+            engine.executeGraph();
+            engine.waitIdle();
+            auto data_infer = out_infer.getData();
+
+            double diff_sq = 0.0;
+            double norm_sq = 0.0;
+            for (size_t i = 0; i < data_fake.size(); ++i)
+            {
+                double d = data_infer[i] - data_fake[i];
+                diff_sq += d * d;
+                norm_sq += data_fake[i] * data_fake[i];
+            }
+            double rel_err = std::sqrt(diff_sq) / (std::sqrt(norm_sq) + 1e-6);
+            if (rel_err > 0.01) // Relative error <= 1%
+            {
+                std::cout << "[ERROR: GPU Train -> Infer drift error: " << rel_err << "] ";
+                return false;
+            }
+        }
+    }
+
+    // 2. Non-multiple of 16 Edge Cases: K in {1, 15, 17, 33}
+    {
+        std::vector<size_t> test_k = { 1, 15, 17, 33 };
+        size_t N = 8;
+        size_t M = 2;
+
+        for (size_t K : test_k)
+        {
+            // Verify byte allocation formula
+            size_t expected_words_per_row = (K + 15) / 16;
+            size_t expected_bytes = N * expected_words_per_row * sizeof(uint32_t);
+            size_t actual_bytes = getTensorStorageBytes(Data_Type::TERNARY_INT2, Shape{ N, K });
+            if (actual_bytes != expected_bytes)
+            {
+                std::cout << "[ERROR: getTensorStorageBytes mismatch for K=" << K << "] ";
+                return false;
+            }
+
+            // CPU test
+            {
+                Ternary_Linear_Layer layer(K, N, Execution_Target::CPU);
+                std::vector<float> in_data(M * K, 0.3f);
+                Tensor in(M, K, in_data, Execution_Target::CPU);
+                Tensor out = layer.forward(in);
+                if (out.getShape() != Shape{ M, N }) return false;
+
+                std::vector<float> g_data(M * N, 0.1f);
+                Tensor g_out(M, N, g_data, Execution_Target::CPU);
+                Tensor g_in = layer.backward(g_out);
+                if (g_in.getShape() != Shape{ M, K }) return false;
+
+                layer.prepareInference();
+                Tensor out_inf = layer.forward(in);
+                if (out_inf.getShape() != Shape{ M, N }) return false;
+            }
+
+            // GPU test
+            auto &engine = Execution_Engine::getInstance();
+            auto &context = engine.getContext();
+            if (context.isFloat16Supported() && context.isFloat16Enabled())
+            {
+                Ternary_Linear_Layer layer(K, N, Execution_Target::VULKAN_GPU);
+                std::vector<float> in_data(M * K, 0.3f);
+                Tensor in(M, K, in_data, Execution_Target::VULKAN_GPU);
+                Tensor out = layer.forward(in);
+                engine.executeGraph();
+                engine.waitIdle();
+                if (out.getShape() != Shape{ M, N }) return false;
+
+                std::vector<float> g_data(M * N, 0.1f);
+                Tensor g_out(M, N, g_data, Execution_Target::VULKAN_GPU);
+                Tensor g_in = layer.backward(g_out);
+                engine.executeGraph();
+                engine.waitIdle();
+                if (g_in.getShape() != Shape{ M, K }) return false;
+
+                layer.prepareInference();
+                engine.executeGraph();
+                engine.waitIdle();
+                Tensor out_inf = layer.forward(in);
+                engine.executeGraph();
+                engine.waitIdle();
+                if (out_inf.getShape() != Shape{ M, N }) return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+// ==============================================================================
+// TEST SUITE: Dice_BCE_Cost Comprehensive Tests
+// ==============================================================================
+namespace TestDiceBceCost
+{
+double computeMaxAbsDiff(const std::vector<float> &a, const std::vector<float> &b)
+{
+    if (a.size() != b.size()) return 1e9;
+    double max_diff = 0.0;
+    for (size_t i = 0; i < a.size(); ++i)
+    {
+        if (std::isnan(a[i]) || std::isnan(b[i])) return 1e9;
+        max_diff = std::max(max_diff, static_cast<double>(std::fabs(a[i] - b[i])));
+    }
+    return max_diff;
+}
+
+std::vector<float> generateRandomProbabilities(size_t count, unsigned int seed = 42)
+{
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<float> dist(0.05f, 0.95f);
+    std::vector<float> data(count);
+    for (size_t i = 0; i < count; ++i)
+    {
+        data[i] = dist(rng);
+    }
+    return data;
+}
+
+std::vector<float> generateRandomBinaryTargets(size_t count, float pos_ratio = 0.3f, unsigned int seed = 123)
+{
+    std::mt19937 rng(seed);
+    std::bernoulli_distribution dist(pos_ratio);
+    std::vector<float> data(count);
+    for (size_t i = 0; i < count; ++i)
+    {
+        data[i] = dist(rng) ? 1.0f : 0.0f;
+    }
+    return data;
+}
+
+bool testKnownValuesCpu()
+{
+    std::vector<float> pred_raw = {0.8f, 0.2f, 0.7f, 0.1f};
+    std::vector<float> target_raw = {1.0f, 0.0f, 1.0f, 0.0f};
+
+    Tensor pred(1, 4, pred_raw, Execution_Target::CPU);
+    Tensor target(1, 4, target_raw, Execution_Target::CPU);
+
+    Dice_BCE_Cost cost_fn(1.0f, 1.0f, 1e-7f, Execution_Target::CPU);
+    float computed_loss = cost_fn.computeLoss(pred, target);
+
+    float bce_0 = -std::log(0.8f);
+    float bce_1 = -std::log(0.8f);
+    float bce_2 = -std::log(0.7f);
+    float bce_3 = -std::log(0.9f);
+    float expected_bce = (bce_0 + bce_1 + bce_2 + bce_3) / 4.0f;
+
+    float inter = 0.8f * 1.0f + 0.2f * 0.0f + 0.7f * 1.0f + 0.1f * 0.0f;
+    float pred_sum = 0.8f + 0.2f + 0.7f + 0.1f;
+    float target_sum = 1.0f + 0.0f + 1.0f + 0.0f;
+    float expected_dice = 1.0f - (2.0f * inter + 1e-7f) / (pred_sum + target_sum + 1e-7f);
+    float expected_total = 1.0f * expected_dice + 1.0f * expected_bce;
+
+    double diff = std::fabs(computed_loss - expected_total);
+    return diff <= 1e-5;
+}
+
+bool testNumericalGradientCpu()
+{
+    size_t count = 16;
+    auto pred_raw = generateRandomProbabilities(count, 101);
+    auto target_raw = generateRandomBinaryTargets(count, 0.4f, 202);
+
+    Tensor pred(1, count, pred_raw, Execution_Target::CPU);
+    Tensor target(1, count, target_raw, Execution_Target::CPU);
+
+    Dice_BCE_Cost cost_fn(1.0f, 1.0f, 1e-7f, Execution_Target::CPU);
+    Tensor analytical_grad = cost_fn.computeGradient(pred, target);
+    auto grad_data = analytical_grad.getData();
+
+    float delta = 1e-3f;
+    double max_rel_err = 0.0;
+    for (size_t i = 0; i < count; ++i)
+    {
+        auto pred_plus = pred_raw;
+        auto pred_minus = pred_raw;
+        pred_plus[i] += delta;
+        pred_minus[i] -= delta;
+
+        Tensor t_plus(1, count, pred_plus, Execution_Target::CPU);
+        Tensor t_minus(1, count, pred_minus, Execution_Target::CPU);
+
+        float loss_plus = cost_fn.computeLoss(t_plus, target);
+        float loss_minus = cost_fn.computeLoss(t_minus, target);
+
+        float num_grad = (loss_plus - loss_minus) / (2.0f * delta);
+        float ana_grad = grad_data[i];
+
+        double abs_err = std::fabs(num_grad - ana_grad);
+        double denom = 1.0 + std::max(std::fabs(num_grad), std::fabs(ana_grad));
+        double rel_err = abs_err / denom;
+        max_rel_err = std::max(max_rel_err, rel_err);
+    }
+
+    return max_rel_err <= 1e-2;
+}
+
+bool testForwardGpuParity()
+{
+    size_t count = 512;
+    auto pred_raw = generateRandomProbabilities(count, 303);
+    auto target_raw = generateRandomBinaryTargets(count, 0.35f, 404);
+
+    Tensor pred_cpu(1, count, pred_raw, Execution_Target::CPU);
+    Tensor target_cpu(1, count, target_raw, Execution_Target::CPU);
+    Dice_BCE_Cost cost_cpu(1.0f, 1.0f, 1e-7f, Execution_Target::CPU);
+    float loss_cpu = cost_cpu.computeLoss(pred_cpu, target_cpu);
+
+    Tensor pred_gpu(1, count, pred_raw, Execution_Target::VULKAN_GPU);
+    Tensor target_gpu(1, count, target_raw, Execution_Target::VULKAN_GPU);
+    Dice_BCE_Cost cost_gpu(1.0f, 1.0f, 1e-7f, Execution_Target::VULKAN_GPU);
+    float loss_gpu = cost_gpu.computeLoss(pred_gpu, target_gpu);
+
+    double diff = std::fabs(loss_cpu - loss_gpu);
+    return diff <= 1e-4;
+}
+
+bool testBackwardGpuParity()
+{
+    size_t count = 512;
+    auto pred_raw = generateRandomProbabilities(count, 505);
+    auto target_raw = generateRandomBinaryTargets(count, 0.45f, 606);
+
+    Tensor pred_cpu(1, count, pred_raw, Execution_Target::CPU);
+    Tensor target_cpu(1, count, target_raw, Execution_Target::CPU);
+    Dice_BCE_Cost cost_cpu(1.0f, 1.0f, 1e-7f, Execution_Target::CPU);
+    Tensor grad_cpu = cost_cpu.computeGradient(pred_cpu, target_cpu);
+
+    Tensor pred_gpu(1, count, pred_raw, Execution_Target::VULKAN_GPU);
+    Tensor target_gpu(1, count, target_raw, Execution_Target::VULKAN_GPU);
+    Dice_BCE_Cost cost_gpu(1.0f, 1.0f, 1e-7f, Execution_Target::VULKAN_GPU);
+    Tensor grad_gpu = cost_gpu.computeGradient(pred_gpu, target_gpu);
+
+    auto cpu_data = grad_cpu.getData();
+    auto gpu_data = grad_gpu.getData();
+
+    double max_diff = computeMaxAbsDiff(cpu_data, gpu_data);
+    return max_diff <= 1e-4;
+}
+
+bool testFp16AndCoopmatParity()
+{
+    size_t count = 1024;
+    auto pred_raw = generateRandomProbabilities(count, 707);
+    auto target_raw = generateRandomBinaryTargets(count, 0.3f, 808);
+
+    Tensor pred_cpu(1, count, pred_raw, Execution_Target::CPU);
+    Tensor target_cpu(1, count, target_raw, Execution_Target::CPU);
+    Dice_BCE_Cost cost_cpu(1.0f, 1.0f, 1e-7f, Execution_Target::CPU);
+    float loss_cpu = cost_cpu.computeLoss(pred_cpu, target_cpu);
+    Tensor grad_cpu = cost_cpu.computeGradient(pred_cpu, target_cpu);
+
+    Tensor pred_fp16(Shape{1, count}, pred_raw, Data_Type::FLOAT16, Execution_Target::VULKAN_GPU);
+    Tensor target_fp16(Shape{1, count}, target_raw, Data_Type::FLOAT16, Execution_Target::VULKAN_GPU);
+    Dice_BCE_Cost cost_gpu(1.0f, 1.0f, 1e-7f, Execution_Target::VULKAN_GPU);
+
+    float loss_fp16 = cost_gpu.computeLoss(pred_fp16, target_fp16);
+    Tensor grad_fp16 = cost_gpu.computeGradient(pred_fp16, target_fp16);
+
+    double loss_diff = std::fabs(loss_cpu - loss_fp16);
+    double grad_diff = computeMaxAbsDiff(grad_cpu.getData(), grad_fp16.getData());
+
+    return (loss_diff <= 2e-3 && grad_diff <= 2e-3);
+}
+
+bool testNumericalGradientGpu()
+{
+    size_t count = 32;
+    auto pred_raw = generateRandomProbabilities(count, 909);
+    auto target_raw = generateRandomBinaryTargets(count, 0.5f, 1010);
+
+    Tensor pred_gpu(1, count, pred_raw, Execution_Target::VULKAN_GPU);
+    Tensor target_gpu(1, count, target_raw, Execution_Target::VULKAN_GPU);
+    Dice_BCE_Cost cost_gpu(1.0f, 1.0f, 1e-7f, Execution_Target::VULKAN_GPU);
+
+    Tensor ana_grad_gpu = cost_gpu.computeGradient(pred_gpu, target_gpu);
+    auto ana_data = ana_grad_gpu.getData();
+
+    float delta = 1e-3f;
+    double max_rel_err = 0.0;
+    for (size_t i = 0; i < count; ++i)
+    {
+        auto pred_plus = pred_raw;
+        auto pred_minus = pred_raw;
+        pred_plus[i] += delta;
+        pred_minus[i] -= delta;
+
+        Tensor t_plus(1, count, pred_plus, Execution_Target::VULKAN_GPU);
+        Tensor t_minus(1, count, pred_minus, Execution_Target::VULKAN_GPU);
+
+        float loss_plus = cost_gpu.computeLoss(t_plus, target_gpu);
+        float loss_minus = cost_gpu.computeLoss(t_minus, target_gpu);
+
+        float num_grad = (loss_plus - loss_minus) / (2.0f * delta);
+        float ana_grad = ana_data[i];
+
+        double abs_err = std::fabs(num_grad - ana_grad);
+        double denom = 1.0 + std::max(std::fabs(num_grad), std::fabs(ana_grad));
+        double rel_err = abs_err / denom;
+        max_rel_err = std::max(max_rel_err, rel_err);
+    }
+
+    return max_rel_err <= 1e-2;
+}
+
+bool testWeightsAndEdgeCases()
+{
+    size_t count = 16;
+    std::vector<float> extreme_preds = {0.0f, 1.0f, 0.0f, 1.0f, 0.5f, 0.0f, 1.0f, 0.5f,
+                                        0.0f, 1.0f, 0.0f, 1.0f, 0.5f, 0.0f, 1.0f, 0.5f};
+    std::vector<float> targets =       {0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f,
+                                        0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f};
+
+    Tensor p_cpu(1, count, extreme_preds, Execution_Target::CPU);
+    Tensor t_cpu(1, count, targets, Execution_Target::CPU);
+
+    Dice_BCE_Cost cost_weighted(0.5f, 2.0f, 1e-7f, Execution_Target::CPU);
+    float loss_cpu = cost_weighted.computeLoss(p_cpu, t_cpu);
+    Tensor grad_cpu = cost_weighted.computeGradient(p_cpu, t_cpu);
+
+    if (std::isnan(loss_cpu) || std::isinf(loss_cpu)) return false;
+    for (float g : grad_cpu.getData())
+    {
+        if (std::isnan(g) || std::isinf(g)) return false;
+    }
+
+    Tensor p_gpu(1, count, extreme_preds, Execution_Target::VULKAN_GPU);
+    Tensor t_gpu(1, count, targets, Execution_Target::VULKAN_GPU);
+    Dice_BCE_Cost cost_gpu(0.5f, 2.0f, 1e-7f, Execution_Target::VULKAN_GPU);
+    float loss_gpu = cost_gpu.computeLoss(p_gpu, t_gpu);
+    Tensor grad_gpu = cost_gpu.computeGradient(p_gpu, t_gpu);
+
+    if (std::isnan(loss_gpu) || std::isinf(loss_gpu)) return false;
+    for (float g : grad_gpu.getData())
+    {
+        if (std::isnan(g) || std::isinf(g)) return false;
+    }
+
+    return true;
+}
+
+bool testPolymorphicInterface()
+{
+    std::unique_ptr<ICost_Function> cost = std::make_unique<Dice_BCE_Cost>(0.75f, 1.25f, 1e-5f, Execution_Target::CPU);
+    if (cost->getType() != Cost_Type::DICE_BCE) return false;
+
+    size_t count = 32;
+    auto pred_raw = generateRandomProbabilities(count, 1111);
+    auto target_raw = generateRandomBinaryTargets(count, 0.4f, 2222);
+
+    Tensor p(1, count, pred_raw, Execution_Target::CPU);
+    Tensor t(1, count, target_raw, Execution_Target::CPU);
+    Tensor g(Execution_Target::CPU);
+
+    float combined_loss = cost->computeLossAndGradient(p, t, g);
+    float separate_loss = cost->computeLoss(p, t);
+    Tensor separate_g = cost->computeGradient(p, t);
+
+    if (std::fabs(combined_loss - separate_loss) > 1e-6) return false;
+    double g_diff = computeMaxAbsDiff(g.getData(), separate_g.getData());
+    if (g_diff > 1e-6) return false;
+
+    std::string checkpoint_file = "test_dice_bce_ckpt.bin";
+    {
+        std::ofstream out(checkpoint_file, std::ios::binary);
+        cost->saveCheckpoint(out);
+    }
+    Dice_BCE_Cost loaded_cost(1.0f, 1.0f, 1e-7f, Execution_Target::CPU);
+    {
+        std::ifstream in(checkpoint_file, std::ios::binary);
+        loaded_cost.loadCheckpoint(in);
+    }
+    std::remove(checkpoint_file.c_str());
+
+    if (std::fabs(loaded_cost.getDiceWeight() - 0.75f) > 1e-6 ||
+        std::fabs(loaded_cost.getBceWeight() - 1.25f) > 1e-6 ||
+        std::fabs(loaded_cost.getEpsilon() - 1e-5f) > 1e-8)
+    {
+        return false;
+    }
+
+    return true;
+}
+
+bool runSuite()
+{
+    bool ok = true;
+    ok &= testKnownValuesCpu();
+    ok &= testNumericalGradientCpu();
+    ok &= testForwardGpuParity();
+    ok &= testBackwardGpuParity();
+    ok &= testFp16AndCoopmatParity();
+    ok &= testNumericalGradientGpu();
+    ok &= testWeightsAndEdgeCases();
+    ok &= testPolymorphicInterface();
+    return ok;
+}
+} // namespace TestDiceBceCost
+
+// ==============================================================================
+// TEST SUITE: Instance_Norm_2d_Layer Comprehensive Tests
+// ==============================================================================
+namespace TestInstanceNorm
+{
+double computeMaxAbsDiff(const std::vector<float> &a, const std::vector<float> &b)
+{
+    if (a.size() != b.size()) return 1e9;
+    double max_diff = 0.0;
+    for (size_t i = 0; i < a.size(); ++i)
+    {
+        if (std::isnan(a[i]) || std::isnan(b[i])) return 1e9;
+        max_diff = std::max(max_diff, static_cast<double>(std::fabs(a[i] - b[i])));
+    }
+    return max_diff;
+}
+
+std::vector<float> generateRandomData(size_t count, float mean = 0.0f, float stddev = 1.0f)
+{
+    std::mt19937 rng(42);
+    std::normal_distribution<float> dist(mean, stddev);
+    std::vector<float> data(count);
+    for (size_t i = 0; i < count; ++i)
+    {
+        data[i] = dist(rng);
+    }
+    return data;
+}
+
+bool testForwardKnownValues()
+{
+    uint32_t b_size = 2, h = 2, w = 2, c = 2;
+    float epsilon = 1e-5f;
+
+    std::vector<float> input_raw = {
+        1.0f, 10.0f,  2.0f, 20.0f,  3.0f, 30.0f,  4.0f, 40.0f,
+        5.0f, 50.0f,  6.0f, 60.0f,  7.0f, 70.0f,  8.0f, 80.0f
+    };
+    std::vector<float> gamma_raw = {1.5f, 0.5f};
+    std::vector<float> beta_raw = {0.1f, -0.2f};
+
+    Tensor in_cpu(b_size, h * w * c, input_raw, Execution_Target::CPU);
+    Tensor gamma_cpu(1, c, gamma_raw, Execution_Target::CPU);
+    Tensor beta_cpu(1, c, beta_raw, Execution_Target::CPU);
+    Tensor saved_mean(Execution_Target::CPU), saved_inv_std(Execution_Target::CPU), norm_in(Execution_Target::CPU), out_cpu(Execution_Target::CPU);
+
+    ops::norm::instanceNorm2dForward(
+        in_cpu, gamma_cpu, beta_cpu,
+        saved_mean, saved_inv_std, norm_in, out_cpu,
+        h, w, c, epsilon);
+
+    auto mean_data = saved_mean.getData();
+    float exp_mean_b0_c0 = (1.0f + 2.0f + 3.0f + 4.0f) / 4.0f;
+    float exp_mean_b0_c1 = (10.0f + 20.0f + 30.0f + 40.0f) / 4.0f;
+    float exp_mean_b1_c0 = (5.0f + 6.0f + 7.0f + 8.0f) / 4.0f;
+    float exp_mean_b1_c1 = (50.0f + 60.0f + 70.0f + 80.0f) / 4.0f;
+
+    if (std::fabs(mean_data[0] - exp_mean_b0_c0) > 1e-4f ||
+        std::fabs(mean_data[1] - exp_mean_b0_c1) > 1e-4f ||
+        std::fabs(mean_data[2] - exp_mean_b1_c0) > 1e-4f ||
+        std::fabs(mean_data[3] - exp_mean_b1_c1) > 1e-4f)
+    {
+        return false;
+    }
+    return true;
+}
+
+bool testForwardGpuParity()
+{
+    auto &engine = Execution_Engine::getInstance();
+    uint32_t b_size = 2, h = 16, w = 16, c = 32;
+    float epsilon = 1e-5f;
+
+    std::vector<float> input_raw = generateRandomData(b_size * h * w * c, 2.0f, 3.0f);
+    std::vector<float> gamma_raw = generateRandomData(c, 1.0f, 0.2f);
+    std::vector<float> beta_raw = generateRandomData(c, 0.0f, 0.1f);
+
+    Tensor in_cpu(b_size, h * w * c, input_raw, Execution_Target::CPU);
+    Tensor gamma_cpu(1, c, gamma_raw, Execution_Target::CPU);
+    Tensor beta_cpu(1, c, beta_raw, Execution_Target::CPU);
+    Tensor mean_cpu(Execution_Target::CPU), inv_std_cpu(Execution_Target::CPU), norm_cpu(Execution_Target::CPU), out_cpu(Execution_Target::CPU);
+
+    ops::norm::instanceNorm2dForward(in_cpu, gamma_cpu, beta_cpu, mean_cpu, inv_std_cpu, norm_cpu, out_cpu, h, w, c, epsilon);
+
+    Tensor in_gpu(b_size, h * w * c, input_raw, Execution_Target::VULKAN_GPU);
+    Tensor gamma_gpu(1, c, gamma_raw, Execution_Target::VULKAN_GPU);
+    Tensor beta_gpu(1, c, beta_raw, Execution_Target::VULKAN_GPU);
+    Tensor mean_gpu(Execution_Target::VULKAN_GPU), inv_std_gpu(Execution_Target::VULKAN_GPU), norm_gpu(Execution_Target::VULKAN_GPU), out_gpu(Execution_Target::VULKAN_GPU);
+
+    ops::norm::instanceNorm2dForward(in_gpu, gamma_gpu, beta_gpu, mean_gpu, inv_std_gpu, norm_gpu, out_gpu, h, w, c, epsilon);
+    engine.executeGraph();
+
+    double out_err = computeMaxAbsDiff(out_gpu.getData(), out_cpu.getData());
+    double mean_err = computeMaxAbsDiff(mean_gpu.getData(), mean_cpu.getData());
+    double inv_std_err = computeMaxAbsDiff(inv_std_gpu.getData(), inv_std_cpu.getData());
+
+    return (out_err <= 1e-4 && mean_err <= 1e-4 && inv_std_err <= 1e-4);
+}
+
+bool testForwardFp16AndCoopmatParity()
+{
+    auto &engine = Execution_Engine::getInstance();
+    uint32_t b_size = 2, h = 16, w = 16, c = 32;
+    float epsilon = 1e-5f;
+
+    std::vector<float> input_raw = generateRandomData(b_size * h * w * c, 1.0f, 1.5f);
+    std::vector<float> gamma_raw = generateRandomData(c, 1.0f, 0.1f);
+    std::vector<float> beta_raw = generateRandomData(c, 0.0f, 0.1f);
+
+    Tensor in_cpu(b_size, h * w * c, input_raw, Execution_Target::CPU);
+    Tensor gamma_cpu(1, c, gamma_raw, Execution_Target::CPU);
+    Tensor beta_cpu(1, c, beta_raw, Execution_Target::CPU);
+    Tensor mean_cpu(Execution_Target::CPU), inv_std_cpu(Execution_Target::CPU), norm_cpu(Execution_Target::CPU), out_cpu(Execution_Target::CPU);
+
+    ops::norm::instanceNorm2dForward(in_cpu, gamma_cpu, beta_cpu, mean_cpu, inv_std_cpu, norm_cpu, out_cpu, h, w, c, epsilon);
+
+    Tensor in_gpu_fp16(Shape{b_size, h * w * c}, input_raw, Data_Type::FLOAT16, Execution_Target::VULKAN_GPU);
+    Tensor gamma_gpu(1, c, gamma_raw, Execution_Target::VULKAN_GPU);
+    Tensor beta_gpu(1, c, beta_raw, Execution_Target::VULKAN_GPU);
+    Tensor mean_gpu(Execution_Target::VULKAN_GPU), inv_std_gpu(Execution_Target::VULKAN_GPU), norm_gpu(Execution_Target::VULKAN_GPU), out_gpu_fp16(Execution_Target::VULKAN_GPU);
+
+    ops::norm::instanceNorm2dForward(in_gpu_fp16, gamma_gpu, beta_gpu, mean_gpu, inv_std_gpu, norm_gpu, out_gpu_fp16, h, w, c, epsilon);
+    engine.executeGraph();
+
+    double out_err = computeMaxAbsDiff(out_gpu_fp16.getData(), out_cpu.getData());
+    return out_err <= 5e-2;
+}
+
+bool testBackwardNumericalGradient()
+{
+    uint32_t b_size = 2, h = 4, w = 4, c = 3;
+    float epsilon = 1e-5f, eps_h = 1e-3f;
+
+    std::vector<float> input_raw = generateRandomData(b_size * h * w * c, 0.5f, 1.0f);
+    std::vector<float> gamma_raw = generateRandomData(c, 1.2f, 0.3f);
+    std::vector<float> beta_raw = generateRandomData(c, 0.1f, 0.2f);
+    std::vector<float> grad_out_raw = generateRandomData(b_size * h * w * c, 0.0f, 0.5f);
+
+    Tensor in_cpu(b_size, h * w * c, input_raw, Execution_Target::CPU);
+    Tensor gamma_cpu(1, c, gamma_raw, Execution_Target::CPU);
+    Tensor beta_cpu(1, c, beta_raw, Execution_Target::CPU);
+    Tensor mean_cpu(Execution_Target::CPU), inv_std_cpu(Execution_Target::CPU), norm_cpu(Execution_Target::CPU), out_cpu(Execution_Target::CPU);
+
+    ops::norm::instanceNorm2dForward(in_cpu, gamma_cpu, beta_cpu, mean_cpu, inv_std_cpu, norm_cpu, out_cpu, h, w, c, epsilon);
+
+    Tensor dY_cpu(b_size, h * w * c, grad_out_raw, Execution_Target::CPU);
+    Tensor dgamma_cpu(Execution_Target::CPU), dbeta_cpu(Execution_Target::CPU), dX_cpu(Execution_Target::CPU);
+
+    ops::norm::instanceNorm2dBackward(dY_cpu, norm_cpu, gamma_cpu, inv_std_cpu, dgamma_cpu, dbeta_cpu, dX_cpu, h, w, c, epsilon);
+
+    auto computeLoss = [&](const std::vector<float> &x, const std::vector<float> &g, const std::vector<float> &bt) -> float
+    {
+        Tensor cur_x(b_size, h * w * c, x, Execution_Target::CPU);
+        Tensor cur_g(1, c, g, Execution_Target::CPU);
+        Tensor cur_b(1, c, bt, Execution_Target::CPU);
+        Tensor m_t(Execution_Target::CPU), inv_t(Execution_Target::CPU), n_t(Execution_Target::CPU), o_t(Execution_Target::CPU);
+
+        ops::norm::instanceNorm2dForward(cur_x, cur_g, cur_b, m_t, inv_t, n_t, o_t, h, w, c, epsilon);
+        const auto &out_v = o_t.getData();
+        float loss = 0.0f;
+        for (size_t i = 0; i < out_v.size(); ++i) loss += out_v[i] * grad_out_raw[i];
+        return loss;
+    };
+
+    auto ana_dgamma = dgamma_cpu.getData();
+    auto ana_dbeta = dbeta_cpu.getData();
+    auto ana_dX = dX_cpu.getData();
+
+    double max_rel_gamma_err = 0.0;
+    for (uint32_t ch = 0; ch < c; ++ch)
+    {
+        auto g_plus = gamma_raw, g_minus = gamma_raw;
+        g_plus[ch] += eps_h; g_minus[ch] -= eps_h;
+        float num_g = (computeLoss(input_raw, g_plus, beta_raw) - computeLoss(input_raw, g_minus, beta_raw)) / (2.0f * eps_h);
+        double diff = std::fabs(ana_dgamma[ch] - num_g);
+        max_rel_gamma_err = std::max(max_rel_gamma_err, diff / (1.0 + std::max(std::fabs(ana_dgamma[ch]), std::fabs(num_g))));
+    }
+
+    double max_rel_beta_err = 0.0;
+    for (uint32_t ch = 0; ch < c; ++ch)
+    {
+        auto b_plus = beta_raw, b_minus = beta_raw;
+        b_plus[ch] += eps_h; b_minus[ch] -= eps_h;
+        float num_b = (computeLoss(input_raw, gamma_raw, b_plus) - computeLoss(input_raw, gamma_raw, b_minus)) / (2.0f * eps_h);
+        double diff = std::fabs(ana_dbeta[ch] - num_b);
+        max_rel_beta_err = std::max(max_rel_beta_err, diff / (1.0 + std::max(std::fabs(ana_dbeta[ch]), std::fabs(num_b))));
+    }
+
+    double max_rel_x_err = 0.0;
+    for (size_t idx = 0; idx < input_raw.size(); ++idx)
+    {
+        auto x_plus = input_raw, x_minus = input_raw;
+        x_plus[idx] += eps_h; x_minus[idx] -= eps_h;
+        float num_x = (computeLoss(x_plus, gamma_raw, beta_raw) - computeLoss(x_minus, gamma_raw, beta_raw)) / (2.0f * eps_h);
+        double diff = std::fabs(ana_dX[idx] - num_x);
+        max_rel_x_err = std::max(max_rel_x_err, diff / (1.0 + std::max(std::fabs(ana_dX[idx]), std::fabs(num_x))));
+    }
+
+    return (max_rel_gamma_err <= 1e-2 && max_rel_beta_err <= 1e-2 && max_rel_x_err <= 1e-2);
+}
+
+bool testBackwardGpuParity()
+{
+    auto &engine = Execution_Engine::getInstance();
+    uint32_t b_size = 2, h = 8, w = 8, c = 16;
+    float epsilon = 1e-5f;
+
+    std::vector<float> input_raw = generateRandomData(b_size * h * w * c, 1.0f, 2.0f);
+    std::vector<float> gamma_raw = generateRandomData(c, 1.0f, 0.2f);
+    std::vector<float> beta_raw = generateRandomData(c, 0.0f, 0.1f);
+    std::vector<float> grad_out_raw = generateRandomData(b_size * h * w * c, 0.0f, 1.0f);
+
+    Tensor in_cpu(b_size, h * w * c, input_raw, Execution_Target::CPU);
+    Tensor gamma_cpu(1, c, gamma_raw, Execution_Target::CPU);
+    Tensor beta_cpu(1, c, beta_raw, Execution_Target::CPU);
+    Tensor mean_cpu(Execution_Target::CPU), inv_std_cpu(Execution_Target::CPU), norm_cpu(Execution_Target::CPU), out_cpu(Execution_Target::CPU);
+
+    ops::norm::instanceNorm2dForward(in_cpu, gamma_cpu, beta_cpu, mean_cpu, inv_std_cpu, norm_cpu, out_cpu, h, w, c, epsilon);
+
+    Tensor dY_cpu(b_size, h * w * c, grad_out_raw, Execution_Target::CPU);
+    Tensor dgamma_cpu(Execution_Target::CPU), dbeta_cpu(Execution_Target::CPU), dX_cpu(Execution_Target::CPU);
+
+    ops::norm::instanceNorm2dBackward(dY_cpu, norm_cpu, gamma_cpu, inv_std_cpu, dgamma_cpu, dbeta_cpu, dX_cpu, h, w, c, epsilon);
+
+    Tensor in_gpu(b_size, h * w * c, input_raw, Execution_Target::VULKAN_GPU);
+    Tensor gamma_gpu(1, c, gamma_raw, Execution_Target::VULKAN_GPU);
+    Tensor beta_gpu(1, c, beta_raw, Execution_Target::VULKAN_GPU);
+    Tensor mean_gpu(Execution_Target::VULKAN_GPU), inv_std_gpu(Execution_Target::VULKAN_GPU), norm_gpu(Execution_Target::VULKAN_GPU), out_gpu(Execution_Target::VULKAN_GPU);
+
+    ops::norm::instanceNorm2dForward(in_gpu, gamma_gpu, beta_gpu, mean_gpu, inv_std_gpu, norm_gpu, out_gpu, h, w, c, epsilon);
+
+    Tensor dY_gpu(b_size, h * w * c, grad_out_raw, Execution_Target::VULKAN_GPU);
+    Tensor dgamma_gpu(Execution_Target::VULKAN_GPU), dbeta_gpu(Execution_Target::VULKAN_GPU), dX_gpu(Execution_Target::VULKAN_GPU);
+
+    ops::norm::instanceNorm2dBackward(dY_gpu, norm_gpu, gamma_gpu, inv_std_gpu, dgamma_gpu, dbeta_gpu, dX_gpu, h, w, c, epsilon);
+    engine.executeGraph();
+
+    double dx_err = computeMaxAbsDiff(dX_gpu.getData(), dX_cpu.getData());
+    double dg_err = computeMaxAbsDiff(dgamma_gpu.getData(), dgamma_cpu.getData());
+    double db_err = computeMaxAbsDiff(dbeta_gpu.getData(), dbeta_cpu.getData());
+
+    return (dx_err <= 1e-4 && dg_err <= 1e-4 && db_err <= 1e-4);
+}
+
+bool testBackwardGpuFp16AndCoopmatParity()
+{
+    auto &engine = Execution_Engine::getInstance();
+    uint32_t b_size = 2, h = 8, w = 8, c = 32;
+    float epsilon = 1e-5f;
+
+    std::vector<float> input_raw = generateRandomData(b_size * h * w * c, 1.0f, 1.0f);
+    std::vector<float> gamma_raw = generateRandomData(c, 1.0f, 0.2f);
+    std::vector<float> beta_raw = generateRandomData(c, 0.0f, 0.1f);
+    std::vector<float> grad_out_raw = generateRandomData(b_size * h * w * c, 0.0f, 1.0f);
+
+    Tensor in_cpu(b_size, h * w * c, input_raw, Execution_Target::CPU);
+    Tensor gamma_cpu(1, c, gamma_raw, Execution_Target::CPU);
+    Tensor beta_cpu(1, c, beta_raw, Execution_Target::CPU);
+    Tensor mean_cpu(Execution_Target::CPU), inv_std_cpu(Execution_Target::CPU), norm_cpu(Execution_Target::CPU), out_cpu(Execution_Target::CPU);
+
+    ops::norm::instanceNorm2dForward(in_cpu, gamma_cpu, beta_cpu, mean_cpu, inv_std_cpu, norm_cpu, out_cpu, h, w, c, epsilon);
+
+    Tensor dY_cpu(b_size, h * w * c, grad_out_raw, Execution_Target::CPU);
+    Tensor dgamma_cpu(Execution_Target::CPU), dbeta_cpu(Execution_Target::CPU), dX_cpu(Execution_Target::CPU);
+
+    ops::norm::instanceNorm2dBackward(dY_cpu, norm_cpu, gamma_cpu, inv_std_cpu, dgamma_cpu, dbeta_cpu, dX_cpu, h, w, c, epsilon);
+
+    Tensor in_gpu(Shape{b_size, h * w * c}, input_raw, Data_Type::FLOAT16, Execution_Target::VULKAN_GPU);
+    Tensor gamma_gpu(1, c, gamma_raw, Execution_Target::VULKAN_GPU);
+    Tensor beta_gpu(1, c, beta_raw, Execution_Target::VULKAN_GPU);
+    Tensor mean_gpu(Execution_Target::VULKAN_GPU), inv_std_gpu(Execution_Target::VULKAN_GPU), norm_gpu(Execution_Target::VULKAN_GPU), out_gpu(Execution_Target::VULKAN_GPU);
+
+    ops::norm::instanceNorm2dForward(in_gpu, gamma_gpu, beta_gpu, mean_gpu, inv_std_gpu, norm_gpu, out_gpu, h, w, c, epsilon);
+
+    Tensor dY_gpu(Shape{b_size, h * w * c}, grad_out_raw, Data_Type::FLOAT16, Execution_Target::VULKAN_GPU);
+    Tensor dgamma_gpu(Execution_Target::VULKAN_GPU), dbeta_gpu(Execution_Target::VULKAN_GPU), dX_gpu(Execution_Target::VULKAN_GPU);
+
+    ops::norm::instanceNorm2dBackward(dY_gpu, norm_gpu, gamma_gpu, inv_std_gpu, dgamma_gpu, dbeta_gpu, dX_gpu, h, w, c, epsilon);
+    engine.executeGraph();
+
+    double dx_err = computeMaxAbsDiff(dX_gpu.getData(), dX_cpu.getData());
+    double dg_err = computeMaxAbsDiff(dgamma_gpu.getData(), dgamma_cpu.getData());
+    double db_err = computeMaxAbsDiff(dbeta_gpu.getData(), dbeta_cpu.getData());
+
+    return (dx_err <= 5e-2 && dg_err <= 5e-2 && db_err <= 5e-2);
+}
+
+bool testBatchInvariance()
+{
+    auto &engine = Execution_Engine::getInstance();
+    uint32_t h = 8, w = 8, c = 16;
+    float epsilon = 1e-5f;
+    uint32_t spatial_feat = h * w * c;
+
+    std::vector<float> sample_a = generateRandomData(spatial_feat, 1.0f, 2.0f);
+    std::vector<float> sample_b = generateRandomData(spatial_feat, 5.0f, 10.0f);
+
+    std::vector<float> batch_ab = sample_a;
+    batch_ab.insert(batch_ab.end(), sample_b.begin(), sample_b.end());
+
+    std::vector<float> gamma_raw = generateRandomData(c, 1.0f, 0.1f);
+    std::vector<float> beta_raw = generateRandomData(c, 0.0f, 0.1f);
+
+    Tensor in_a_gpu(1, spatial_feat, sample_a, Execution_Target::VULKAN_GPU);
+    Tensor gamma_gpu(1, c, gamma_raw, Execution_Target::VULKAN_GPU);
+    Tensor beta_gpu(1, c, beta_raw, Execution_Target::VULKAN_GPU);
+    Tensor mean_a(Execution_Target::VULKAN_GPU), inv_a(Execution_Target::VULKAN_GPU), norm_a(Execution_Target::VULKAN_GPU), out_a(Execution_Target::VULKAN_GPU);
+
+    ops::norm::instanceNorm2dForward(in_a_gpu, gamma_gpu, beta_gpu, mean_a, inv_a, norm_a, out_a, h, w, c, epsilon);
+
+    Tensor in_ab_gpu(2, spatial_feat, batch_ab, Execution_Target::VULKAN_GPU);
+    Tensor mean_ab(Execution_Target::VULKAN_GPU), inv_ab(Execution_Target::VULKAN_GPU), norm_ab(Execution_Target::VULKAN_GPU), out_ab(Execution_Target::VULKAN_GPU);
+
+    ops::norm::instanceNorm2dForward(in_ab_gpu, gamma_gpu, beta_gpu, mean_ab, inv_ab, norm_ab, out_ab, h, w, c, epsilon);
+    engine.executeGraph();
+
+    auto out_a_data = out_a.getData();
+    auto out_ab_data = out_ab.getData();
+
+    std::vector<float> out_ab_slice_a(out_ab_data.begin(), out_ab_data.begin() + spatial_feat);
+    double diff = computeMaxAbsDiff(out_a_data, out_ab_slice_a);
+
+    return diff <= 1e-5;
+}
+
+bool testLayerTrainEvalConsistency()
+{
+    auto &engine = Execution_Engine::getInstance();
+    uint32_t b_size = 2, h = 8, w = 8, c = 16;
+    float epsilon = 1e-5f;
+
+    std::vector<float> input_raw = generateRandomData(b_size * h * w * c, 2.0f, 1.0f);
+
+    Instance_Norm_2d_Layer layer(h, w, c, epsilon, Execution_Target::VULKAN_GPU);
+
+    Tensor in_train(b_size, h * w * c, input_raw, Execution_Target::VULKAN_GPU);
+    layer.setTrainingMode(true);
+    Tensor out_train = layer.forward(in_train);
+    engine.executeGraph();
+    auto train_data = out_train.getData();
+
+    Tensor in_eval(b_size, h * w * c, input_raw, Execution_Target::VULKAN_GPU);
+    layer.setTrainingMode(false);
+    Tensor out_eval = layer.forward(in_eval);
+    engine.executeGraph();
+    auto eval_data = out_eval.getData();
+
+    double diff = computeMaxAbsDiff(train_data, eval_data);
+    return diff <= 1e-5;
+}
+
+bool runSuite()
+{
+    bool ok = true;
+    ok &= testForwardKnownValues();
+    ok &= testForwardGpuParity();
+    ok &= testForwardFp16AndCoopmatParity();
+    ok &= testBackwardNumericalGradient();
+    ok &= testBackwardGpuParity();
+    ok &= testBackwardGpuFp16AndCoopmatParity();
+    ok &= testBatchInvariance();
+    ok &= testLayerTrainEvalConsistency();
+    return ok;
+}
+} // namespace TestInstanceNorm
+
+// ==============================================================================
+// TEST SUITE: Leaky_Relu_Layer Comprehensive Tests
+// ==============================================================================
+namespace TestLeakyRelu
+{
+double computeMaxAbsDiff(const std::vector<float> &a, const std::vector<float> &b)
+{
+    if (a.size() != b.size()) return 1e9;
+    double max_diff = 0.0;
+    for (size_t i = 0; i < a.size(); ++i)
+    {
+        if (std::isnan(a[i]) || std::isnan(b[i])) return 1e9;
+        max_diff = std::max(max_diff, static_cast<double>(std::fabs(a[i] - b[i])));
+    }
+    return max_diff;
+}
+
+std::vector<float> generateRandomData(size_t count, float mean = 0.0f, float stddev = 1.0f, unsigned int seed = 42)
+{
+    std::mt19937 rng(seed);
+    std::normal_distribution<float> dist(mean, stddev);
+    std::vector<float> data(count);
+    for (size_t i = 0; i < count; ++i)
+    {
+        float val = dist(rng);
+        if (std::fabs(val) < 1e-3f) val = (val >= 0.0f) ? 1e-3f : -1e-3f;
+        data[i] = val;
+    }
+    return data;
+}
+
+bool testForwardKnownValues()
+{
+    float slope = 0.01f;
+    std::vector<float> input_raw = {-2.0f, -0.5f, 0.0f, 1.5f, 3.0f};
+    std::vector<float> expected_raw = {-0.02f, -0.005f, 0.0f, 1.5f, 3.0f};
+
+    Tensor in_cpu(1, 5, input_raw, Execution_Target::CPU);
+    Tensor out_cpu(Execution_Target::CPU);
+
+    ops::activation::leakyRelu(in_cpu, out_cpu, slope);
+    auto out_data = out_cpu.getData();
+
+    double diff = computeMaxAbsDiff(out_data, expected_raw);
+    return diff <= 1e-6;
+}
+
+bool testBackwardNumericalGradientCpu()
+{
+    size_t count = 32;
+    float slope = 0.01f;
+    float delta = 1e-3f;
+
+    auto input_raw = generateRandomData(count, 0.0f, 1.5f, 101);
+    auto grad_out_raw = generateRandomData(count, 0.0f, 1.0f, 202);
+
+    Tensor in_cpu(1, count, input_raw, Execution_Target::CPU);
+    Tensor grad_out_cpu(1, count, grad_out_raw, Execution_Target::CPU);
+    Tensor grad_in_cpu(Execution_Target::CPU);
+
+    ops::activation::leakyReluBackward(in_cpu, grad_out_cpu, grad_in_cpu, slope);
+    auto ana_grad = grad_in_cpu.getData();
+
+    auto computeScalarLoss = [&](const std::vector<float> &x) -> float
+    {
+        Tensor cur_x(1, count, x, Execution_Target::CPU);
+        Tensor cur_y(Execution_Target::CPU);
+        ops::activation::leakyRelu(cur_x, cur_y, slope);
+        const auto &y_data = cur_y.getData();
+        float loss = 0.0f;
+        for (size_t i = 0; i < count; ++i) loss += y_data[i] * grad_out_raw[i];
+        return loss;
+    };
+
+    double max_rel_err = 0.0;
+    for (size_t i = 0; i < count; ++i)
+    {
+        auto x_plus = input_raw, x_minus = input_raw;
+        x_plus[i] += delta; x_minus[i] -= delta;
+        float num_grad = (computeScalarLoss(x_plus) - computeScalarLoss(x_minus)) / (2.0f * delta);
+        float ana_val = ana_grad[i];
+        double abs_err = std::fabs(num_grad - ana_val);
+        double denom = 1.0 + std::max(std::fabs(num_grad), std::fabs(ana_val));
+        max_rel_err = std::max(max_rel_err, abs_err / denom);
+    }
+
+    return max_rel_err <= 1e-2;
+}
+
+bool testForwardGpuParity()
+{
+    size_t count = 1024;
+    float slope = 0.01f;
+    auto input_raw = generateRandomData(count, 0.0f, 2.0f, 303);
+
+    Tensor in_cpu(1, count, input_raw, Execution_Target::CPU);
+    Tensor out_cpu(Execution_Target::CPU);
+    ops::activation::leakyRelu(in_cpu, out_cpu, slope);
+
+    Tensor in_gpu(1, count, input_raw, Execution_Target::VULKAN_GPU);
+    Tensor out_gpu(Execution_Target::VULKAN_GPU);
+    ops::activation::leakyRelu(in_gpu, out_gpu, slope);
+
+    Execution_Engine::getInstance().executeGraph();
+
+    double diff = computeMaxAbsDiff(out_cpu.getData(), out_gpu.getData());
+    return diff <= 1e-5;
+}
+
+bool testBackwardGpuParity()
+{
+    size_t count = 1024;
+    float slope = 0.01f;
+    auto input_raw = generateRandomData(count, 0.0f, 2.0f, 404);
+    auto grad_out_raw = generateRandomData(count, 0.0f, 1.0f, 505);
+
+    Tensor in_cpu(1, count, input_raw, Execution_Target::CPU);
+    Tensor grad_out_cpu(1, count, grad_out_raw, Execution_Target::CPU);
+    Tensor grad_in_cpu(Execution_Target::CPU);
+    ops::activation::leakyReluBackward(in_cpu, grad_out_cpu, grad_in_cpu, slope);
+
+    Tensor in_gpu(1, count, input_raw, Execution_Target::VULKAN_GPU);
+    Tensor grad_out_gpu(1, count, grad_out_raw, Execution_Target::VULKAN_GPU);
+    Tensor grad_in_gpu(Execution_Target::VULKAN_GPU);
+    ops::activation::leakyReluBackward(in_gpu, grad_out_gpu, grad_in_gpu, slope);
+
+    Execution_Engine::getInstance().executeGraph();
+
+    double diff = computeMaxAbsDiff(grad_in_cpu.getData(), grad_in_gpu.getData());
+    return diff <= 1e-5;
+}
+
+bool testForwardFp16AndCoopmatParity()
+{
+    size_t count = 1024;
+    float slope = 0.01f;
+    auto input_raw = generateRandomData(count, 0.0f, 2.0f, 606);
+
+    Tensor in_cpu(1, count, input_raw, Execution_Target::CPU);
+    Tensor out_cpu(Execution_Target::CPU);
+    ops::activation::leakyRelu(in_cpu, out_cpu, slope);
+
+    Tensor in_gpu_fp16(Shape{1, count}, input_raw, Data_Type::FLOAT16, Execution_Target::VULKAN_GPU);
+    Tensor out_gpu_fp16(Execution_Target::VULKAN_GPU);
+    ops::activation::leakyRelu(in_gpu_fp16, out_gpu_fp16, slope);
+
+    Execution_Engine::getInstance().executeGraph();
+
+    double diff = computeMaxAbsDiff(out_cpu.getData(), out_gpu_fp16.getData());
+    return diff <= 2e-3;
+}
+
+bool testBackwardFp16AndCoopmatParity()
+{
+    size_t count = 1024;
+    float slope = 0.01f;
+    auto input_raw = generateRandomData(count, 0.0f, 2.0f, 707);
+    auto grad_out_raw = generateRandomData(count, 0.0f, 1.0f, 808);
+
+    Tensor in_cpu(1, count, input_raw, Execution_Target::CPU);
+    Tensor grad_out_cpu(1, count, grad_out_raw, Execution_Target::CPU);
+    Tensor grad_in_cpu(Execution_Target::CPU);
+    ops::activation::leakyReluBackward(in_cpu, grad_out_cpu, grad_in_cpu, slope);
+
+    Tensor in_gpu_fp16(Shape{1, count}, input_raw, Data_Type::FLOAT16, Execution_Target::VULKAN_GPU);
+    Tensor grad_out_gpu_fp16(Shape{1, count}, grad_out_raw, Data_Type::FLOAT16, Execution_Target::VULKAN_GPU);
+    Tensor grad_in_gpu_fp16(Execution_Target::VULKAN_GPU);
+    ops::activation::leakyReluBackward(in_gpu_fp16, grad_out_gpu_fp16, grad_in_gpu_fp16, slope);
+
+    Execution_Engine::getInstance().executeGraph();
+
+    double diff = computeMaxAbsDiff(grad_in_cpu.getData(), grad_in_gpu_fp16.getData());
+    return diff <= 2e-3;
+}
+
+bool testNumericalGradientGpu()
+{
+    size_t count = 32;
+    float slope = 0.01f;
+    float delta = 1e-3f;
+
+    auto input_raw = generateRandomData(count, 0.0f, 1.5f, 909);
+    auto grad_out_raw = generateRandomData(count, 0.0f, 1.0f, 1010);
+
+    Tensor in_gpu(1, count, input_raw, Execution_Target::VULKAN_GPU);
+    Tensor grad_out_gpu(1, count, grad_out_raw, Execution_Target::VULKAN_GPU);
+    Tensor grad_in_gpu(Execution_Target::VULKAN_GPU);
+
+    ops::activation::leakyReluBackward(in_gpu, grad_out_gpu, grad_in_gpu, slope);
+    Execution_Engine::getInstance().executeGraph();
+    auto ana_grad = grad_in_gpu.getData();
+
+    auto computeGpuLoss = [&](const std::vector<float> &x) -> float
+    {
+        Tensor cur_x(1, count, x, Execution_Target::VULKAN_GPU);
+        Tensor cur_y(Execution_Target::VULKAN_GPU);
+        ops::activation::leakyRelu(cur_x, cur_y, slope);
+        Execution_Engine::getInstance().executeGraph();
+        const auto &y_data = cur_y.getData();
+        float loss = 0.0f;
+        for (size_t i = 0; i < count; ++i) loss += y_data[i] * grad_out_raw[i];
+        return loss;
+    };
+
+    double max_rel_err = 0.0;
+    for (size_t i = 0; i < count; ++i)
+    {
+        auto x_plus = input_raw, x_minus = input_raw;
+        x_plus[i] += delta; x_minus[i] -= delta;
+        float num_grad = (computeGpuLoss(x_plus) - computeGpuLoss(x_minus)) / (2.0f * delta);
+        float ana_val = ana_grad[i];
+        double abs_err = std::fabs(num_grad - ana_val);
+        double denom = 1.0 + std::max(std::fabs(num_grad), std::fabs(ana_val));
+        max_rel_err = std::max(max_rel_err, abs_err / denom);
+    }
+
+    return max_rel_err <= 1e-2;
+}
+
+bool testLayerIntegrationAndSerialization()
+{
+    float slope = 0.05f;
+    size_t count = 64;
+    auto input_raw = generateRandomData(count, 0.0f, 1.0f, 1111);
+    auto grad_out_raw = generateRandomData(count, 0.0f, 1.0f, 2222);
+
+    Leaky_Relu_Layer layer(slope, Execution_Target::VULKAN_GPU);
+    if (layer.getLayerType() != Layer_Type::LEAKY_RELU) return false;
+
+    Tensor in_t(1, count, input_raw, Execution_Target::VULKAN_GPU);
+    Tensor out_t = layer.forward(in_t);
+    Execution_Engine::getInstance().executeGraph();
+
+    Tensor dy_t(1, count, grad_out_raw, Execution_Target::VULKAN_GPU);
+    Tensor dx_t = layer.backward(dy_t);
+    Execution_Engine::getInstance().executeGraph();
+
+    if (out_t.getRows() != 1 || out_t.getColumns() != count || dx_t.getColumns() != count) return false;
+
+    auto cloned = layer.clone();
+    auto cloned_leaky = dynamic_cast<Leaky_Relu_Layer *>(cloned.get());
+    if (!cloned_leaky || std::fabs(cloned_leaky->getNegativeSlope() - slope) > 1e-6) return false;
+
+    std::string ckpt_name = "test_leaky_relu_ckpt.bin";
+    {
+        std::ofstream out(ckpt_name, std::ios::binary);
+        layer.saveConfiguration(out);
+    }
+
+    Leaky_Relu_Layer loaded_layer(0.0f, Execution_Target::CPU);
+    {
+        std::ifstream in(ckpt_name, std::ios::binary);
+        loaded_layer.loadInference(in);
+    }
+    std::remove(ckpt_name.c_str());
+
+    if (std::fabs(loaded_layer.getNegativeSlope() - slope) > 1e-6) return false;
+
+    return true;
+}
+
+bool runSuite()
+{
+    bool ok = true;
+    ok &= testForwardKnownValues();
+    ok &= testBackwardNumericalGradientCpu();
+    ok &= testForwardGpuParity();
+    ok &= testBackwardGpuParity();
+    ok &= testForwardFp16AndCoopmatParity();
+    ok &= testBackwardFp16AndCoopmatParity();
+    ok &= testNumericalGradientGpu();
+    ok &= testLayerIntegrationAndSerialization();
+    return ok;
+}
+} // namespace TestLeakyRelu
+
+// ==============================================================================
+// TEST SUITE: Up_Sample_2d_Layer Comprehensive Tests
+// ==============================================================================
+namespace TestUpsample
+{
+double computeMaxAbsDiff(const std::vector<float>& a, const std::vector<float>& b)
+{
+    if (a.size() != b.size()) return 1e9;
+    double max_diff = 0.0;
+    for (size_t i = 0; i < a.size(); ++i)
+    {
+        if (std::isnan(a[i]) || std::isnan(b[i])) return 1e9;
+        max_diff = std::max(max_diff, static_cast<double>(std::fabs(a[i] - b[i])));
+    }
+    return max_diff;
+}
+
+bool testForwardSmallGrid()
+{
+    auto &engine = Execution_Engine::getInstance();
+    uint32_t b_size = 1, h = 2, w = 2, c = 2, scale = 2;
+    std::vector<float> input_raw = {
+        1.0f, 2.0f,   3.0f, 4.0f,
+        5.0f, 6.0f,   7.0f, 8.0f
+    };
+
+    std::vector<float> expected(1 * 4 * 4 * 2, 0.0f);
+    for (uint32_t ih = 0; ih < h; ++ih)
+    {
+        for (uint32_t iw = 0; iw < w; ++iw)
+        {
+            for (uint32_t ch = 0; ch < c; ++ch)
+            {
+                float val = input_raw[ih * w * c + iw * c + ch];
+                for (uint32_t sy = 0; sy < scale; ++sy)
+                {
+                    uint32_t oh = ih * scale + sy;
+                    for (uint32_t sx = 0; sx < scale; ++sx)
+                    {
+                        uint32_t ow = iw * scale + sx;
+                        expected[oh * 4 * c + ow * c + ch] = val;
+                    }
+                }
+            }
+        }
+    }
+
+    Tensor in_cpu(b_size, h * w * c, input_raw, Execution_Target::CPU);
+    Tensor out_cpu(Execution_Target::CPU);
+    ops::vision::upsample2d(in_cpu, out_cpu, h, w, c, scale);
+
+    double cpu_err = computeMaxAbsDiff(out_cpu.getData(), expected);
+    if (cpu_err > 1e-5) return false;
+
+    Tensor in_gpu_fp32(b_size, h * w * c, input_raw, Execution_Target::VULKAN_GPU);
+    Tensor out_gpu_fp32(Execution_Target::VULKAN_GPU);
+    ops::vision::upsample2d(in_gpu_fp32, out_gpu_fp32, h, w, c, scale);
+    engine.executeGraph();
+
+    double gpu_fp32_err = computeMaxAbsDiff(out_gpu_fp32.getData(), expected);
+    if (gpu_fp32_err > 1e-4) return false;
+
+    Tensor in_gpu_fp16(Shape{b_size, h * w * c}, Data_Type::FLOAT16, Execution_Target::VULKAN_GPU);
+    in_gpu_fp32.to(Data_Type::FLOAT16, in_gpu_fp16);
+    engine.executeGraph();
+
+    Tensor out_gpu_fp16(Execution_Target::VULKAN_GPU);
+    ops::vision::upsample2d(in_gpu_fp16, out_gpu_fp16, h, w, c, scale);
+    engine.executeGraph();
+
+    double gpu_fp16_err = computeMaxAbsDiff(out_gpu_fp16.getData(), expected);
+    return gpu_fp16_err <= 1e-2;
+}
+
+bool testBackwardSmallGrid()
+{
+    auto &engine = Execution_Engine::getInstance();
+    uint32_t b_size = 1, h = 2, w = 2, c = 2, scale = 2;
+    uint32_t out_h = h * scale;
+    uint32_t out_w = w * scale;
+
+    std::vector<float> grad_out_raw(b_size * out_h * out_w * c);
+    for (size_t i = 0; i < grad_out_raw.size(); ++i)
+    {
+        grad_out_raw[i] = static_cast<float>(i + 1);
+    }
+
+    std::vector<float> expected_in_grad(b_size * h * w * c, 0.0f);
+    for (uint32_t ih = 0; ih < h; ++ih)
+    {
+        for (uint32_t iw = 0; iw < w; ++iw)
+        {
+            for (uint32_t ch = 0; ch < c; ++ch)
+            {
+                float sum = 0.0f;
+                for (uint32_t sy = 0; sy < scale; ++sy)
+                {
+                    uint32_t oh = ih * scale + sy;
+                    for (uint32_t sx = 0; sx < scale; ++sx)
+                    {
+                        uint32_t ow = iw * scale + sx;
+                        sum += grad_out_raw[oh * out_w * c + ow * c + ch];
+                    }
+                }
+                expected_in_grad[ih * w * c + iw * c + ch] = sum;
+            }
+        }
+    }
+
+    Tensor grad_out_cpu(b_size, out_h * out_w * c, grad_out_raw, Execution_Target::CPU);
+    Tensor in_grad_cpu(Execution_Target::CPU);
+    ops::vision::upsample2dBackward(grad_out_cpu, in_grad_cpu, h, w, c, scale);
+
+    double cpu_err = computeMaxAbsDiff(in_grad_cpu.getData(), expected_in_grad);
+    if (cpu_err > 1e-5) return false;
+
+    Tensor grad_out_gpu_fp32(b_size, out_h * out_w * c, grad_out_raw, Execution_Target::VULKAN_GPU);
+    Tensor in_grad_gpu_fp32(Execution_Target::VULKAN_GPU);
+    ops::vision::upsample2dBackward(grad_out_gpu_fp32, in_grad_gpu_fp32, h, w, c, scale);
+    engine.executeGraph();
+
+    double gpu_fp32_err = computeMaxAbsDiff(in_grad_gpu_fp32.getData(), expected_in_grad);
+    if (gpu_fp32_err > 1e-4) return false;
+
+    Tensor grad_out_gpu_fp16(Shape{b_size, out_h * out_w * c}, Data_Type::FLOAT16, Execution_Target::VULKAN_GPU);
+    grad_out_gpu_fp32.to(Data_Type::FLOAT16, grad_out_gpu_fp16);
+    engine.executeGraph();
+
+    Tensor in_grad_gpu_fp16(Execution_Target::VULKAN_GPU);
+    ops::vision::upsample2dBackward(grad_out_gpu_fp16, in_grad_gpu_fp16, h, w, c, scale);
+    engine.executeGraph();
+
+    double gpu_fp16_err = computeMaxAbsDiff(in_grad_gpu_fp16.getData(), expected_in_grad);
+    return gpu_fp16_err <= 1e-2;
+}
+
+bool testNumericalGradientCheck()
+{
+    uint32_t b_size = 2, h = 3, w = 3, c = 4, scale = 2;
+    uint32_t out_h = h * scale, out_w = w * scale;
+    size_t in_features = h * w * c, out_features = out_h * out_w * c;
+    size_t in_elems = b_size * in_features, out_elems = b_size * out_features;
+
+    std::mt19937 rng(1337);
+    std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+
+    std::vector<float> x_raw(in_elems);
+    for (float &v : x_raw) v = dist(rng);
+
+    std::vector<float> weight_raw(out_elems);
+    for (float &v : weight_raw) v = dist(rng);
+
+    Tensor grad_out_tensor(b_size, out_features, weight_raw, Execution_Target::CPU);
+    Tensor analytical_grad(Execution_Target::CPU);
+    ops::vision::upsample2dBackward(grad_out_tensor, analytical_grad, h, w, c, scale);
+    auto analytical_data = analytical_grad.getData();
+
+    const float eps = 1e-3f;
+    std::vector<float> numerical_grad(in_elems, 0.0f);
+
+    auto compute_loss = [&](const std::vector<float>& x_vec) -> float
+    {
+        Tensor x_t(b_size, in_features, x_vec, Execution_Target::CPU);
+        Tensor y_t(Execution_Target::CPU);
+        ops::vision::upsample2d(x_t, y_t, h, w, c, scale);
+        auto y_data = y_t.getData();
+        float loss = 0.0f;
+        for (size_t i = 0; i < out_elems; ++i) loss += y_data[i] * weight_raw[i];
+        return loss;
+    };
+
+    double grad_norm_diff = 0.0, grad_norm_sum = 0.0;
+    for (size_t i = 0; i < in_elems; ++i)
+    {
+        std::vector<float> x_pos = x_raw, x_neg = x_raw;
+        x_pos[i] += eps; x_neg[i] -= eps;
+
+        float loss_pos = compute_loss(x_pos);
+        float loss_neg = compute_loss(x_neg);
+
+        float num_g = (loss_pos - loss_neg) / (2.0f * eps);
+        numerical_grad[i] = num_g;
+
+        double diff = static_cast<double>(analytical_data[i] - num_g);
+        grad_norm_diff += diff * diff;
+        grad_norm_sum += static_cast<double>(analytical_data[i] * analytical_data[i] + num_g * num_g);
+    }
+
+    double relative_error = std::sqrt(grad_norm_diff) / (std::sqrt(grad_norm_sum) + 1e-8);
+    return relative_error <= 1e-3;
+}
+
+bool testUnetScales(Execution_Target target, bool mixed_precision)
+{
+    auto &engine = Execution_Engine::getInstance();
+    struct ScaleConfig {
+        std::string name;
+        uint32_t h, w, c;
+    };
+
+    std::vector<ScaleConfig> configs = {
+        {"Level 3 (Bottleneck -> Dec3)", 40, 40, 64},
+        {"Level 2 (Dec3 -> Dec2)",       80, 80, 32},
+        {"Level 1 (Dec2 -> Dec1)",      160, 160, 16}
+    };
+
+    uint32_t b_size = 2;
+    std::mt19937 rng(42);
+    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+
+    for (const auto &cfg : configs)
+    {
+        uint32_t out_h = cfg.h * 2, out_w = cfg.w * 2;
+        size_t in_features = cfg.h * cfg.w * cfg.c, out_features = out_h * out_w * cfg.c;
+        size_t in_size = b_size * in_features, out_size = b_size * out_features;
+
+        std::vector<float> in_data(in_size);
+        for (float &v : in_data) v = dist(rng);
+
+        std::vector<float> grad_out_data(out_size);
+        for (float &v : grad_out_data) v = dist(rng);
+
+        Tensor in_cpu(b_size, in_features, in_data, Execution_Target::CPU);
+        Tensor out_cpu(Execution_Target::CPU);
+        ops::vision::upsample2d(in_cpu, out_cpu, cfg.h, cfg.w, cfg.c, 2);
+        auto ref_out = out_cpu.getData();
+
+        Tensor grad_out_cpu(b_size, out_features, grad_out_data, Execution_Target::CPU);
+        Tensor in_grad_cpu(Execution_Target::CPU);
+        ops::vision::upsample2dBackward(grad_out_cpu, in_grad_cpu, cfg.h, cfg.w, cfg.c, 2);
+        auto ref_in_grad = in_grad_cpu.getData();
+
+        Up_Sample_2d_Layer layer(cfg.h, cfg.w, cfg.c, 2, target);
+        if (mixed_precision) layer.setMixedPrecision(true);
+
+        Tensor input_tensor;
+        if (target == Execution_Target::VULKAN_GPU && mixed_precision)
+        {
+            Tensor in_fp32(b_size, in_features, in_data, Execution_Target::VULKAN_GPU);
+            input_tensor = Tensor(Shape{b_size, in_features}, Data_Type::FLOAT16, Execution_Target::VULKAN_GPU);
+            in_fp32.to(Data_Type::FLOAT16, input_tensor);
+        }
+        else
+        {
+            input_tensor = Tensor(b_size, in_features, in_data, target);
+        }
+
+        Tensor out_tensor = layer.forward(input_tensor);
+        if (target == Execution_Target::VULKAN_GPU) engine.executeGraph();
+
+        auto test_out = out_tensor.getData();
+        double fwd_err = computeMaxAbsDiff(test_out, ref_out);
+
+        int fwd_nans = 0;
+        for (float v : test_out) if (std::isnan(v)) fwd_nans++;
+
+        Tensor grad_out_tensor;
+        if (target == Execution_Target::VULKAN_GPU && mixed_precision)
+        {
+            Tensor grad_fp32(b_size, out_features, grad_out_data, Execution_Target::VULKAN_GPU);
+            grad_out_tensor = Tensor(Shape{b_size, out_features}, Data_Type::FLOAT16, Execution_Target::VULKAN_GPU);
+            grad_fp32.to(Data_Type::FLOAT16, grad_out_tensor);
+        }
+        else
+        {
+            grad_out_tensor = Tensor(b_size, out_features, grad_out_data, target);
+        }
+
+        Tensor grad_in_tensor = layer.backward(grad_out_tensor);
+        if (target == Execution_Target::VULKAN_GPU) engine.executeGraph();
+
+        auto test_in_grad = grad_in_tensor.getData();
+        double bwd_err = computeMaxAbsDiff(test_in_grad, ref_in_grad);
+
+        int bwd_nans = 0;
+        for (float v : test_in_grad) if (std::isnan(v)) bwd_nans++;
+
+        double tol = mixed_precision ? 1e-2 : 1e-4;
+        bool pass = (fwd_err <= tol && bwd_err <= tol && fwd_nans == 0 && bwd_nans == 0);
+        if (!pass) return false;
+    }
+    return true;
+}
+
+bool testLayerContracts()
+{
+    Up_Sample_2d_Layer layer(16, 16, 8, 2, Execution_Target::VULKAN_GPU);
+    layer.setMixedPrecision(true);
+
+    auto clone_ptr = layer.clone();
+    if (!clone_ptr) return false;
+
+    auto *cloned_layer = dynamic_cast<Up_Sample_2d_Layer*>(clone_ptr.get());
+    if (!cloned_layer) return false;
+
+    if (cloned_layer->getScaleFactor() != 2 ||
+        cloned_layer->getInputHeight() != 16 ||
+        cloned_layer->getInputWidth() != 16 ||
+        cloned_layer->getChannels() != 8)
+    {
+        return false;
+    }
+
+    layer.resetGradient();
+    return true;
+}
+
+bool runSuite()
+{
+    bool ok = true;
+    ok &= testForwardSmallGrid();
+    ok &= testBackwardSmallGrid();
+    ok &= testNumericalGradientCheck();
+    ok &= testUnetScales(Execution_Target::CPU, false);
+    ok &= testUnetScales(Execution_Target::VULKAN_GPU, false);
+    ok &= testUnetScales(Execution_Target::VULKAN_GPU, true);
+    ok &= testLayerContracts();
+    return ok;
+}
+} // namespace TestUpsample
+
+// ==============================================================================
+// TEST SUITE: NN_UNet_Layer Comprehensive Tests
+// ==============================================================================
+namespace TestNnUnet
+{
+double computeMaxAbsDiff(const std::vector<float> &a, const std::vector<float> &b)
+{
+    if (a.size() != b.size()) return 1e9;
+    double max_diff = 0.0;
+    for (size_t i = 0; i < a.size(); ++i)
+    {
+        if (std::isnan(a[i]) || std::isnan(b[i])) return 1e9;
+        max_diff = std::max(max_diff, static_cast<double>(std::fabs(a[i] - b[i])));
+    }
+    return max_diff;
+}
+
+std::vector<float> generateRandomData(size_t count, float mean = 0.0f, float stddev = 1.0f, unsigned int seed = 42)
+{
+    std::mt19937 rng(seed);
+    std::normal_distribution<float> dist(mean, stddev);
+    std::vector<float> data(count);
+    for (size_t i = 0; i < count; ++i)
+    {
+        data[i] = dist(rng);
+    }
+    return data;
+}
+
+bool testForwardShapeAndOutputRange()
+{
+    uint32_t h = 32, w = 32, in_c = 1, out_c = 1, base_c = 4, b = 2;
+    NN_UNet_Layer layer(h, w, in_c, out_c, base_c, Execution_Target::CPU);
+
+    std::vector<float> in_data = generateRandomData(b * in_c * h * w, 0.0f, 1.0f, 101);
+    Tensor in_tensor(Shape{b, in_c * h * w}, Data_Type::FLOAT32, Execution_Target::CPU);
+    in_tensor.uploadData(in_data);
+
+    Tensor out_tensor = layer.forward(in_tensor);
+    if (out_tensor.getTotalElements() != b * out_c * h * w) return false;
+
+    auto out_data = out_tensor.getData();
+    float min_val = 1e9f, max_val = -1e9f;
+    for (float v : out_data)
+    {
+        if (std::isnan(v) || std::isinf(v)) return false;
+        min_val = std::min(min_val, v);
+        max_val = std::max(max_val, v);
+    }
+    if (min_val < 0.0f || max_val > 1.0f) return false;
+    return true;
+}
+
+bool testTrainEvalConsistency()
+{
+    uint32_t h = 32, w = 32, in_c = 1, out_c = 1, base_c = 4, b = 2;
+    NN_UNet_Layer layer(h, w, in_c, out_c, base_c, Execution_Target::CPU);
+
+    std::vector<float> in_data = generateRandomData(b * in_c * h * w, 0.0f, 1.0f, 202);
+    Tensor in_tensor(Shape{b, in_c * h * w}, Data_Type::FLOAT32, Execution_Target::CPU);
+    in_tensor.uploadData(in_data);
+
+    layer.setTrainingMode(true);
+    Tensor out_train = layer.forward(in_tensor);
+    auto train_data = out_train.getData();
+
+    layer.setTrainingMode(false);
+    Tensor out_eval = layer.forward(in_tensor);
+    auto eval_data = out_eval.getData();
+
+    double diff = computeMaxAbsDiff(train_data, eval_data);
+    return diff <= 1e-6;
+}
+
+bool testBatchInvarianceParity()
+{
+    uint32_t h = 32, w = 32, in_c = 1, out_c = 1, base_c = 4;
+    size_t sample_size = in_c * h * w;
+    NN_UNet_Layer layer(h, w, in_c, out_c, base_c, Execution_Target::CPU);
+
+    std::vector<float> sample0 = generateRandomData(sample_size, 0.5f, 1.0f, 303);
+    std::vector<float> sample1 = generateRandomData(sample_size, -1.0f, 2.5f, 404);
+
+    Tensor in_single(Shape{1, sample_size}, Data_Type::FLOAT32, Execution_Target::CPU);
+    in_single.uploadData(sample0);
+    Tensor out_single = layer.forward(in_single);
+    auto single_data = out_single.getData();
+
+    std::vector<float> batched_input;
+    batched_input.insert(batched_input.end(), sample0.begin(), sample0.end());
+    batched_input.insert(batched_input.end(), sample1.begin(), sample1.end());
+
+    Tensor in_batched(Shape{2, sample_size}, Data_Type::FLOAT32, Execution_Target::CPU);
+    in_batched.uploadData(batched_input);
+    Tensor out_batched = layer.forward(in_batched);
+    auto batched_data = out_batched.getData();
+
+    size_t out_sample_size = out_c * h * w;
+    std::vector<float> batched_sample0(batched_data.begin(), batched_data.begin() + out_sample_size);
+
+    double diff = computeMaxAbsDiff(single_data, batched_sample0);
+    return diff <= 1e-5;
+}
+
+bool testBackwardGradientFlowCpu()
+{
+    uint32_t h = 16, w = 16, in_c = 1, out_c = 1, base_c = 4, b = 2;
+    NN_UNet_Layer layer(h, w, in_c, out_c, base_c, Execution_Target::CPU);
+
+    std::vector<float> in_data = generateRandomData(b * in_c * h * w, 0.0f, 1.0f, 505);
+    Tensor in_tensor(Shape{b, in_c * h * w}, Data_Type::FLOAT32, Execution_Target::CPU);
+    in_tensor.uploadData(in_data);
+
+    layer.forward(in_tensor);
+
+    std::vector<float> grad_out_data = generateRandomData(b * out_c * h * w, 0.0f, 0.5f, 606);
+    Tensor grad_out_tensor(Shape{b, out_c * h * w}, Data_Type::FLOAT32, Execution_Target::CPU);
+    grad_out_tensor.uploadData(grad_out_data);
+
+    Tensor in_grad = layer.backward(grad_out_tensor);
+    if (in_grad.getTotalElements() != b * in_c * h * w) return false;
+
+    auto in_grad_data = in_grad.getData();
+    float grad_abs_sum = 0.0f;
+    for (float v : in_grad_data)
+    {
+        if (std::isnan(v) || std::isinf(v)) return false;
+        grad_abs_sum += std::fabs(v);
+    }
+    if (grad_abs_sum == 0.0f) return false;
+
+    auto params_grads = layer.getParametersAndGradients();
+    for (auto &[param, grad] : params_grads)
+    {
+        if (!param || !grad) continue;
+        auto gd = grad->getData();
+        for (float v : gd)
+        {
+            if (std::isnan(v) || std::isinf(v)) return false;
+        }
+    }
+    return true;
+}
+
+bool testGpuForwardAndBackwardParity()
+{
+    auto &engine = Execution_Engine::getInstance();
+    uint32_t h = 16, w = 16, in_c = 1, out_c = 1, base_c = 4, b = 2;
+
+    NN_UNet_Layer cpu_layer(h, w, in_c, out_c, base_c, Execution_Target::CPU);
+    NN_UNet_Layer gpu_layer(h, w, in_c, out_c, base_c, Execution_Target::CPU);
+
+    auto cpu_params = cpu_layer.getParametersAndGradients();
+    auto gpu_params = gpu_layer.getParametersAndGradients();
+    for (size_t i = 0; i < cpu_params.size(); ++i)
+    {
+        if (cpu_params[i].first && gpu_params[i].first)
+        {
+            gpu_params[i].first->uploadData(cpu_params[i].first->getData());
+        }
+    }
+    gpu_layer.setExecutionTarget(Execution_Target::VULKAN_GPU);
+
+    std::vector<float> in_data = generateRandomData(b * in_c * h * w, 0.0f, 1.0f, 707);
+    Tensor cpu_in(Shape{b, in_c * h * w}, Data_Type::FLOAT32, Execution_Target::CPU);
+    cpu_in.uploadData(in_data);
+    Tensor gpu_in(Shape{b, in_c * h * w}, Data_Type::FLOAT32, Execution_Target::VULKAN_GPU);
+    gpu_in.uploadData(in_data);
+
+    Tensor cpu_out = cpu_layer.forward(cpu_in);
+    Tensor gpu_out = gpu_layer.forward(gpu_in);
+    engine.executeGraph();
+
+    double fwd_diff = computeMaxAbsDiff(cpu_out.getData(), gpu_out.getData());
+    if (fwd_diff > 1e-4) return false;
+
+    std::vector<float> grad_out_data = generateRandomData(b * out_c * h * w, 0.0f, 0.5f, 808);
+    Tensor cpu_grad_out(Shape{b, out_c * h * w}, Data_Type::FLOAT32, Execution_Target::CPU);
+    cpu_grad_out.uploadData(grad_out_data);
+    Tensor gpu_grad_out(Shape{b, out_c * h * w}, Data_Type::FLOAT32, Execution_Target::VULKAN_GPU);
+    gpu_grad_out.uploadData(grad_out_data);
+
+    Tensor cpu_in_grad = cpu_layer.backward(cpu_grad_out);
+    Tensor gpu_in_grad = gpu_layer.backward(gpu_grad_out);
+    engine.executeGraph();
+
+    double bwd_diff = computeMaxAbsDiff(cpu_in_grad.getData(), gpu_in_grad.getData());
+    return bwd_diff <= 1e-3;
+}
+
+bool testCloneAndSerialization()
+{
+    uint32_t h = 16, w = 16, in_c = 1, out_c = 1, base_c = 4, b = 2;
+    NN_UNet_Layer layer1(h, w, in_c, out_c, base_c, Execution_Target::CPU);
+
+    const std::string ckpt_path = "test_nnunet_tmp.nnck";
+    {
+        std::ofstream out_file(ckpt_path, std::ios::binary);
+        if (!out_file.is_open()) return false;
+        layer1.saveCheckpoint(out_file);
+    }
+
+    NN_UNet_Layer layer2(h, w, in_c, out_c, base_c, Execution_Target::CPU);
+    {
+        std::ifstream in_file(ckpt_path, std::ios::binary);
+        if (!in_file.is_open()) return false;
+        layer2.loadCheckpoint(in_file);
+    }
+    std::remove(ckpt_path.c_str());
+
+    std::vector<float> in_data = generateRandomData(b * in_c * h * w, 0.0f, 1.0f, 909);
+    Tensor in_tensor(Shape{b, in_c * h * w}, Data_Type::FLOAT32, Execution_Target::CPU);
+    in_tensor.uploadData(in_data);
+
+    Tensor out1 = layer1.forward(in_tensor);
+    Tensor out2 = layer2.forward(in_tensor);
+
+    double diff = computeMaxAbsDiff(out1.getData(), out2.getData());
+    if (diff > 1e-6) return false;
+
+    auto cloned = layer1.clone();
+    Tensor out_cloned = cloned->forward(in_tensor);
+    double clone_diff = computeMaxAbsDiff(out1.getData(), out_cloned.getData());
+    return clone_diff <= 1e-6;
+}
+
+bool testRank4InputForwardBackwardGpu()
+{
+    uint32_t h = 32, w = 32, in_c = 1, out_c = 1, base_c = 4, b = 2;
+    NN_UNet_Layer layer(h, w, in_c, out_c, base_c, Execution_Target::VULKAN_GPU);
+
+    std::vector<float> in_data = generateRandomData(b * in_c * h * w, 0.0f, 1.0f, 999);
+    Tensor in_tensor(Shape{b, in_c, h, w}, in_data, Execution_Target::VULKAN_GPU);
+
+    Tensor out_tensor = layer.forward(in_tensor);
+    if (out_tensor.getShape() != Shape{b, out_c, h, w}) return false;
+
+    std::vector<float> grad_data = generateRandomData(b * out_c * h * w, 0.1f, 0.5f, 888);
+    Tensor grad_out(Shape{b, out_c, h, w}, grad_data, Execution_Target::VULKAN_GPU);
+
+    Tensor in_grad = layer.backward(grad_out);
+    Execution_Engine::getInstance().executeGraph();
+
+    if (in_grad.getShape() != Shape{b, in_c, h, w}) return false;
+
+    for (float v : in_grad.getData())
+    {
+        if (std::isnan(v) || std::isinf(v)) return false;
+    }
+    return true;
+}
+
+bool testGradientClipping()
+{
+    // CPU
+    Neural_Network net_cpu(Execution_Target::CPU);
+    net_cpu.addLayer<NN_UNet_Layer>(16, 16, 1, 1, 4, Execution_Target::CPU);
+    net_cpu.setTrainingMode(true);
+
+    Tensor in_cpu(Shape{1, 1, 16, 16}, generateRandomData(256, 0.0f, 1.0f, 42), Execution_Target::CPU);
+    net_cpu.forward(in_cpu);
+
+    Tensor grad_cpu(Shape{1, 1, 16, 16}, std::vector<float>(256, 10.0f), Execution_Target::CPU);
+    net_cpu.backward(grad_cpu, true);
+
+    auto pairs_cpu = net_cpu.getParametersAndGradients();
+    double sum_sq_cpu = 0.0;
+    for (auto &[p, g] : pairs_cpu)
+    {
+        if (g && !g->isEmpty())
+        {
+            for (float v : g->getData()) sum_sq_cpu += static_cast<double>(v) * static_cast<double>(v);
+        }
+    }
+    if (static_cast<float>(std::sqrt(sum_sq_cpu)) <= 1.0f) return false;
+
+    net_cpu.clipGradients(1.0f);
+    sum_sq_cpu = 0.0;
+    for (auto &[p, g] : pairs_cpu)
+    {
+        if (g && !g->isEmpty())
+        {
+            for (float v : g->getData()) sum_sq_cpu += static_cast<double>(v) * static_cast<double>(v);
+        }
+    }
+    float post_norm_cpu = static_cast<float>(std::sqrt(sum_sq_cpu));
+    if (std::abs(post_norm_cpu - 1.0f) > 1e-2f) return false;
+
+    // GPU
+    Neural_Network net_gpu(Execution_Target::VULKAN_GPU);
+    net_gpu.addLayer<NN_UNet_Layer>(16, 16, 1, 1, 4, Execution_Target::VULKAN_GPU);
+    net_gpu.setTrainingMode(true);
+
+    Tensor in_gpu(Shape{1, 1, 16, 16}, generateRandomData(256, 0.0f, 1.0f, 42), Execution_Target::VULKAN_GPU);
+    net_gpu.forward(in_gpu);
+
+    Tensor grad_gpu(Shape{1, 1, 16, 16}, std::vector<float>(256, 10.0f), Execution_Target::VULKAN_GPU);
+    net_gpu.backward(grad_gpu, true);
+
+    net_gpu.clipGradients(1.0f);
+    auto pairs_gpu = net_gpu.getParametersAndGradients();
+    double sum_sq_gpu = 0.0;
+    for (auto &[p, g] : pairs_gpu)
+    {
+        if (g && !g->isEmpty())
+        {
+            for (float v : g->getData()) sum_sq_gpu += static_cast<double>(v) * static_cast<double>(v);
+        }
+    }
+    float post_norm_gpu = static_cast<float>(std::sqrt(sum_sq_gpu));
+    return (std::abs(post_norm_gpu - 1.0f) <= 1e-2f);
+}
+
+bool testGpuMixedPrecisionStability()
+{
+    uint32_t h = 64, w = 64, in_c = 1, out_c = 1, base_c = 8, b = 2;
+
+    Neural_Network net(Execution_Target::VULKAN_GPU);
+    net.addLayer<NN_UNet_Layer>(h, w, in_c, out_c, base_c, Execution_Target::VULKAN_GPU);
+    net.setMixedPrecision(true);
+    net.setTrainingMode(true);
+
+    std::vector<float> in_data = generateRandomData(b * in_c * h * w, 0.5f, 0.25f, 12345);
+    Tensor in_tensor(Shape{b, in_c, h, w}, in_data, Execution_Target::VULKAN_GPU);
+
+    Tensor out = net.forward(in_tensor);
+    Execution_Engine::getInstance().executeGraph();
+
+    for (float v : out.getData())
+    {
+        if (std::isnan(v) || std::isinf(v)) return false;
+    }
+
+    std::vector<float> grad_data = generateRandomData(b * out_c * h * w, 0.1f, 0.5f, 67890);
+    Tensor grad_tensor(Shape{b, out_c, h, w}, grad_data, Execution_Target::VULKAN_GPU);
+    net.backward(grad_tensor, true);
+    Execution_Engine::getInstance().executeGraph();
+
+    net.setGradientAccumulation(true);
+    net.forward(in_tensor);
+    net.backward(grad_tensor, true);
+    Execution_Engine::getInstance().executeGraph();
+    net.setGradientAccumulation(false);
+
+    auto pairs = net.getParametersAndGradients();
+    for (const auto &[param, grad] : pairs)
+    {
+        if (grad && !grad->isEmpty())
+        {
+            for (float v : grad->getData())
+            {
+                if (std::isnan(v) || std::isinf(v) || std::abs(v) > 1e5f) return false;
+            }
+        }
+    }
+
+    float clipped_norm = net.clipGradients(1.0f);
+    return (!std::isnan(clipped_norm) && !std::isinf(clipped_norm));
+}
+
+bool testOptimizerWeightUpdateAndLossDecrease()
+{
+    uint32_t h = 64, w = 64, in_c = 1, out_c = 1, base_c = 8, b = 2;
+
+    Neural_Network net(Execution_Target::VULKAN_GPU);
+    net.addLayer<NN_UNet_Layer>(h, w, in_c, out_c, base_c, Execution_Target::VULKAN_GPU);
+    net.setMixedPrecision(true);
+    net.setTrainingMode(true);
+
+    auto &scheduler = net.setLearningRate<Cosine_Annealing>(0.01f, 0.001f, 10);
+    net.setOptimizer<Adam_Optimizer>(scheduler, 0.9f, 0.999f, 1e-8f, 1.0f, 0.0f);
+
+    std::vector<float> in_data = generateRandomData(b * in_c * h * w, 0.5f, 0.25f, 12345);
+    std::vector<float> target_data = generateRandomData(b * out_c * h * w, 0.5f, 0.25f, 54321);
+    for (float &v : target_data) v = (v > 0.5f) ? 1.0f : 0.0f;
+
+    Tensor in_tensor(Shape{b, in_c, h, w}, in_data, Execution_Target::VULKAN_GPU);
+    Tensor target_tensor(Shape{b, out_c, h, w}, target_data, Execution_Target::VULKAN_GPU);
+
+    Tensor pred0 = net.forward(in_tensor);
+    Execution_Engine::getInstance().executeGraph();
+
+    auto pairs = net.getParametersAndGradients();
+    auto p0_data = pairs[0].first->getData();
+
+    Dice_BCE_Cost cost_fn(1.0f, 1.0f, 1e-7f, Execution_Target::VULKAN_GPU);
+    Tensor grad;
+    cost_fn.computeLossAndGradient(pred0, target_tensor, grad);
+    net.backward(grad, true);
+    net.clipGradients(1.0f);
+
+    net.getTrainingContext().getOptimizer().step(net.getParametersAndGradients());
+    net.invalidateLayerWeightCaches();
+    Execution_Engine::getInstance().executeGraph();
+    net.zeroGradients();
+    Execution_Engine::getInstance().executeGraph();
+
+    auto p1_data = pairs[0].first->getData();
+    float weight_diff = 0.0f;
+    for (size_t i = 0; i < p0_data.size(); ++i)
+    {
+        weight_diff += std::abs(p1_data[i] - p0_data[i]);
+    }
+
+    return weight_diff > 0.0f;
+}
+
+bool testDataAugmentationIntegrity()
+{
+    std::string seg_path = "data/chest-segment/chest_seg_320x320.bin";
+    if (!std::filesystem::exists(seg_path))
+    {
+        return true;
+    }
+
+    chexlocalize::Chest_Seg_Dataset dataset;
+    dataset.open(seg_path);
+
+    std::vector<size_t> indices = {10, 25};
+    std::mt19937 rng1(42);
+
+    chexlocalize::LungSegAugConfig aug_cfg;
+    aug_cfg.enable_hflip = true;
+    aug_cfg.hflip_prob = 1.0f;
+    aug_cfg.enable_affine = true;
+    aug_cfg.affine_prob = 1.0f;
+    aug_cfg.enable_intensity = true;
+    aug_cfg.intensity_prob = 1.0f;
+
+    auto batch_aug = dataset.getBatch(indices, Execution_Target::CPU, true, &rng1, aug_cfg);
+    auto img_data = batch_aug.images.getData();
+    auto mask_data = batch_aug.masks.getData();
+
+    int mask_positives = 0;
+    for (float m : mask_data)
+    {
+        if (m != 0.0f && m != 1.0f) return false;
+        if (m == 1.0f) mask_positives++;
+    }
+    if (mask_positives == 0) return false;
+
+    for (float p : img_data)
+    {
+        if (std::isnan(p) || std::isinf(p)) return false;
+    }
+
+    auto b_clean1 = dataset.getBatch(indices, Execution_Target::CPU, false, nullptr);
+    auto b_clean2 = dataset.getBatch(indices, Execution_Target::CPU, false, nullptr);
+    double clean_diff = computeMaxAbsDiff(b_clean1.images.getData(), b_clean2.images.getData());
+    if (clean_diff != 0.0) return false;
+
+    double aug_diff = computeMaxAbsDiff(batch_aug.images.getData(), b_clean1.images.getData());
+    return aug_diff >= 1e-3;
+}
+
+bool testStratifiedSamplingDistribution()
+{
+    constexpr size_t TOTAL_SAMPLES = 16068;
+    constexpr size_t CHEST_SEG_BOUNDARY = 6810;
+    size_t total_cs = CHEST_SEG_BOUNDARY;
+    size_t total_qata = TOTAL_SAMPLES - CHEST_SEG_BOUNDARY;
+
+    size_t val_target = 100;
+    size_t val_cs_target = (val_target * 30 + 50) / 100;
+    size_t val_qata_target = val_target - val_cs_target;
+
+    std::mt19937 split_rng(42);
+    std::vector<size_t> cs_all(total_cs);
+    std::iota(cs_all.begin(), cs_all.end(), 0);
+    std::shuffle(cs_all.begin(), cs_all.end(), split_rng);
+
+    std::vector<size_t> qata_all(total_qata);
+    std::iota(qata_all.begin(), qata_all.end(), CHEST_SEG_BOUNDARY);
+    std::shuffle(qata_all.begin(), qata_all.end(), split_rng);
+
+    std::unordered_set<size_t> val_set;
+    for (size_t i = 0; i < val_cs_target; ++i) val_set.insert(cs_all[i]);
+    for (size_t i = 0; i < val_qata_target; ++i) val_set.insert(qata_all[i]);
+
+    std::vector<size_t> pool_train_cs(cs_all.begin() + val_cs_target, cs_all.end());
+    std::vector<size_t> pool_train_qata(qata_all.begin() + val_qata_target, qata_all.end());
+
+    size_t train_count = 100;
+    size_t target_cs = (train_count * 30 + 50) / 100;
+    size_t target_qata = train_count - target_cs;
+
+    std::mt19937 rng(1337);
+    for (size_t ep = 0; ep < 10; ++ep)
+    {
+        std::shuffle(pool_train_cs.begin(), pool_train_cs.end(), rng);
+        std::shuffle(pool_train_qata.begin(), pool_train_qata.end(), rng);
+
+        std::vector<size_t> ep_train;
+        ep_train.insert(ep_train.end(), pool_train_cs.begin(), pool_train_cs.begin() + target_cs);
+        ep_train.insert(ep_train.end(), pool_train_qata.begin(), pool_train_qata.begin() + target_qata);
+
+        size_t cs_in_batch = 0, qata_in_batch = 0;
+        for (size_t idx : ep_train)
+        {
+            if (val_set.count(idx) > 0) return false;
+            if (idx < CHEST_SEG_BOUNDARY) cs_in_batch++;
+            else qata_in_batch++;
+        }
+
+        if (cs_in_batch != target_cs || qata_in_batch != target_qata) return false;
+    }
+    return true;
+}
+
+bool testDeepSupervisionAndResidualParity()
+{
+    uint32_t h = 160, w = 160, in_c = 1, out_c = 1, base_c = 8, b = 2;
+
+    NN_UNet_Layer layer_cpu(h, w, in_c, out_c, base_c, Execution_Target::CPU);
+    layer_cpu.setTrainingMode(true);
+
+    std::vector<float> in_data = generateRandomData(b * in_c * h * w, 0.0f, 1.0f, 777);
+    Tensor in_tensor(Shape{b, in_c, h, w}, in_data, Execution_Target::CPU);
+
+    Tensor out_main = layer_cpu.forward(in_tensor);
+    const Tensor &ds2_out = layer_cpu.getDeepSupervisionOutput2();
+    const Tensor &ds3_out = layer_cpu.getDeepSupervisionOutput3();
+
+    if (out_main.getShape() != Shape{b, out_c, h, w} ||
+        ds2_out.getShape() != Shape{b, out_c, h / 2, w / 2} ||
+        ds3_out.getShape() != Shape{b, out_c, h / 4, w / 4})
+    {
+        return false;
+    }
+
+    Tensor grad_main(Shape{b, out_c, h, w}, generateRandomData(b * out_c * h * w, 0.1f, 0.5f, 111), Execution_Target::CPU);
+    Tensor grad_ds2(Shape{b, out_c, h / 2, w / 2}, generateRandomData(b * out_c * (h / 2) * (w / 2), 0.1f, 0.5f, 222), Execution_Target::CPU);
+    Tensor grad_ds3(Shape{b, out_c, h / 4, w / 4}, generateRandomData(b * out_c * (h / 4) * (w / 4), 0.1f, 0.5f, 333), Execution_Target::CPU);
+
+    layer_cpu.setDeepSupervisionGradients(grad_ds2, grad_ds3);
+    Tensor in_grad = layer_cpu.backward(grad_main);
+    layer_cpu.clearDeepSupervisionGradients();
+
+    if (in_grad.getShape() != Shape{b, in_c, h, w}) return false;
+    for (float v : in_grad.getData())
+    {
+        if (std::isnan(v) || std::isinf(v)) return false;
+    }
+
+    layer_cpu.setTrainingMode(false);
+    layer_cpu.forward(in_tensor);
+    if (!layer_cpu.getDeepSupervisionOutput2().isEmpty() || !layer_cpu.getDeepSupervisionOutput3().isEmpty())
+    {
+        return false;
+    }
+
+    NN_UNet_Layer layer_gpu(h, w, in_c, out_c, base_c, Execution_Target::VULKAN_GPU);
+    layer_gpu.setTrainingMode(true);
+    Tensor gpu_in(Shape{b, in_c, h, w}, in_data, Execution_Target::VULKAN_GPU);
+    Tensor gpu_out = layer_gpu.forward(gpu_in);
+    Execution_Engine::getInstance().executeGraph();
+
+    if (gpu_out.getShape() != Shape{b, out_c, h, w} ||
+        layer_gpu.getDeepSupervisionOutput2().getShape() != Shape{b, out_c, h / 2, w / 2} ||
+        layer_gpu.getDeepSupervisionOutput3().getShape() != Shape{b, out_c, h / 4, w / 4})
+    {
+        return false;
+    }
+
+    Tensor gpu_grad_main(Shape{b, out_c, h, w}, grad_main.getData(), Execution_Target::VULKAN_GPU);
+    Tensor gpu_grad_ds2(Shape{b, out_c, h / 2, w / 2}, grad_ds2.getData(), Execution_Target::VULKAN_GPU);
+    Tensor gpu_grad_ds3(Shape{b, out_c, h / 4, w / 4}, grad_ds3.getData(), Execution_Target::VULKAN_GPU);
+    layer_gpu.setDeepSupervisionGradients(gpu_grad_ds2, gpu_grad_ds3);
+    Tensor gpu_in_grad = layer_gpu.backward(gpu_grad_main);
+    Execution_Engine::getInstance().executeGraph();
+
+    for (float v : gpu_in_grad.getData())
+    {
+        if (std::isnan(v) || std::isinf(v)) return false;
+    }
+
+    return true;
+}
+
+bool runSuite()
+{
+    bool ok = true;
+    ok &= testForwardShapeAndOutputRange();
+    ok &= testTrainEvalConsistency();
+    ok &= testBatchInvarianceParity();
+    ok &= testBackwardGradientFlowCpu();
+    ok &= testGpuForwardAndBackwardParity();
+    ok &= testCloneAndSerialization();
+    ok &= testRank4InputForwardBackwardGpu();
+    ok &= testGradientClipping();
+    ok &= testGpuMixedPrecisionStability();
+    ok &= testOptimizerWeightUpdateAndLossDecrease();
+    ok &= testDataAugmentationIntegrity();
+    ok &= testStratifiedSamplingDistribution();
+    ok &= testDeepSupervisionAndResidualParity();
+    return ok;
+}
+} // namespace TestNnUnet
+
+// ==============================================================================
+// TEST SUITE: BatchNorm U-Net Verification
+// ==============================================================================
+namespace TestBatchNormUnet
+{
+bool runSuite()
+{
+    const std::string dataset_path = "data/chest-segment/chest_seg_320x320.bin";
+    const std::string ckpt_path = "output/unet/unet_latest.nnck";
+    if (!std::filesystem::exists(dataset_path) || !std::filesystem::exists(ckpt_path))
+    {
+        return true;
+    }
+
+    try
+    {
+        Execution_Target target = Execution_Target::VULKAN_GPU;
+        auto &engine = Execution_Engine::getInstance();
+
+        chexlocalize::Chest_Seg_Dataset dataset;
+        dataset.open(dataset_path);
+
+        Neural_Network net(target);
+        net.addLayer(std::make_unique<U_Net_Layer>(320, 320, 1, 1, 16, target));
+        net.enableMixedPrecision(true);
+
+        net.loadTrainingCheckpoint(ckpt_path, 30);
+        if (net.getLayers().empty() || !net.getLayers()[0]) return false;
+        auto *unet = dynamic_cast<U_Net_Layer*>(net.getLayers()[0].get());
+        if (unet)
+        {
+            unet->inspectAllBatchNorms();
+        }
+
+        std::vector<size_t> indices = { 100, 101 };
+        auto [b_imgs, b_masks] = dataset.getBatch(indices, target, false, nullptr);
+
+        net.setTrainingMode(true);
+        Tensor pred_train = net.forward(b_imgs);
+        engine.executeGraph();
+        for (float v : pred_train.getData())
+        {
+            if (std::isnan(v) || std::isinf(v)) return false;
+        }
+
+        net.setTrainingMode(false);
+        Tensor pred_eval = net.forward(b_imgs);
+        engine.executeGraph();
+        for (float v : pred_eval.getData())
+        {
+            if (std::isnan(v) || std::isinf(v)) return false;
+        }
+
+        std::vector<size_t> train_indices = { 0, 1 };
+        auto [tr_imgs, tr_masks] = dataset.getBatch(train_indices, target, false, nullptr);
+        Tensor pred_tr_eval = net.forward(tr_imgs);
+        engine.executeGraph();
+        for (float v : pred_tr_eval.getData())
+        {
+            if (std::isnan(v) || std::isinf(v)) return false;
+        }
+
+        return true;
+    }
+    catch (const std::exception &e)
+    {
+        std::cerr << "  [FAIL] Exception in BatchNorm U-Net test: " << e.what() << "\n";
+        return false;
+    }
+}
+} // namespace TestBatchNormUnet
+
 int main()
 {
     Logger::setFileLogging(true);
@@ -3551,6 +6178,16 @@ int main()
     std::cout << "  Loss Scaler & Mixed Precision AMP: " << (testLossScalerAndAmp() ? "PASS" : "FAIL") << "\n";
     std::cout << "  Static Command Buffer (Replay):    " << (testStaticCommandBuffer() ? "PASS" : "FAIL") << "\n";
     std::cout << "  BPE Tokenizer (UTF-8 & Fallback):  " << (testBpeTokenizer() ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Ternary Computing Phase 1 Suite:   " << (testTernaryComputingPhase1() ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Ternary Computing Phase 2 Suite:   " << (testTernaryComputingPhase2() ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Ternary Computing Phase 4 Suite:   " << (testTernaryComputingPhase4() ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Ternary Computing Phase 5 Suite:   " << (testTernaryComputingPhase5() ? "PASS" : "FAIL") << "\n";
+    std::cout << "  Dice BCE Cost Function Suite:      " << (TestDiceBceCost::runSuite() ? "PASS" : "FAIL") << "\n";
+    std::cout << "  InstanceNorm2D Operator Suite:     " << (TestInstanceNorm::runSuite() ? "PASS" : "FAIL") << "\n";
+    std::cout << "  LeakyReLU Operator & Layer Suite:  " << (TestLeakyRelu::runSuite() ? "PASS" : "FAIL") << "\n";
+    std::cout << "  UpSample2D Operator & Layer Suite: " << (TestUpsample::runSuite() ? "PASS" : "FAIL") << "\n";
+    std::cout << "  NN-UNet Comprehensive Suite (x13): " << (TestNnUnet::runSuite() ? "PASS" : "FAIL") << "\n";
+    std::cout << "  BatchNorm U-Net Verification:      " << (TestBatchNormUnet::runSuite() ? "PASS" : "FAIL") << "\n";
     std::cout << "========================================\n";
 
     return 0;

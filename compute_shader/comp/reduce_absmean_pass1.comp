@@ -1,0 +1,41 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer InputBuffer {
+    float in_data[];
+};
+
+layout(std430, binding = 1) writeonly buffer PartialSumsBuffer {
+    float partial_sums[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint total_elements;
+} pcs;
+
+shared float s_data[256];
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    uint lid = gl_LocalInvocationID.x;
+    uint wgid = gl_WorkGroupID.x;
+
+    float sum = 0.0;
+    for (uint i = gid; i < pcs.total_elements; i += gl_NumWorkGroups.x * gl_WorkGroupSize.x) {
+        sum += abs(in_data[i]);
+    }
+    s_data[lid] = sum;
+    barrier();
+
+    for (uint s = 128; s > 0; s >>= 1) {
+        if (lid < s) {
+            s_data[lid] += s_data[lid + s];
+        }
+        barrier();
+    }
+
+    if (lid == 0) {
+        partial_sums[wgid] = s_data[0];
+    }
+}

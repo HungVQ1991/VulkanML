@@ -1,0 +1,41 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer Pred_Buffer {
+    float pred_data[];
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer Target_Buffer {
+    float target_data[];
+};
+
+layout(std430, set = 0, binding = 2) writeonly buffer Grad_Buffer {
+    float grad_data[];
+};
+
+layout(push_constant) uniform Push_Constants {
+    uint total_elements;
+    float epsilon_val;
+    float intersection;
+    float pred_sum;
+    float target_sum;
+} push_constants;
+
+void main() {
+    uint global_idx = gl_GlobalInvocationID.x;
+    if (global_idx >= push_constants.total_elements) return;
+
+    float p = clamp(pred_data[global_idx], 0.0f, 1.0f);
+    float y = target_data[global_idx];
+
+    float denom = push_constants.pred_sum + push_constants.target_sum + push_constants.epsilon_val;
+    float numer = 2.0f * push_constants.intersection + push_constants.epsilon_val;
+
+    float dice_grad = (numer - 2.0f * y * denom) / (denom * denom);
+    float p_safe = clamp(p, 1e-4f, 1.0f - 1e-4f);
+    float bce_grad = (p - y) / (p_safe * (1.0f - p_safe) * float(push_constants.total_elements));
+
+    float grad = 0.5f * dice_grad + 0.5f * bce_grad;
+    grad_data[global_idx] = grad;
+}

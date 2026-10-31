@@ -24,6 +24,48 @@ void main() {
     uint M = pc.spatial_count;
     uint total_elements = pc.total_elements;
 
+    if (C > 256) {
+        for (uint c_base = 0; c_base < C; c_base += 256) {
+            uint c = c_base + tid;
+            if (c < C) {
+                float sum = 0.0;
+                for (uint m = 0; m < M; ++m) {
+                    sum += X[m * C + c];
+                }
+                float mean = sum / float(M);
+                batch_mean[c] = mean;
+
+                float sq = 0.0;
+                for (uint m = 0; m < M; ++m) {
+                    float diff = X[m * C + c] - mean;
+                    sq += diff * diff;
+                }
+                float var = sq / float(M);
+
+                bool valid_stats = !isnan(mean) && !isinf(mean) && !isnan(var) && !isinf(var) && (var >= 0.0);
+                if (valid_stats) {
+                    var = min(var, 1e5);
+                    float cur_rm = running_mean[c];
+                    float cur_rv = running_var[c];
+                    if (isnan(cur_rm) || isinf(cur_rm)) cur_rm = 0.0;
+                    if (isnan(cur_rv) || isinf(cur_rv) || cur_rv <= 0.0) cur_rv = 1.0;
+                    running_mean[c] = (1.0 - pc.momentum) * cur_rm + pc.momentum * mean;
+                    running_var[c]  = (1.0 - pc.momentum) * cur_rv  + pc.momentum * var;
+                    batch_mean[c] = mean;
+                    batch_var[c] = var;
+                } else {
+                    float rm = running_mean[c];
+                    float rv = running_var[c];
+                    if (isnan(rm) || isinf(rm)) rm = 0.0;
+                    if (isnan(rv) || isinf(rv) || rv <= 0.0) rv = 1.0;
+                    batch_mean[c] = rm;
+                    batch_var[c] = rv;
+                }
+            }
+        }
+        return;
+    }
+
     uint P_STEP = 256 / C;
     if (P_STEP == 0) P_STEP = 1;
     uint BLOCK = P_STEP * C;
@@ -71,13 +113,27 @@ void main() {
         for (uint p = 0; p < P_STEP; ++p) {
             tot_sq += shared_sum[tid + p * C];
         }
-        float mean = shared_mean[tid];
-        float var = tot_sq / float(M);
+        float mean_val = shared_mean[tid];
+        float var_val = tot_sq / float(M);
 
-        batch_mean[tid] = mean;
-        batch_var[tid] = var;
-
-        running_mean[tid] = (1.0 - pc.momentum) * running_mean[tid] + pc.momentum * mean;
-        running_var[tid] = (1.0 - pc.momentum) * running_var[tid] + pc.momentum * var;
+        bool valid_stats = !isnan(mean_val) && !isinf(mean_val) && !isnan(var_val) && !isinf(var_val) && (var_val >= 0.0);
+        if (valid_stats) {
+            var_val = min(var_val, 1e5);
+            float cur_rm = running_mean[tid];
+            float cur_rv = running_var[tid];
+            if (isnan(cur_rm) || isinf(cur_rm)) cur_rm = 0.0;
+            if (isnan(cur_rv) || isinf(cur_rv) || cur_rv <= 0.0) cur_rv = 1.0;
+            running_mean[tid] = (1.0 - pc.momentum) * cur_rm + pc.momentum * mean_val;
+            running_var[tid]  = (1.0 - pc.momentum) * cur_rv  + pc.momentum * var_val;
+            batch_mean[tid] = mean_val;
+            batch_var[tid] = var_val;
+        } else {
+            float rm = running_mean[tid];
+            float rv = running_var[tid];
+            if (isnan(rm) || isinf(rm)) rm = 0.0;
+            if (isnan(rv) || isinf(rv) || rv <= 0.0) rv = 1.0;
+            batch_mean[tid] = rm;
+            batch_var[tid] = rv;
+        }
     }
 }

@@ -65,7 +65,11 @@ void main() {
             uint w_idx = ky_w_base + kx * w_kc_stride;
 
             for (uint out_c_idx = 0; out_c_idx < params.out_c; out_c_idx++) {
-                sum += grad_output[grad_out_idx + out_c_idx] * weight_data[w_idx + out_c_idx];
+                float go = grad_output[grad_out_idx + out_c_idx];
+                float w = weight_data[w_idx + out_c_idx];
+                if (!isnan(go) && !isinf(go) && !isnan(w) && !isinf(w)) {
+                    sum += go * w;
+                }
             }
         }
     }
@@ -77,5 +81,10 @@ void main() {
                   in_w_idx * params.in_c +
                   in_c_idx;
 
+    if (isnan(sum) || isinf(sum)) {
+        sum = 0.0f;
+    } else {
+        sum = clamp(sum, -1e6f, 1e6f);
+    }
     grad_input[in_idx] = sum;
 }

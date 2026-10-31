@@ -32,7 +32,7 @@ Res_Net_Block_2d_Layer::Res_Net_Block_2d_Layer(Execution_Target _execution_targe
           execution_target(_execution_target)
 {}
 
-Res_Net_Block_2d_Layer::Res_Net_Block_2d_Layer(uint32_t _height, uint32_t _width, uint32_t _in_channels, uint32_t _out_channels, uint32_t _stride, Execution_Target _execution_target)
+Res_Net_Block_2d_Layer::Res_Net_Block_2d_Layer(uint32_t _height, uint32_t _width, uint32_t _in_channels, uint32_t _out_channels, uint32_t _stride, Execution_Target _execution_target, bool _use_resnet_d)
     : Res_Net_Block_2d_Layer(_execution_target)
 {
         uint32_t out_h = (_height + _stride - 1) / _stride;
@@ -46,11 +46,21 @@ Res_Net_Block_2d_Layer::Res_Net_Block_2d_Layer(uint32_t _height, uint32_t _width
 
         if (_stride != 1 || _in_channels != _out_channels)
         {
-            addShortcutLayer<Conv2d_Layer>(_height, _width, _in_channels, _out_channels, 1, _stride, 0, _execution_target);
-            addShortcutLayer<Batch_Norm_2d_Layer>(out_h, out_w, _out_channels, 1e-5f, 0.1f, _execution_target);
+            if (_stride > 1 && _use_resnet_d)
+            {
+                addShortcutLayer<Avg_Pool_2d_Layer>(_height, _width, _in_channels, 2, _stride, 0, _execution_target);
+                addShortcutLayer<Conv2d_Layer>(out_h, out_w, _in_channels, _out_channels, 1, 1, 0, _execution_target);
+                addShortcutLayer<Batch_Norm_2d_Layer>(out_h, out_w, _out_channels, 1e-5f, 0.1f, _execution_target);
+            }
+            else
+            {
+                addShortcutLayer<Conv2d_Layer>(_height, _width, _in_channels, _out_channels, 1, _stride, 0, _execution_target);
+                addShortcutLayer<Batch_Norm_2d_Layer>(out_h, out_w, _out_channels, 1e-5f, 0.1f, _execution_target);
+            }
         }
 
         setPostActivation<Gelu_Layer>(_execution_target);
+        zeroInitLastBatchNorm();
     }
 
 void Res_Net_Block_2d_Layer::addMainLayer(std::unique_ptr<ILayer> _layer)
@@ -347,6 +357,41 @@ std::vector<std::pair<Tensor *, Tensor *>> Res_Net_Block_2d_Layer::getParameters
         return total_params;
     }
 
+std::vector<const Tensor *> Res_Net_Block_2d_Layer::getNoDecayParameters() const
+{
+        std::vector<const Tensor *> total_no_decay;
+        for (const auto &layer : main_branch)
+        {
+            auto nd = layer->getNoDecayParameters();
+            total_no_decay.insert(total_no_decay.end(), nd.begin(), nd.end());
+        }
+        for (const auto &layer : shortcut_branch)
+        {
+            auto nd = layer->getNoDecayParameters();
+            total_no_decay.insert(total_no_decay.end(), nd.begin(), nd.end());
+        }
+        if (post_activation)
+        {
+            auto nd = post_activation->getNoDecayParameters();
+            total_no_decay.insert(total_no_decay.end(), nd.begin(), nd.end());
+        }
+        return total_no_decay;
+    }
+
+void Res_Net_Block_2d_Layer::zeroInitLastBatchNorm()
+{
+        for (auto it = main_branch.rbegin(); it != main_branch.rend(); ++it)
+        {
+            if (auto* bn = dynamic_cast<Batch_Norm_2d_Layer*>(it->get()))
+            {
+                uint32_t ch = bn->getChannels();
+                std::vector<float> zeros(ch, 0.0f);
+                bn->setGamma(Tensor(1, ch, std::move(zeros), bn->getExecutionTarget()));
+                break;
+            }
+        }
+    }
+
 std::vector<float> Res_Net_Block_2d_Layer::getPopulationParameter(size_t param_index) const
 {
         size_t current_offset = 0;
@@ -527,5 +572,39 @@ void Res_Net_Block_2d_Layer::setTrainingMode(bool _is_training)
         }
     }
 
+void Res_Net_Block_2d_Layer::setMixedPrecision(bool _enable) noexcept
+{
+    is_mixed_precision_enabled = _enable;
+    for (auto &layer : main_branch)
+    {
+        layer->setMixedPrecision(_enable);
+    }
+    for (auto &layer : shortcut_branch)
+    {
+        layer->setMixedPrecision(_enable);
+    }
+    if (post_activation)
+    {
+        post_activation->setMixedPrecision(_enable);
+    }
+}
+
+void Res_Net_Block_2d_Layer::invalidateWeightCache() noexcept
+{
+    for (auto &layer : main_branch)
+    {
+        layer->invalidateWeightCache();
+    }
+    for (auto &layer : shortcut_branch)
+    {
+        layer->invalidateWeightCache();
+    }
+    if (post_activation)
+    {
+        post_activation->invalidateWeightCache();
+    }
+}
+
 void Res_Net_Block_2d_Layer::setIsForwardCompleted(bool _is_completed) noexcept
 { is_forward_completed = _is_completed; }
+

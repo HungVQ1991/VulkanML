@@ -17,6 +17,7 @@
 #include "helper/logger.h"
 #include "helper/magic_enum.hpp"
 #include "math/tensor.h"
+#include "ops/vision/pooling.h"
 
 
 Global_Avg_Pool_2d_Layer::Global_Avg_Pool_2d_Layer(uint32_t _height, uint32_t _width, uint32_t _channels, Execution_Target _execution_target)
@@ -41,7 +42,7 @@ Tensor Global_Avg_Pool_2d_Layer::forward(const Tensor &_input_tensor)
                            Log_Feature::POOLING_COMPUTE | Log_Feature::FORWARD_EVALUATION);
 
         input_tensor = _input_tensor;
-        input_tensor.globalAvgPool2d(output_tensor, input_height, input_width, channels);
+        ops::vision::globalAvgPool2d(input_tensor, output_tensor, input_height, input_width, channels);
         is_forward_completed = true;
         logBufferAddress(&input_tensor, "input_tensor (Forward)");
         logBufferAddress(&output_tensor, "output_tensor (Forward)");
@@ -54,7 +55,7 @@ Tensor Global_Avg_Pool_2d_Layer::forward(const Tensor &_batched_input, const std
         if (_batched_params.size() != getPopulationParameterDims().size())
         {
             Logger::logMessage(Input_Format{ "Global_Avg_Pool_2d_Layer::forward: expected {} batched parameter tensors, got {}",
-                                            getPopulationParameterDims().size(), _batched_params.size() },
+                                             getPopulationParameterDims().size(), _batched_params.size() },
                 Log_Level::LOG_ERROR,
                 true,
                 0,
@@ -63,7 +64,7 @@ Tensor Global_Avg_Pool_2d_Layer::forward(const Tensor &_batched_input, const std
         }
 
         Tensor output_tensor_result(_batched_input.getExecutionTarget());
-        _batched_input.globalAvgPool2d(output_tensor_result, input_height, input_width, channels);
+        ops::vision::globalAvgPool2d(_batched_input, output_tensor_result, input_height, input_width, channels);
         return output_tensor_result;
     }
 
@@ -93,7 +94,7 @@ Tensor Global_Avg_Pool_2d_Layer::backward(const Tensor &_output_gradient)
                            1,
                            Log_Feature::POOLING_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
-        _output_gradient.globalAvgPool2dBackward(input_gradient_tensor, input_height, input_width, channels);
+        ops::vision::globalAvgPool2dBackward(_output_gradient, input_gradient_tensor, input_height, input_width, channels);
 
         logBufferAddress(&input_tensor, "input_tensor (Backward)");
         logBufferAddress(&input_gradient_tensor, "input_gradient_tensor (Backward)");

@@ -21,11 +21,12 @@
 #include <vector>
 
 #include "helper/vulkan_ml.h"
+#include "helper/training_profiler.h"
 
 constexpr size_t INPUT_DIMENSION = 784;
 constexpr size_t OUTPUT_DIMENSION = 10;
-constexpr size_t BATCH_SIZE = 8;
-constexpr size_t TOTAL_EPOCHS = 5;
+constexpr size_t BATCH_SIZE = 512;
+constexpr size_t TOTAL_EPOCHS = 1;
 
 uint32_t swapByteOrder(uint32_t _value)
 {
@@ -254,9 +255,89 @@ double runBenchmark(Execution_Target _execution_target,
 
     data_pipeline.initializeBuffers(BATCH_SIZE, INPUT_DIMENSION, OUTPUT_DIMENSION, _execution_target);
 
+    _neural_network.setTrainingMode(true);
+    data_pipeline.setDevice(Execution_Engine::getInstance().getContext().getDevice());
+    data_pipeline.start();
+
+    _neural_network.compileAndWarmup(BATCH_SIZE, INPUT_DIMENSION, OUTPUT_DIMENSION);
+    Step_Timings::getInstance().reset();
+
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    _neural_network.fit(data_pipeline, TOTAL_EPOCHS, steps_per_epoch, BATCH_SIZE, INPUT_DIMENSION, OUTPUT_DIMENSION, save_file_filepath);
+    for (size_t epoch = _neural_network.getCurrentEpoch(); epoch < TOTAL_EPOCHS; ++epoch)
+    {
+        Logger::logMessage(std::format("Start of epoch {}", epoch), Log_Level::LOG_INFO, true);
+        _neural_network.setCurrentEpoch(epoch);
+
+        auto epoch_start = std::chrono::high_resolution_clock::now();
+        size_t interval_batch_count = 0;
+        size_t total_samples_processed = 0;
+
+        for (size_t step_index = 0; step_index < steps_per_epoch; ++step_index)
+        {
+            auto batch_step_start = std::chrono::high_resolution_clock::now();
+
+            auto prep_start = std::chrono::high_resolution_clock::now();
+            Batch_Data batch_data = data_pipeline.nextBatch(BATCH_SIZE, INPUT_DIMENSION, OUTPUT_DIMENSION);
+            auto prep_end = std::chrono::high_resolution_clock::now();
+            Step_Timings::getInstance()[Timing_Stage::DATA_PREP] +=
+                std::chrono::duration<double, std::milli>(prep_end - prep_start).count();
+
+            if (batch_data.input_matrix && batch_data.target_matrix)
+            {
+                if (batch_data.input_matrix->getExecutionTarget() != _execution_target)
+                {
+                    batch_data.input_matrix->setExecutionTarget(_execution_target);
+                    batch_data.target_matrix->setExecutionTarget(_execution_target);
+                }
+
+                _neural_network.trainStep(*batch_data.input_matrix, *batch_data.target_matrix, batch_data.fence);
+
+                if (_neural_network.isStepLearningRatePerBatch())
+                {
+                    auto sched_start = std::chrono::high_resolution_clock::now();
+                    _neural_network.getLearningRate().step();
+                    auto sched_end = std::chrono::high_resolution_clock::now();
+                    Step_Timings::getInstance()[Timing_Stage::SCHED_STEP] +=
+                        std::chrono::duration<double, std::milli>(sched_end - sched_start).count();
+                }
+            }
+
+            auto batch_step_end = std::chrono::high_resolution_clock::now();
+            double batch_total_ms = std::chrono::duration<double, std::milli>(batch_step_end - batch_step_start).count();
+            Step_Timings::getInstance()[Timing_Stage::TOTAL_BATCH] += batch_total_ms;
+            interval_batch_count++;
+            total_samples_processed += BATCH_SIZE;
+
+            size_t log_interval = std::max<size_t>(10, steps_per_epoch / 5);
+            if ((step_index + 1) % log_interval == 0 || step_index + 1 == steps_per_epoch)
+            {
+                auto now_t = std::chrono::high_resolution_clock::now();
+                double cur_sec = std::chrono::duration<double>(now_t - epoch_start).count();
+                double cur_samples_s = (cur_sec > 0.0) ? (static_cast<double>(total_samples_processed) / cur_sec) : 0.0;
+
+                std::cout << std::format("\n>>> Training Profiler Progress: Epoch {} [Batch {}/{}] | Speed: {:.1f} samples/s\n",
+                                         epoch + 1, step_index + 1, steps_per_epoch, cur_samples_s);
+                Step_Timings::getInstance().printTable(step_index + 1, steps_per_epoch, cur_samples_s, interval_batch_count);
+                Step_Timings::getInstance().reset();
+                interval_batch_count = 0;
+            }
+        }
+
+        if (!save_file_filepath.empty())
+        {
+            _neural_network.saveTrainingCheckpoint(Neural_Network::modifyFilepath(save_file_filepath, epoch), epoch);
+        }
+
+        if (!_neural_network.isStepLearningRatePerBatch())
+        {
+            _neural_network.getLearningRate().step();
+        }
+        Logger::resetLogCounters();
+    }
+
+    _neural_network.setCurrentEpoch(TOTAL_EPOCHS);
+    data_pipeline.stop();
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> elapsed_duration = end_time - start_time;
@@ -419,29 +500,26 @@ int main()
     neural_network.enableStaticGraph();
     neural_network.enableCooperationMatrix();
 
-    // neural_network.setLearningRate<Cosine_Annealing>(0.001f, 1e-5f, static_cast<int>(TOTAL_EPOCHS));
-    // neural_network.setOptimizer<Adam_Optimizer>(neural_network.getLearningRate(), 0.9f, 0.999f, 1e-8f, 1.0f);
-    // neural_network.setCostFunction<Cce_Cost>();
+    neural_network.setLearningRate<Cosine_Annealing>(0.001f, 1e-5f, static_cast<int>(TOTAL_EPOCHS));
+    neural_network.setOptimizer<Adam_Optimizer>(neural_network.getLearningRate(), 0.9f, 0.999f, 1e-8f, 1.0f);
+    neural_network.setCostFunction<Cce_Cost>();
 
-    // neural_network.addLayer<Conv2d_Layer>(28, 28, 1, 16, 3, 1, 1);
-    // neural_network.addLayer<Batch_Norm_2d_Layer>(28, 28, 16, 1e-5f, 0.1f);
-    // neural_network.addLayer<Gelu_Layer>();
-    // neural_network.addLayer<Max_Pool_2d_Layer>(28, 28, 16, 2, 2, 0);
+    neural_network.addLayer<Conv2d_Layer>(28, 28, 1, 16, 3, 1, 1);
+    neural_network.addLayer<Batch_Norm_2d_Layer>(28, 28, 16, 1e-5f, 0.1f);
+    neural_network.addLayer<Gelu_Layer>();
+    neural_network.addLayer<Max_Pool_2d_Layer>(28, 28, 16, 2, 2, 0);
 
-    // neural_network.addLayer<Conv2d_Layer>(14, 14, 16, 32, 3, 1, 1);
-    // neural_network.addLayer<Batch_Norm_2d_Layer>(14, 14, 32, 1e-5f, 0.1f);
-    // neural_network.addLayer<Gelu_Layer>();
-    // neural_network.addLayer<Max_Pool_2d_Layer>(14, 14, 32, 2, 2, 0);
+    neural_network.addLayer<Conv2d_Layer>(14, 14, 16, 32, 3, 1, 1);
+    neural_network.addLayer<Batch_Norm_2d_Layer>(14, 14, 32, 1e-5f, 0.1f);
+    neural_network.addLayer<Gelu_Layer>();
+    neural_network.addLayer<Max_Pool_2d_Layer>(14, 14, 32, 2, 2, 0);
 
-    // neural_network.addLayer<Linear_Layer>(7 * 7 * 32, 128);
-    // neural_network.addLayer<Batch_Norm_Layer>(128, 1e-5f, 0.1f);
-    // neural_network.addLayer<Gelu_Layer>();
+    neural_network.addLayer<Linear_Layer>(7 * 7 * 32, 128);
+    neural_network.addLayer<Batch_Norm_Layer>(128, 1e-5f, 0.1f);
+    neural_network.addLayer<Gelu_Layer>();
 
-    // neural_network.addLayer<Linear_Layer>(128, 10);
-    // neural_network.addLayer<Softmax_Layer>(true);
-
-    neural_network.loadTrainingCheckpoint("output/mnist/checkpoint_1.nnck", 2);
-
+    neural_network.addLayer<Linear_Layer>(128, 10);
+    neural_network.addLayer<Softmax_Layer>(true);
 
     Logger::logMessage("Starting training benchmark with Data Augmentation...", Log_Level::LOG_INFO, true, 0, Log_Feature::TRAINING);
     double elapsed_duration_ms = runBenchmark(execution_target, train_images_data, train_labels_data, train_images_count, neural_network, "output/mnist/checkpoint_{}");

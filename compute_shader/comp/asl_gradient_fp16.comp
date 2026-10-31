@@ -1,0 +1,67 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer Pred_Buffer {
+    float16_t pred_data[];
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer Target_Buffer {
+    float16_t target_data[];
+};
+
+layout(std430, set = 0, binding = 2) writeonly buffer Grad_Buffer {
+    float16_t grad_data[];
+};
+
+layout(push_constant) uniform Push_Constants {
+    uint total_elements;
+    float gamma_pos;
+    float gamma_neg;
+    float clip_margin;
+    float epsilon_val;
+    float inv_total_elements;
+} push_constants;
+
+void main() {
+    uint global_idx = gl_GlobalInvocationID.x;
+    if (global_idx >= push_constants.total_elements) return;
+
+    float p = clamp(float(pred_data[global_idx]), push_constants.epsilon_val, 1.0f - push_constants.epsilon_val);
+    float y = float(target_data[global_idx]);
+
+    // 1. Positive gradient component: dL+/dp
+    float dL_pos = 0.0f;
+    if (y > 0.0f) {
+        float pt = 1.0f - p;
+        if (push_constants.gamma_pos <= 0.0f) {
+            dL_pos = -1.0f / p;
+        } else {
+            float pt_gamma_minus_1 = (push_constants.gamma_pos == 1.0f) ? 1.0f : pow(pt, push_constants.gamma_pos - 1.0f);
+            float pt_gamma = pt_gamma_minus_1 * pt;
+            dL_pos = push_constants.gamma_pos * pt_gamma_minus_1 * log(p) - (pt_gamma / p);
+        }
+    }
+
+    // 2. Negative gradient component with probability margin shifting: dL-/dp
+    float dL_neg = 0.0f;
+    if (y < 1.0f) {
+        float p_m = max(p - push_constants.clip_margin, 0.0f);
+        p_m = clamp(p_m, 0.0f, 1.0f - push_constants.epsilon_val);
+        if (p_m > 0.0f) {
+            float q_m = 1.0f - p_m;
+            if (push_constants.gamma_neg <= 0.0f) {
+                dL_neg = 1.0f / q_m;
+            } else {
+                float pm_gamma_minus_1 = (push_constants.gamma_neg == 1.0f) ? 1.0f : pow(p_m, push_constants.gamma_neg - 1.0f);
+                float pm_gamma = pm_gamma_minus_1 * p_m;
+                dL_neg = -push_constants.gamma_neg * pm_gamma_minus_1 * log(q_m) + (pm_gamma / q_m);
+            }
+        }
+    }
+
+    float total_grad = (y * dL_pos + (1.0f - y) * dL_neg) * push_constants.inv_total_elements;
+    grad_data[global_idx] = float16_t(total_grad);
+}

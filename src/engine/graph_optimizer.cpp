@@ -616,17 +616,40 @@ std::vector<Compute_Node> Graph_Optimizer::fuseLinearBackwardAdamPass(const std:
     return compacted;
 }
 
-Cached_Graph_Template Graph_Optimizer::optimizeInternal(const std::vector<Compute_Node> &_original_nodes, bool _is_tracking_mappings)
+Cached_Graph_Template Graph_Optimizer::optimizeInternal(const std::vector<Compute_Node>& _original_nodes, bool _is_tracking_mappings)
 {
     std::vector<Compute_Node> effective_nodes = fuseLinearBackwardAdamPass(_original_nodes);
-    const Shader_Dictionary &shader_dictionary = Shader_Dictionary::getInstance();
+    const Shader_Dictionary& shader_dictionary = Shader_Dictionary::getInstance();
     Cached_Graph_Template graph_template;
     if (effective_nodes.empty())
     {
         return graph_template;
     }
 
-    Compute_Node current_fused_node;
+    auto restoreUnfusedNodeBindings = [&](Compute_Node& node,
+        uint32_t raw_idx,
+        std::vector<Buffer_Binding_Mapping>& mappings)
+        {
+            if (!node.is_fused && raw_idx < effective_nodes.size())
+            {
+                const auto& orig_buffers = effective_nodes[raw_idx].buffers;
+                node.buffers = orig_buffers;
+                if (_is_tracking_mappings)
+                {
+                    mappings.clear();
+                    mappings.reserve(orig_buffers.size());
+                    for (uint32_t b_idx = 0; b_idx < static_cast<uint32_t>(orig_buffers.size()); ++b_idx)
+                    {
+                        mappings.push_back(Buffer_Binding_Mapping{
+                            .raw_node_index = raw_idx,
+                            .raw_buffer_index = b_idx,
+                            .fused_buffer_index = b_idx });
+                    }
+                }
+            }
+        };
+
+    Compute_Node current_fused_node{};
     current_fused_node.pipeline_id = effective_nodes[0].pipeline_id;
     current_fused_node.push_constants_data = effective_nodes[0].push_constants_data;
     current_fused_node.workgroup_count_x = effective_nodes[0].workgroup_count_x;
@@ -634,11 +657,12 @@ Cached_Graph_Template Graph_Optimizer::optimizeInternal(const std::vector<Comput
     current_fused_node.workgroup_count_z = effective_nodes[0].workgroup_count_z;
     current_fused_node.is_fused = false;
 
+    uint32_t current_start_raw_index = 0;
     std::vector<Buffer_Binding_Mapping> current_buffer_mappings;
     std::vector<Push_Constant_Mapping> current_push_constants_mappings;
     std::vector<uint32_t> current_raw_node_indices;
 
-    const Snippet_Metadata &first_metadata = shader_dictionary.getMetadata(effective_nodes[0].pipeline_id);
+    const Snippet_Metadata& first_metadata = shader_dictionary.getMetadata(effective_nodes[0].pipeline_id);
     current_fused_node.fused_operations.push_back(
         buildFusedOperation(current_fused_node, effective_nodes[0], 0, first_metadata, 0, _is_tracking_mappings ? &current_buffer_mappings : nullptr));
 
@@ -647,22 +671,22 @@ Cached_Graph_Template Graph_Optimizer::optimizeInternal(const std::vector<Comput
         current_push_constants_mappings.push_back(Push_Constant_Mapping{
             .raw_node_index = 0,
             .fused_push_constants_offset = 0,
-            .push_constants_size = static_cast<uint32_t>(effective_nodes[0].push_constants_data.size())});
+            .push_constants_size = static_cast<uint32_t>(effective_nodes[0].push_constants_data.size()) });
         current_raw_node_indices.push_back(0);
     }
 
     for (size_t i = 1; i < effective_nodes.size(); ++i)
     {
-        const Compute_Node &next_node = effective_nodes[i];
+        const Compute_Node& next_node = effective_nodes[i];
 
         bool is_sharing_buffer = false;
-        for (const auto &buffer_a : current_fused_node.buffers)
+        for (const auto& buffer_a : current_fused_node.buffers)
         {
             if (!buffer_a)
             {
                 continue;
             }
-            for (const auto &buffer_b : next_node.buffers)
+            for (const auto& buffer_b : next_node.buffers)
             {
                 if (!buffer_b)
                 {
@@ -670,7 +694,7 @@ Cached_Graph_Template Graph_Optimizer::optimizeInternal(const std::vector<Comput
                 }
                 if (buffer_a == buffer_b ||
                     (buffer_a->getBuffer() != VK_NULL_HANDLE &&
-                     buffer_a->getBuffer() == buffer_b->getBuffer()))
+                        buffer_a->getBuffer() == buffer_b->getBuffer()))
                 {
                     is_sharing_buffer = true;
                     break;
@@ -683,15 +707,15 @@ Cached_Graph_Template Graph_Optimizer::optimizeInternal(const std::vector<Comput
         }
 
         std::vector<std::shared_ptr<gpu::vector>> unique_buffers;
-        for (const auto &new_buffer : next_node.buffers)
+        for (const auto& new_buffer : next_node.buffers)
         {
             bool is_existing = false;
-            for (const auto &existing_buffer : current_fused_node.buffers)
+            for (const auto& existing_buffer : current_fused_node.buffers)
             {
                 if (new_buffer && existing_buffer &&
                     (new_buffer == existing_buffer ||
-                     (new_buffer->getBuffer() != VK_NULL_HANDLE &&
-                      new_buffer->getBuffer() == existing_buffer->getBuffer())))
+                        (new_buffer->getBuffer() != VK_NULL_HANDLE &&
+                            new_buffer->getBuffer() == existing_buffer->getBuffer())))
                 {
                     is_existing = true;
                     break;
@@ -719,7 +743,7 @@ Cached_Graph_Template Graph_Optimizer::optimizeInternal(const std::vector<Comput
         Operation_Class consumer_class = shader_dictionary.getMetadata(consumer_pipeline).operation_class;
 
         bool is_fusible_operation = !current_fused_node.fused_operations.empty() &&
-                                    isFusible(producer_class, consumer_class, producer_pipeline, consumer_pipeline);
+            isFusible(producer_class, consumer_class, producer_pipeline, consumer_pipeline);
         bool are_dimensions_matching = hasCompatibleDimensions(current_fused_node, next_node, producer_class, consumer_class);
         bool has_aliasing_hazard = hasAliasingHazard(current_fused_node, next_node, shader_dictionary);
 
@@ -736,7 +760,7 @@ Cached_Graph_Template Graph_Optimizer::optimizeInternal(const std::vector<Comput
             }
 
             uint32_t current_push_constants_offset_val = static_cast<uint32_t>(aligned_push_constants_offset);
-            const Snippet_Metadata &next_metadata = shader_dictionary.getMetadata(next_node.pipeline_id);
+            const Snippet_Metadata& next_metadata = shader_dictionary.getMetadata(next_node.pipeline_id);
 
             current_fused_node.fused_operations.push_back(
                 buildFusedOperation(current_fused_node, next_node, current_push_constants_offset_val, next_metadata, static_cast<uint32_t>(i), _is_tracking_mappings ? &current_buffer_mappings : nullptr));
@@ -746,7 +770,7 @@ Cached_Graph_Template Graph_Optimizer::optimizeInternal(const std::vector<Comput
                 current_push_constants_mappings.push_back(Push_Constant_Mapping{
                     .raw_node_index = static_cast<uint32_t>(i),
                     .fused_push_constants_offset = current_push_constants_offset_val,
-                    .push_constants_size = static_cast<uint32_t>(next_node.push_constants_data.size())});
+                    .push_constants_size = static_cast<uint32_t>(next_node.push_constants_data.size()) });
                 current_raw_node_indices.push_back(static_cast<uint32_t>(i));
             }
 
@@ -760,6 +784,7 @@ Cached_Graph_Template Graph_Optimizer::optimizeInternal(const std::vector<Comput
         }
         else
         {
+            restoreUnfusedNodeBindings(current_fused_node, current_start_raw_index, current_buffer_mappings);
             markExternalOutputs(current_fused_node, effective_nodes, i);
 
             graph_template.fused_nodes.push_back(current_fused_node);
@@ -773,6 +798,7 @@ Cached_Graph_Template Graph_Optimizer::optimizeInternal(const std::vector<Comput
                 current_raw_node_indices.clear();
             }
 
+            current_start_raw_index = static_cast<uint32_t>(i);
             current_fused_node = Compute_Node{};
             current_fused_node.pipeline_id = next_node.pipeline_id;
             current_fused_node.push_constants_data = next_node.push_constants_data;
@@ -781,7 +807,7 @@ Cached_Graph_Template Graph_Optimizer::optimizeInternal(const std::vector<Comput
             current_fused_node.workgroup_count_z = next_node.workgroup_count_z;
             current_fused_node.is_fused = false;
 
-            const Snippet_Metadata &metadata = shader_dictionary.getMetadata(next_node.pipeline_id);
+            const Snippet_Metadata& metadata = shader_dictionary.getMetadata(next_node.pipeline_id);
             current_fused_node.fused_operations.push_back(
                 buildFusedOperation(current_fused_node, next_node, 0, metadata, static_cast<uint32_t>(i), _is_tracking_mappings ? &current_buffer_mappings : nullptr));
 
@@ -790,12 +816,13 @@ Cached_Graph_Template Graph_Optimizer::optimizeInternal(const std::vector<Comput
                 current_push_constants_mappings.push_back(Push_Constant_Mapping{
                     .raw_node_index = static_cast<uint32_t>(i),
                     .fused_push_constants_offset = 0,
-                    .push_constants_size = static_cast<uint32_t>(next_node.push_constants_data.size())});
+                    .push_constants_size = static_cast<uint32_t>(next_node.push_constants_data.size()) });
                 current_raw_node_indices.push_back(static_cast<uint32_t>(i));
             }
         }
     }
 
+    restoreUnfusedNodeBindings(current_fused_node, current_start_raw_index, current_buffer_mappings);
     markExternalOutputs(current_fused_node, effective_nodes, effective_nodes.size());
 
     graph_template.fused_nodes.push_back(current_fused_node);
@@ -806,11 +833,11 @@ Cached_Graph_Template Graph_Optimizer::optimizeInternal(const std::vector<Comput
         graph_template.raw_node_indices.push_back(std::move(current_raw_node_indices));
 
         graph_template.total_buffer_mappings = 0;
-        for (const auto &mappings : graph_template.buffer_mappings)
+        for (const auto& mappings : graph_template.buffer_mappings)
         {
             graph_template.total_buffer_mappings += mappings.size();
         }
-    }
+}
 
     assignPipelineBarriers(graph_template.fused_nodes);
     graph_template.is_valid = true;
@@ -830,7 +857,7 @@ void Graph_Optimizer::optimize(Compute_Graph &_graph)
     }
     return;
 #else
-    const auto &original_nodes = _graph.getNodes();
+    const std::vector<Compute_Node> &original_nodes = _graph.getNodes();
     if (original_nodes.empty())
     {
         return;
@@ -856,7 +883,21 @@ Cached_Graph_Template Graph_Optimizer::buildCachedTemplate(const Compute_Graph &
         return Cached_Graph_Template{};
     }
 
-    return optimizeInternal(original_nodes, true);
+    Cached_Graph_Template graph_template = optimizeInternal(original_nodes, true);
+    for (auto &node : graph_template.fused_nodes)
+    {
+        for (auto &buf : node.buffers)
+        {
+            if (buf)
+            {
+                Data_Type dt = buf->getDataType();
+                auto dummy = std::make_shared<gpu::vector>(buf->getContext());
+                dummy->setDataType(dt);
+                buf = dummy;
+            }
+        }
+    }
+    return graph_template;
 #endif
 }
 

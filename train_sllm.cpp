@@ -511,7 +511,6 @@ namespace
             std::cerr << "[Error] File not found: " << path << "\n";
             return false;
         }
-
         try
         {
             std::ifstream file(path, std::ios::binary);
@@ -854,7 +853,18 @@ namespace
                     bool overflow_hint = std::isnan(step_loss) || std::isinf(step_loss);
                     bool success = model.stepOptimizer(optimizer, config.grad_clip, current_scale, overflow_hint, defer_bwd);
                     auto opt_end = std::chrono::high_resolution_clock::now();
-                    Step_Timings::getInstance()[Timing_Stage::OPT_EXEC] += std::chrono::duration<double, std::milli>(opt_end - opt_start).count();
+                    double opt_duration_ms = std::chrono::duration<double, std::milli>(opt_end - opt_start).count();
+
+                    if (!defer_bwd)
+                    {
+                        Step_Timings::getInstance()[Timing_Stage::OPT_EXEC] += opt_duration_ms;
+                    }
+                    else
+                    {
+                        double chained_gpu_ms = Execution_Engine::getInstance().getLastExecutionTimeMs();
+                        double host_overhead = std::max(0.0, opt_duration_ms - chained_gpu_ms);
+                        Step_Timings::getInstance()[Timing_Stage::OPT_EXEC] += host_overhead;
+                    }
 
                     if (success)
                     {

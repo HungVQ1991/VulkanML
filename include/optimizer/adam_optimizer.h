@@ -7,6 +7,7 @@
 #include <fstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -55,6 +56,7 @@ private:
     std::unordered_map<Tensor *, Parameter_State> parameter_states;
     std::vector<Tensor *> parameter_order;
     std::vector<Parameter_State> loaded_states;
+    std::unordered_set<const Tensor *> no_decay_parameters;
 
 public:    explicit Adam_Optimizer(float _learning_rate = 0.001f,
                             float _beta1 = 0.9f,
@@ -121,4 +123,7 @@ public:    explicit Adam_Optimizer(float _learning_rate = 0.001f,
     void setEpsilon(float _epsilon) noexcept { epsilon = _epsilon; }
     void setBeta1(float _beta1) noexcept { beta1 = _beta1; }
     void setBeta2(float _beta2) noexcept { beta2 = _beta2; }
-};;
+    void setNoDecayParameters(std::unordered_set<const Tensor *> _no_decay) { no_decay_parameters = std::move(_no_decay); }
+    void addNoDecayParameter(const Tensor *_param) { no_decay_parameters.insert(_param); }
+    const std::unordered_set<const Tensor *> &getNoDecayParameters() const noexcept { return no_decay_parameters; }
+};

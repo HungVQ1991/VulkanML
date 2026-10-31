@@ -17,6 +17,7 @@
 #include "helper/logger.h"
 #include "helper/magic_enum.hpp"
 #include "math/tensor.h"
+#include "ops/activation/activation.h"
 
 
 Gelu_Layer::Gelu_Layer(Execution_Target _execution_target)
@@ -39,7 +40,7 @@ Tensor Gelu_Layer::forward(const Tensor &_input_tensor)
                            Log_Feature::ACTIVATION_COMPUTE | Log_Feature::FORWARD_EVALUATION);
 
         input_tensor = _input_tensor;
-        input_tensor.gelu(output_tensor);
+        ops::activation::gelu(input_tensor, output_tensor);
         is_forward_completed = true;
         return output_tensor;
     }
@@ -58,7 +59,7 @@ Tensor Gelu_Layer::forward(const Tensor& _batched_input, const std::vector<Tenso
         }
 
         Tensor output_tensor_result(_batched_input.getExecutionTarget());
-        _batched_input.gelu(output_tensor_result);
+        ops::activation::gelu(_batched_input, output_tensor_result);
         return output_tensor_result;
     }
 
@@ -94,14 +95,17 @@ Tensor Gelu_Layer::backward(const Tensor &_output_gradient)
 
         logBufferAddress(&input_tensor, "input_tensor (Backward)");
 
-        input_tensor.geluBackward(_output_gradient, input_gradient_tensor);
+        ops::activation::geluBackward(input_tensor, _output_gradient, input_gradient_tensor);
         return input_gradient_tensor;
     }
 
 void Gelu_Layer::resetGradient()
 {
-        is_forward_completed = false;
-    }
+    is_forward_completed = false;
+    input_tensor = Tensor(0, 0, execution_target);
+    output_tensor = Tensor(0, 0, execution_target);
+    input_gradient_tensor = Tensor(0, 0, execution_target);
+}
 
 std::unique_ptr<ILayer> Gelu_Layer::clone() const
 {

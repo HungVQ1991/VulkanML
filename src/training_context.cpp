@@ -56,6 +56,15 @@ void Training_Context::createCostFunction(Cost_Type _cost_type, std::ifstream &_
     case Cost_Type::FUSED_CCE:
         cost_function = std::make_unique<Fused_Cross_Entropy>();
         break;
+    case Cost_Type::ASL:
+        cost_function = std::make_unique<Asl_Cost>(1.0f, 4.0f, 0.05f, 1e-7f, _execution_target);
+        break;
+    case Cost_Type::DICE:
+        cost_function = std::make_unique<Dice_Cost>(1e-7f, _execution_target);
+        break;
+    case Cost_Type::DICE_BCE:
+        cost_function = std::make_unique<Dice_BCE_Cost>(1.0f, 1.0f, 1e-7f, _execution_target);
+        break;
     default:
         Logger::logMessage("Training_Context::createCostFunction: Unknown cost type",
                            Log_Level::LOG_ERROR,
@@ -212,6 +221,22 @@ std::unique_ptr<ILayer> Training_Context::constructLayerFromConfig(std::ifstream
         }
         return std::make_unique<Linear_Layer>(input_dimension, output_dimension, _execution_target);
     }
+    case Layer_Type::TERNARY_LINEAR:
+    {
+        uint32_t input_dimension = 0;
+        uint32_t output_dimension = 0;
+        _input_file_stream.read(reinterpret_cast<char *>(&input_dimension), sizeof(input_dimension));
+        _input_file_stream.read(reinterpret_cast<char *>(&output_dimension), sizeof(output_dimension));
+        if (input_dimension == 0 || output_dimension == 0)
+        {
+            Logger::logMessage("Training_Context::constructLayerFromConfig: Ternary linear layer dimension is zero",
+                               Log_Level::LOG_WARNING,
+                               true,
+                               0,
+                               Log_Feature::MODEL_SERIALIZATION);
+        }
+        return std::make_unique<Ternary_Linear_Layer>(input_dimension, output_dimension, _execution_target);
+    }
     case Layer_Type::CONV2D:
     {
         uint32_t input_height = 0;
@@ -254,6 +279,18 @@ std::unique_ptr<ILayer> Training_Context::constructLayerFromConfig(std::ifstream
         _input_file_stream.read(reinterpret_cast<char *>(&momentum), sizeof(momentum));
         return std::make_unique<Batch_Norm_2d_Layer>(input_height, input_width, channels, epsilon, momentum, _execution_target);
     }
+    case Layer_Type::INSTANCE_NORM_2D:
+    {
+        uint32_t input_height = 0;
+        uint32_t input_width = 0;
+        uint32_t channels = 0;
+        float epsilon = 0.0f;
+        _input_file_stream.read(reinterpret_cast<char *>(&input_height), sizeof(input_height));
+        _input_file_stream.read(reinterpret_cast<char *>(&input_width), sizeof(input_width));
+        _input_file_stream.read(reinterpret_cast<char *>(&channels), sizeof(channels));
+        _input_file_stream.read(reinterpret_cast<char *>(&epsilon), sizeof(epsilon));
+        return std::make_unique<Instance_Norm_2d_Layer>(input_height, input_width, channels, epsilon, _execution_target);
+    }
     case Layer_Type::GLOBAL_AVG_POOL_2D:
     {
         uint32_t input_height = 0;
@@ -279,6 +316,42 @@ std::unique_ptr<ILayer> Training_Context::constructLayerFromConfig(std::ifstream
         _input_file_stream.read(reinterpret_cast<char *>(&stride), sizeof(stride));
         _input_file_stream.read(reinterpret_cast<char *>(&padding), sizeof(padding));
         return std::make_unique<Max_Pool_2d_Layer>(input_height, input_width, channels, kernel_size, stride, padding, _execution_target);
+    }
+    case Layer_Type::AVG_POOL_2D:
+    {
+        uint32_t input_height = 0;
+        uint32_t input_width = 0;
+        uint32_t channels = 0;
+        uint32_t kernel_size = 0;
+        uint32_t stride = 0;
+        uint32_t padding = 0;
+        _input_file_stream.read(reinterpret_cast<char *>(&input_height), sizeof(input_height));
+        _input_file_stream.read(reinterpret_cast<char *>(&input_width), sizeof(input_width));
+        _input_file_stream.read(reinterpret_cast<char *>(&channels), sizeof(channels));
+        _input_file_stream.read(reinterpret_cast<char *>(&kernel_size), sizeof(kernel_size));
+        _input_file_stream.read(reinterpret_cast<char *>(&stride), sizeof(stride));
+        _input_file_stream.read(reinterpret_cast<char *>(&padding), sizeof(padding));
+        return std::make_unique<Avg_Pool_2d_Layer>(input_height, input_width, channels, kernel_size, stride, padding, _execution_target);
+    }
+    case Layer_Type::MULTI_SCALE_RESNET_18:
+    {
+        uint32_t height = 0;
+        uint32_t width = 0;
+        uint32_t in_c = 2;
+        uint8_t d_flag = 1;
+        _input_file_stream.read(reinterpret_cast<char *>(&height), sizeof(height));
+        _input_file_stream.read(reinterpret_cast<char *>(&width), sizeof(width));
+        _input_file_stream.read(reinterpret_cast<char *>(&in_c), sizeof(in_c));
+        _input_file_stream.read(reinterpret_cast<char *>(&d_flag), sizeof(d_flag));
+        bool use_resnet_d = (d_flag & 0x01) != 0;
+        float lambda_gmp = 0.0f;
+        if (d_flag & 0x80)
+        {
+            _input_file_stream.read(reinterpret_cast<char *>(&lambda_gmp), sizeof(lambda_gmp));
+        }
+        auto layer = std::make_unique<Multi_Scale_ResNet18_Balanced_Layer>(height, width, in_c, _execution_target, use_resnet_d);
+        layer->setLambdaGmp(lambda_gmp);
+        return layer;
     }
     case Layer_Type::RES_NET_BLOCK_2D:
     {
@@ -357,9 +430,25 @@ std::unique_ptr<ILayer> Training_Context::constructLayerFromConfig(std::ifstream
     {
         return std::make_unique<Relu_Layer>(_execution_target);
     }
+    case Layer_Type::LEAKY_RELU:
+    {
+        float negative_slope = 0.01f;
+        _input_file_stream.read(reinterpret_cast<char *>(&negative_slope), sizeof(negative_slope));
+        return std::make_unique<Leaky_Relu_Layer>(negative_slope, _execution_target);
+    }
     case Layer_Type::GELU:
     {
         return std::make_unique<Gelu_Layer>(_execution_target);
+    }
+    case Layer_Type::SIGMOID:
+    {
+        return std::make_unique<Sigmoid_Layer>(_execution_target);
+    }
+    case Layer_Type::DROPOUT:
+    {
+        float dropout_rate = 0.5f;
+        _input_file_stream.read(reinterpret_cast<char *>(&dropout_rate), sizeof(dropout_rate));
+        return std::make_unique<Dropout_Layer>(dropout_rate, _execution_target);
     }
     case Layer_Type::RMSNORM:
     {
@@ -394,6 +483,46 @@ std::unique_ptr<ILayer> Training_Context::constructLayerFromConfig(std::ifstream
         _input_file_stream.read(reinterpret_cast<char *>(&rms_norm_eps), sizeof(rms_norm_eps));
         _input_file_stream.read(reinterpret_cast<char *>(&rope_base), sizeof(rope_base));
         return std::make_unique<Transformer_Block>(hidden_dim, num_heads, intermediate_dim, rms_norm_eps, rope_base, _execution_target);
+    }
+    case Layer_Type::UP_SAMPLE_2D:
+    {
+        uint32_t height = 0;
+        uint32_t width = 0;
+        uint32_t channels = 0;
+        uint32_t scale_factor = 2;
+        _input_file_stream.read(reinterpret_cast<char *>(&height), sizeof(height));
+        _input_file_stream.read(reinterpret_cast<char *>(&width), sizeof(width));
+        _input_file_stream.read(reinterpret_cast<char *>(&channels), sizeof(channels));
+        _input_file_stream.read(reinterpret_cast<char *>(&scale_factor), sizeof(scale_factor));
+        return std::make_unique<Up_Sample_2d_Layer>(height, width, channels, scale_factor, _execution_target);
+    }
+    case Layer_Type::U_NET:
+    {
+        uint32_t height = 0;
+        uint32_t width = 0;
+        uint32_t in_c = 1;
+        uint32_t out_c = 1;
+        uint32_t base_c = 32;
+        _input_file_stream.read(reinterpret_cast<char *>(&height), sizeof(height));
+        _input_file_stream.read(reinterpret_cast<char *>(&width), sizeof(width));
+        _input_file_stream.read(reinterpret_cast<char *>(&in_c), sizeof(in_c));
+        _input_file_stream.read(reinterpret_cast<char *>(&out_c), sizeof(out_c));
+        _input_file_stream.read(reinterpret_cast<char *>(&base_c), sizeof(base_c));
+        return std::make_unique<U_Net_Layer>(height, width, in_c, out_c, base_c, _execution_target);
+    }
+    case Layer_Type::NN_UNET:
+    {
+        uint32_t height = 0;
+        uint32_t width = 0;
+        uint32_t in_c = 1;
+        uint32_t out_c = 1;
+        uint32_t base_c = 32;
+        _input_file_stream.read(reinterpret_cast<char *>(&height), sizeof(height));
+        _input_file_stream.read(reinterpret_cast<char *>(&width), sizeof(width));
+        _input_file_stream.read(reinterpret_cast<char *>(&in_c), sizeof(in_c));
+        _input_file_stream.read(reinterpret_cast<char *>(&out_c), sizeof(out_c));
+        _input_file_stream.read(reinterpret_cast<char *>(&base_c), sizeof(base_c));
+        return std::make_unique<NN_UNet_Layer>(height, width, in_c, out_c, base_c, _execution_target);
     }
     default:
         Logger::logMessage("Training_Context::constructLayerFromConfig: Unsupported layer type",

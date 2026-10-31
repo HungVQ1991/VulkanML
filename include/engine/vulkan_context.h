@@ -48,9 +48,18 @@ private:
     bool is_cooperative_matrix_enabled = false;
     bool is_float16_supported = false;
     bool is_float16_enabled = false;
+    bool is_subgroup_size_control_supported = false;
+    bool is_subgroup_size_control_enabled = false;
+    bool is_push_descriptor_supported = false;
+    bool is_push_descriptor_enabled = false;
+    PFN_vkCmdPushDescriptorSetKHR vkCmdPushDescriptorSetKHR_ptr = nullptr;
     VkCooperativeMatrixPropertiesKHR cooperative_matrix_properties{};
 
     std::unique_ptr<Vulkan_Sub_Allocator> allocator;
+
+    mutable VkCommandBuffer transfer_command_buffer = VK_NULL_HANDLE;
+    mutable VkCommandBuffer immediate_copy_command_buffer = VK_NULL_HANDLE;
+    mutable VkFence immediate_copy_fence = VK_NULL_HANDLE;
 
     mutable VkBuffer staging_buffers[MAX_FRAMES_IN_FLIGHT]{VK_NULL_HANDLE, VK_NULL_HANDLE};
     mutable Memory_Allocation staging_allocations[MAX_FRAMES_IN_FLIGHT]{};
@@ -115,6 +124,9 @@ public:
     void cleanGarbage(uint32_t _frame_index) const;
     void prepareFrame(uint32_t _frame_index = UINT32_MAX);
     void advanceFrame() const;
+    void copyBufferImmediate(VkBuffer _source_buffer,
+                            VkBuffer _destination_buffer,
+                            VkDeviceSize _size) const;
     void copyBuffer(VkBuffer _source_buffer,
                     VkBuffer _destination_buffer,
                     VkDeviceSize _size,
@@ -148,12 +160,35 @@ public:
     bool isCooperativeMatrixSupported() const noexcept { return is_cooperative_matrix_supported; }
     bool isFloat16Enabled() const noexcept { return is_float16_supported && is_float16_enabled; }
     bool isFloat16Supported() const noexcept { return is_float16_supported; }
+    bool isSubgroupSizeControlSupported() const noexcept { return is_subgroup_size_control_supported; }
+    bool isSubgroupSizeControlEnabled() const noexcept { return is_subgroup_size_control_supported && is_subgroup_size_control_enabled; }
+    bool isPushDescriptorSupported() const noexcept { return is_push_descriptor_supported; }
+    bool isPushDescriptorEnabled() const noexcept { return is_push_descriptor_supported && is_push_descriptor_enabled; }
     bool isFrameReady(uint32_t _frame_index) const noexcept { return is_frame_ready[_frame_index]; }
 
     void setCooperativeMatrixProperties(const VkCooperativeMatrixPropertiesKHR &_properties) noexcept { cooperative_matrix_properties = _properties; }
     void registerFlushCallback(std::function<void(VkFence)> _callback) const { flush_callback = _callback; }
     void setComputeQueueFamilyIndex(uint32_t _index) noexcept { compute_queue_family_index = _index; }
     void setCurrentFrame(uint32_t _frame) const noexcept { current_frame = _frame; }
+    void setPushDescriptorEnabled(bool _enable) noexcept
+    {
+        if (is_push_descriptor_supported)
+        {
+            is_push_descriptor_enabled = _enable;
+        }
+    }
+    void cmdPushDescriptorSet(VkCommandBuffer _command_buffer,
+                              VkPipelineBindPoint _pipeline_bind_point,
+                              VkPipelineLayout _layout,
+                              uint32_t _set,
+                              uint32_t _descriptor_write_count,
+                              const VkWriteDescriptorSet *_descriptor_writes) const
+    {
+        if (vkCmdPushDescriptorSetKHR_ptr != nullptr)
+        {
+            vkCmdPushDescriptorSetKHR_ptr(_command_buffer, _pipeline_bind_point, _layout, _set, _descriptor_write_count, _descriptor_writes);
+        }
+    }
     void setCooperativeMatrixEnabled(bool _enable) noexcept
     {
         if (is_cooperative_matrix_supported)

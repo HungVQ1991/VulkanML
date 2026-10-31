@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <format>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -110,12 +111,16 @@ Tensor Neural_Network::forward(const Tensor &_input_tensor)
     for (const auto &layer : layers)
     {
         current_output = layer->forward(current_output);
+        if (layer->hasForwardHooks())
+        {
+            current_output = layer->applyForwardHooks(std::move(current_output));
+        }
     }
     last_prediction = current_output;
     return current_output;
 }
 
-Tensor Neural_Network::backward(const Tensor &_target_tensor)
+Tensor Neural_Network::backward(const Tensor &_target_tensor, bool _is_loss_gradient)
 {
     if (layers.empty())
     {
@@ -127,7 +132,7 @@ Tensor Neural_Network::backward(const Tensor &_target_tensor)
         throw std::runtime_error("Network has no layers");
     }
     Tensor gradient_tensor;
-    if (training_context.hasCostFunction())
+    if (!_is_loss_gradient && training_context.hasCostFunction())
     {
         const ICost_Function &cost_function = training_context.getCostFunction();
         Tensor last_prediction_output = layers.back()->getOutput();
@@ -145,7 +150,16 @@ Tensor Neural_Network::backward(const Tensor &_target_tensor)
 
     for (size_t i = layers.size(); i > 0; --i)
     {
-        gradient_tensor = layers[i - 1]->backward(gradient_tensor);
+        ILayer *layer = layers[i - 1].get();
+        if (layer->hasPreBackwardHooks())
+        {
+            gradient_tensor = layer->applyPreBackwardHooks(std::move(gradient_tensor));
+        }
+        gradient_tensor = layer->backward(gradient_tensor);
+        if (layer->hasPostBackwardHooks())
+        {
+            gradient_tensor = layer->applyPostBackwardHooks(std::move(gradient_tensor));
+        }
     }
 
     return gradient_tensor;
@@ -168,6 +182,102 @@ std::vector<std::pair<Tensor *, Tensor *>> Neural_Network::getParametersAndGradi
 std::vector<std::pair<Tensor *, Tensor *>> Neural_Network::getParamsAndGrads()
 {
     return getParametersAndGradients();
+}
+
+std::vector<const Tensor *> Neural_Network::getNoDecayParameters() const
+{
+    std::vector<const Tensor *> no_decay_parameters;
+    for (const auto &layer : layers)
+    {
+        if (layer && layer->hasParameters())
+        {
+            auto nd = layer->getNoDecayParameters();
+            no_decay_parameters.insert(no_decay_parameters.end(), nd.begin(), nd.end());
+        }
+    }
+    return no_decay_parameters;
+}
+
+float Neural_Network::clipGradients(float max_norm)
+{
+    if (max_norm <= 0.0f)
+    {
+        return 0.0f;
+    }
+
+    auto pairs = getParametersAndGradients();
+    if (pairs.empty())
+    {
+        return 0.0f;
+    }
+
+    if (execution_target == Execution_Target::VULKAN_GPU)
+    {
+        Execution_Engine::getInstance().executeGraph();
+    }
+
+    double sum_squares = 0.0;
+    bool has_nan_inf = false;
+    size_t param_idx = 0;
+
+    for (const auto &[param, grad] : pairs)
+    {
+        if (grad && !grad->isEmpty() && grad->getTotalElements() > 0)
+        {
+            const auto &data = grad->getData();
+            size_t nan_count = 0;
+            double p_sum_sq = 0.0;
+            for (float val : data)
+            {
+                if (std::isnan(val) || std::isinf(val))
+                {
+                    has_nan_inf = true;
+                    nan_count++;
+                }
+                else
+                {
+                    p_sum_sq += static_cast<double>(val) * static_cast<double>(val);
+                }
+            }
+            if (nan_count > 0)
+            {
+                Logger::logMessage(std::format("Neural_Network::clipGradients: Param #{} (shape={}) has {} NaN/Inf values! First={:.6e}",
+                                               param_idx, grad->getShape().toString(), nan_count, data.empty() ? 0.0f : data[0]),
+                                   Log_Level::LOG_WARNING,
+                                   true,
+                                   0,
+                                   Log_Feature::TRAINING);
+            }
+            sum_squares += p_sum_sq;
+        }
+        param_idx++;
+    }
+
+    if (has_nan_inf)
+    {
+        return std::numeric_limits<float>::quiet_NaN();
+    }
+
+    float total_norm = static_cast<float>(std::sqrt(sum_squares));
+
+    if (total_norm > max_norm && total_norm > 1e-6f)
+    {
+        float scale = max_norm / (total_norm + 1e-6f);
+        for (auto &[param, grad] : pairs)
+        {
+            if (grad && !grad->isEmpty() && grad->getTotalElements() > 0)
+            {
+                grad->mulScalar(scale, *grad);
+            }
+        }
+
+        if (execution_target == Execution_Target::VULKAN_GPU)
+        {
+            Execution_Engine::getInstance().executeGraph();
+        }
+    }
+
+    return total_norm;
 }
 
 void Neural_Network::reset()
@@ -230,7 +340,7 @@ void Neural_Network::compileAndWarmup(size_t _batch_size, size_t _input_dimensio
     }
 
     forward(dummy_input);
-    backward(dummy_target);
+    backward(dummy_target, false);
 
     optimizer.step(getParametersAndGradients());
 
@@ -330,7 +440,8 @@ void Neural_Network::trainStep(Tensor &_input_tensor, Tensor &_target_tensor, Vk
     VkBuffer current_in_buf = (execution_target == Execution_Target::VULKAN_GPU) ? extractBufferHandle(_input_tensor) : VK_NULL_HANDLE;
     VkBuffer current_tgt_buf = (execution_target == Execution_Target::VULKAN_GPU) ? extractBufferHandle(_target_tensor) : VK_NULL_HANDLE;
 
-    bool can_fast_replay = is_training_mode &&
+    bool can_fast_replay = !hasHooks() &&
+                           is_training_mode &&
                            engine.isStaticGraphEnabled() &&
                            execution_target == Execution_Target::VULKAN_GPU &&
                            engine.getGraphExecutor().isStaticBaked(current_frame) &&
@@ -359,7 +470,7 @@ void Neural_Network::trainStep(Tensor &_input_tensor, Tensor &_target_tensor, Vk
     }
 
     forward(_input_tensor);
-    backward(_target_tensor);
+    backward(_target_tensor, false);
 
     // printL2Norms();
 

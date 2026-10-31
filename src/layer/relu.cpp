@@ -17,6 +17,7 @@
 #include "helper/logger.h"
 #include "helper/magic_enum.hpp"
 #include "math/tensor.h"
+#include "ops/activation/activation.h"
 
 
 Relu_Layer::Relu_Layer(Execution_Target _execution_target)
@@ -39,7 +40,7 @@ Tensor Relu_Layer::forward(const Tensor &_input_tensor)
                            Log_Feature::ACTIVATION_COMPUTE | Log_Feature::FORWARD_EVALUATION);
 
         input_tensor = _input_tensor;
-        input_tensor.relu(output_tensor);
+        ops::activation::relu(input_tensor, output_tensor);
         is_forward_completed = true;
         return output_tensor;
     }
@@ -58,7 +59,7 @@ Tensor Relu_Layer::forward(const Tensor& _batched_input, const std::vector<Tenso
         }
 
         Tensor output_tensor_result(_batched_input.getExecutionTarget());
-        _batched_input.relu(output_tensor_result);
+        ops::activation::relu(_batched_input, output_tensor_result);
         return output_tensor_result;
     }
 
@@ -92,7 +93,7 @@ Tensor Relu_Layer::backward(const Tensor &_output_gradient)
                            1,
                            Log_Feature::ACTIVATION_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
 
-        output_tensor.reluBackward(_output_gradient, input_gradient_tensor);
+        ops::activation::reluBackward(output_tensor, _output_gradient, input_gradient_tensor);
         return input_gradient_tensor;
     }
 

@@ -16,8 +16,8 @@
 
 Execution_Engine& Execution_Engine::getInstance()
 {
-    static Execution_Engine instance;
-    return instance;
+    static Execution_Engine* instance = new Execution_Engine();
+    return *instance;
 }
 
 void Execution_Engine::processPendingLossReadback(uint32_t frame_index)
@@ -309,6 +309,20 @@ void Execution_Engine::executeGraph(VkFence _external_fence, Execution_Stage _st
 
             last_executed_node_count = cached_graph.getNodes().size();
             graph_executor->executeStaticGraph(cached_graph, context->getTransferTasks(), current_frame_index, _external_fence);
+
+            for (auto& node : cached_graph.getNodes())
+            {
+                for (auto& buf : node.buffers)
+                {
+                    if (buf)
+                    {
+                        Data_Type dt = buf->getDataType();
+                        auto dummy = std::make_shared<gpu::vector>(buf->getContext());
+                        dummy->setDataType(dt);
+                        buf = dummy;
+                    }
+                }
+            }
         }
         else if (!current_graph.getNodes().empty())
         {
@@ -344,6 +358,20 @@ void Execution_Engine::executeGraph(VkFence _external_fence, Execution_Stage _st
         Graph_Optimizer::applyCachedTemplateInPlace(current_graph, template_iterator->second, cached_graph);
         last_executed_node_count = cached_graph.getNodes().size();
         graph_executor->compileAndExecute(cached_graph, context->getTransferTasks(), current_frame_index, _external_fence);
+
+        for (auto& node : cached_graph.getNodes())
+        {
+            for (auto& buf : node.buffers)
+            {
+                if (buf)
+                {
+                    Data_Type dt = buf->getDataType();
+                    auto dummy = std::make_shared<gpu::vector>(buf->getContext());
+                    dummy->setDataType(dt);
+                    buf = dummy;
+                }
+            }
+        }
     }
     else
     {

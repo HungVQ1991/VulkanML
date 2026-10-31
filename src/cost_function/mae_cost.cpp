@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "helper/logger.h"
+#include "ops/loss/loss_ops.h"
 
 
 Mae_Cost::Mae_Cost(Execution_Target _execution_target)
@@ -64,7 +65,7 @@ float Mae_Cost::computeLoss(const Tensor &_prediction_matrix, const Tensor &_tar
         }
 
         size_t total_elements = _prediction_matrix.getRows() * _prediction_matrix.getColumns();
-        _prediction_matrix.maeLoss(_target_matrix, loss_matrix);
+        ops::loss::mae(_prediction_matrix, _target_matrix, loss_matrix);
         return loss_matrix.getScalar() / static_cast<float>(total_elements);
     }
 

@@ -50,13 +50,22 @@ void main() {
 
         #pragma unroll
         for (uint k = 0; k < TILE_SIZE; ++k) {
-            sum += float(tile_a[local_row][k]) * float(tile_b[k][local_col]);
+            float a = float(tile_a[local_row][k]);
+            float b = float(tile_b[k][local_col]);
+            if (!isnan(a) && !isinf(a) && !isnan(b) && !isinf(b)) {
+                sum += a * b;
+            }
         }
 
         barrier();
     }
 
     if (row < dims.rows_a && col < dims.cols_b) {
+        if (isnan(sum) || isinf(sum)) {
+            sum = 0.0f;
+        } else {
+            sum = clamp(sum, -10000.0f, 10000.0f);
+        }
         data_c[row * dims.cols_b + col] = sum;
     }
 }

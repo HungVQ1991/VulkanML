@@ -17,6 +17,7 @@
 #include "helper/logger.h"
 #include "helper/magic_enum.hpp"
 #include "math/tensor.h"
+#include "ops/normalization/rmsnorm.h"
 
 
 void RMSNorm_Layer::initializeParameters()
@@ -68,7 +69,7 @@ Tensor RMSNorm_Layer::forward(const Tensor &_input_tensor)
         }
 
         input_tensor = eff_input;
-        input_tensor.rmsNormForward(gamma, inv_rms, output_tensor, epsilon);
+        ops::normalization::rmsNormForward(input_tensor, gamma, inv_rms, output_tensor, epsilon);
 
         if (cache_is_3d)
         {
@@ -92,8 +93,8 @@ Tensor RMSNorm_Layer::backward(const Tensor &_output_gradient)
             eff_grad.reshape(Shape{ cache_orig_shape[0] * cache_orig_shape[1], dimension });
         }
 
-        input_tensor.rmsNormBackward(eff_grad, gamma, inv_rms,
-                                     gamma_gradient_tensor, input_gradient_tensor, is_accumulated);
+        ops::normalization::rmsNormBackward(input_tensor, eff_grad, gamma, inv_rms,
+                                   gamma_gradient_tensor, input_gradient_tensor, is_accumulated);
 
         if (cache_is_3d)
         {

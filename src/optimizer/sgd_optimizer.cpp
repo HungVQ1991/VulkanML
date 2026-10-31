@@ -11,6 +11,7 @@
 
 #include "engine/execution_engine.h"
 #include "helper/logger.h"
+#include "ops/optimizer/sgd_step.h"
 
 
 Sgd_Optimizer::Sgd_Optimizer(float _learning_rate, float _max_gradient)
@@ -78,7 +79,7 @@ void Sgd_Optimizer::step(const std::vector<std::pair<Tensor *, Tensor *>> &_para
         {
             if (parameter && gradient)
             {
-                parameter->sgdUpdate(*gradient, learning_rate, max_gradient, inv_scale);
+                ops::optimizer::sgdStep(*parameter, *gradient, learning_rate, max_gradient, inv_scale);
             }
             else
             {

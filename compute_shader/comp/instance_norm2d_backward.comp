@@ -1,0 +1,125 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer GradOutput { float dY[]; };
+layout(std430, binding = 1) readonly buffer NormX { float normalized_input[]; };
+layout(std430, binding = 2) readonly buffer Gamma { float gamma[]; };
+layout(std430, binding = 3) readonly buffer SavedInvStd { float saved_inv_std[]; };
+layout(std430, binding = 4) writeonly buffer GradInput { float dX[]; };
+layout(std430, binding = 5) buffer GradGamma { uint dgamma_raw[]; };
+layout(std430, binding = 6) buffer GradBeta { uint dbeta_raw[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint batch_size;
+    uint spatial_count;
+    uint channels;
+    float epsilon;
+} pc;
+
+shared float s_data1[256];
+shared float s_data2[256];
+shared float s_s1;
+shared float s_s2;
+shared float s_gamma;
+shared float s_inv_std;
+
+void atomicAddGamma(uint offset, float val) {
+    if (isnan(val) || isinf(val)) return;
+    val = clamp(val, -10000.0, 10000.0);
+    uint old_val = dgamma_raw[offset];
+    while (true) {
+        float old_float = uintBitsToFloat(old_val);
+        if (isnan(old_float) || isinf(old_float)) {
+            old_float = 0.0;
+        }
+        float new_float = old_float + val;
+        uint new_val = floatBitsToUint(new_float);
+        uint prev_val = atomicCompSwap(dgamma_raw[offset], old_val, new_val);
+        if (prev_val == old_val) break;
+        old_val = prev_val;
+    }
+}
+
+void atomicAddBeta(uint offset, float val) {
+    if (isnan(val) || isinf(val)) return;
+    val = clamp(val, -10000.0, 10000.0);
+    uint old_val = dbeta_raw[offset];
+    while (true) {
+        float old_float = uintBitsToFloat(old_val);
+        if (isnan(old_float) || isinf(old_float)) {
+            old_float = 0.0;
+        }
+        float new_float = old_float + val;
+        uint new_val = floatBitsToUint(new_float);
+        uint prev_val = atomicCompSwap(dbeta_raw[offset], old_val, new_val);
+        if (prev_val == old_val) break;
+        old_val = prev_val;
+    }
+}
+
+void main() {
+    uint c = gl_WorkGroupID.x;
+    uint b = gl_WorkGroupID.y;
+    if (c >= pc.channels || b >= pc.batch_size) return;
+
+    uint tid = gl_LocalInvocationID.x;
+    uint M = pc.spatial_count;
+    uint C = pc.channels;
+    uint batch_offset = b * (M * C);
+
+    float loc_s1 = 0.0;
+    float loc_s2 = 0.0;
+    for (uint m = tid; m < M; m += 256) {
+        uint idx = batch_offset + m * C + c;
+        float dy = dY[idx];
+        if (isnan(dy) || isinf(dy)) dy = 0.0;
+        float x_hat = normalized_input[idx];
+        if (isnan(x_hat) || isinf(x_hat)) x_hat = 0.0;
+        float prod = dy * x_hat;
+        if (isnan(prod) || isinf(prod)) prod = 0.0;
+        loc_s1 += dy;
+        loc_s2 += prod;
+    }
+    s_data1[tid] = loc_s1;
+    s_data2[tid] = loc_s2;
+    barrier();
+
+    for (uint stride = 128; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            s_data1[tid] += s_data1[tid + stride];
+            s_data2[tid] += s_data2[tid + stride];
+        }
+        barrier();
+    }
+
+    if (tid == 0) {
+        float s1 = s_data1[0];
+        float s2 = s_data2[0];
+        if (isnan(s1) || isinf(s1)) s1 = 0.0;
+        if (isnan(s2) || isinf(s2)) s2 = 0.0;
+        s_s1 = s1;
+        s_s2 = s2;
+        s_gamma = gamma[c];
+        s_inv_std = min(saved_inv_std[b * C + c], 100.0);
+        atomicAddGamma(c, s2);
+        atomicAddBeta(c, s1);
+    }
+    barrier();
+
+    float inv_M = 1.0 / float(M);
+    float s1_over_m = s_s1 * inv_M;
+    float s2_over_m = s_s2 * inv_M;
+    float g_inv_std = clamp(s_gamma * s_inv_std, -100.0, 100.0);
+
+    for (uint m = tid; m < M; m += 256) {
+        uint idx = batch_offset + m * C + c;
+        float dy = dY[idx];
+        if (isnan(dy) || isinf(dy)) dy = 0.0;
+        float x_hat = normalized_input[idx];
+        if (isnan(x_hat) || isinf(x_hat)) x_hat = 0.0;
+        float dx = g_inv_std * (dy - s1_over_m - x_hat * s2_over_m);
+        if (isnan(dx) || isinf(dx)) dx = 0.0;
+        dX[idx] = dx;
+    }
+}

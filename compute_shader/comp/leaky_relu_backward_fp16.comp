@@ -1,0 +1,32 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly restrict buffer InputBuffer {
+    float16_t X[];
+};
+
+layout(std430, set = 0, binding = 1) readonly restrict buffer GradOutputBuffer {
+    float16_t dY[];
+};
+
+layout(std430, set = 0, binding = 2) writeonly restrict buffer GradInputBuffer {
+    float16_t dX[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint total_elements;
+    float negative_slope;
+} pc;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.total_elements) return;
+
+    float16_t slope = float16_t(pc.negative_slope);
+    float16_t dy = dY[idx];
+    if (isnan(float(dy)) || isinf(float(dy))) dy = float16_t(0.0);
+    dX[idx] = (X[idx] >= float16_t(0.0)) ? dy : float16_t(dy * slope);
+}

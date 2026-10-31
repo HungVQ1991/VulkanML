@@ -24,6 +24,7 @@ struct Memory_Preferences
 {
     uint32_t staging_pool_initial_size_mb = 64;
     bool enable_timeline_semaphore = true;
+    bool enable_push_descriptor = true;
 };
 
 struct Logging_Preferences
@@ -67,6 +68,7 @@ public:
 
     uint32_t getStagingPoolSizeMb() const noexcept { return memory_prefs.staging_pool_initial_size_mb; }
     bool isTimelineSemaphoreEnabled() const noexcept { return memory_prefs.enable_timeline_semaphore; }
+    bool isPushDescriptorEnabled() const noexcept { return memory_prefs.enable_push_descriptor; }
     bool isShaderFusionEnabled() const noexcept { return execution_prefs.enable_shader_fusion; }
     bool isCooperativeMatrixEnabled() const noexcept { return execution_prefs.enable_cooperative_matrix; }
 };

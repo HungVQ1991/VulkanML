@@ -21,13 +21,25 @@ void main() {
     if (idx >= pc.total_elements) return;
 
     uint c = idx % pc.channels;
-
     float m = mean[c];
     float v = variance[c];
     float g = gamma[c];
     float b = beta[c];
 
-    float norm = (X[idx] - m) / sqrt(v + pc.epsilon);
+    if (isnan(m) || isinf(m)) m = 0.0;
+    if (isnan(v) || isinf(v) || v <= 0.0) v = 1.0;
+    if (isnan(g) || isinf(g)) g = 1.0;
+    if (isnan(b) || isinf(b)) b = 0.0;
+
+    float x_val = X[idx];
+    if (isnan(x_val) || isinf(x_val)) x_val = m;
+
+    float norm = (x_val - m) / sqrt(v + pc.epsilon);
+    if (isnan(norm) || isinf(norm)) norm = 0.0;
+    norm = clamp(norm, -100.0, 100.0);
     x_hat[idx] = norm;
-    Y[idx] = g * norm + b;
+
+    float y_val = g * norm + b;
+    if (isnan(y_val) || isinf(y_val)) y_val = b;
+    Y[idx] = y_val;
 }

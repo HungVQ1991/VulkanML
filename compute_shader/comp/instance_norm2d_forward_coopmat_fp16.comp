@@ -1,0 +1,175 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_KHR_cooperative_matrix : require
+
+#define TILE_M 16
+#define TILE_N 16
+#define TILE_K 16
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer InputX { float16_t X[]; };
+layout(std430, binding = 1) readonly buffer Gamma { float gamma[]; };
+layout(std430, binding = 2) readonly buffer Beta { float beta[]; };
+layout(std430, binding = 3) writeonly buffer SavedMean { float saved_mean[]; };
+layout(std430, binding = 4) writeonly buffer SavedInvStd { float saved_inv_std[]; };
+layout(std430, binding = 5) writeonly buffer OutputY { float16_t Y[]; };
+layout(std430, binding = 6) writeonly buffer NormX { float normalized_input[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint batch_size;
+    uint spatial_count;
+    uint channels;
+    float epsilon;
+} pc;
+
+shared float16_t smem_eye[TILE_M * TILE_K];
+shared float16_t smem_in[TILE_M * TILE_N];
+shared float smem_acc[TILE_M * TILE_N];
+shared float smem_mean[TILE_N];
+shared float smem_inv_std[TILE_N];
+shared float smem_gamma[TILE_N];
+shared float smem_beta[TILE_N];
+
+void main() {
+    uint tile_c = gl_WorkGroupID.x * TILE_N;
+    uint b = gl_WorkGroupID.y;
+    if (tile_c >= pc.channels || b >= pc.batch_size) return;
+
+    uint lane_id = gl_LocalInvocationID.x;
+    uint batch_offset = b * (pc.spatial_count * pc.channels);
+    uint M = pc.spatial_count;
+    uint C = pc.channels;
+
+    for (uint i = 0; i < 8; ++i) {
+        uint idx = lane_id * 8 + i;
+        uint r = idx / TILE_K;
+        smem_eye[idx] = (r == 0) ? float16_t(1.0) : float16_t(0.0);
+    }
+    barrier();
+
+    coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> matA;
+    coopMatLoad(matA, smem_eye, 0, TILE_K, gl_CooperativeMatrixLayoutRowMajor);
+
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc_sum;
+    acc_sum = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+
+    for (uint m = 0; m < M; m += TILE_M) {
+        if ((m + TILE_M <= M) && (tile_c + TILE_N <= C)) {
+            coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> matB;
+            coopMatLoad(matB, X, batch_offset + m * C + tile_c, C, gl_CooperativeMatrixLayoutRowMajor);
+            acc_sum = coopMatMulAdd(matA, matB, acc_sum);
+        } else {
+            for (uint i = 0; i < 8; ++i) {
+                uint idx = lane_id * 8 + i;
+                uint r = idx / TILE_N;
+                uint c_local = idx % TILE_N;
+                uint gm = m + r;
+                uint gc = tile_c + c_local;
+                smem_in[idx] = (gm < M && gc < C) ? X[batch_offset + gm * C + gc] : float16_t(0.0);
+            }
+            barrier();
+            coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> matB;
+            coopMatLoad(matB, smem_in, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+            acc_sum = coopMatMulAdd(matA, matB, acc_sum);
+            barrier();
+        }
+    }
+
+    coopMatStore(acc_sum, smem_acc, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+    barrier();
+
+    if (lane_id < 16) {
+        uint gc = tile_c + lane_id;
+        float sum_val = smem_acc[lane_id];
+        float mean_val = sum_val / float(M);
+        if (isnan(mean_val) || isinf(mean_val)) mean_val = 0.0;
+        smem_mean[lane_id] = mean_val;
+        if (gc < C) {
+            saved_mean[b * C + gc] = mean_val;
+            smem_gamma[lane_id] = gamma[gc];
+            smem_beta[lane_id] = beta[gc];
+        }
+    }
+    barrier();
+
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc_sq;
+    acc_sq = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+
+    for (uint m = 0; m < M; m += TILE_M) {
+        for (uint i = 0; i < 8; ++i) {
+            uint idx = lane_id * 8 + i;
+            uint r = idx / TILE_N;
+            uint c_local = idx % TILE_N;
+            uint gm = m + r;
+            uint gc = tile_c + c_local;
+            float diff = (gm < M && gc < C) ? (float(X[batch_offset + gm * C + gc]) - smem_mean[c_local]) : 0.0;
+            smem_in[idx] = float16_t(diff * diff);
+        }
+        barrier();
+        coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> matB_sq;
+        coopMatLoad(matB_sq, smem_in, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+        acc_sq = coopMatMulAdd(matA, matB_sq, acc_sq);
+        barrier();
+    }
+
+    coopMatStore(acc_sq, smem_acc, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+    barrier();
+
+    if (lane_id < 16) {
+        uint gc = tile_c + lane_id;
+        float sq_val = smem_acc[lane_id];
+        float var_val = sq_val / float(M);
+        if (isnan(var_val) || isinf(var_val) || var_val < 0.0) var_val = 0.0;
+        float inv_std = 1.0 / sqrt(var_val + pc.epsilon);
+        if (isnan(inv_std) || isinf(inv_std)) inv_std = 0.0;
+        inv_std = min(inv_std, 100.0);
+        smem_inv_std[lane_id] = inv_std;
+        if (gc < C) {
+            saved_inv_std[b * C + gc] = inv_std;
+        }
+    }
+    barrier();
+
+    for (uint m = 0; m < M; m += TILE_M) {
+        for (uint i = 0; i < 8; ++i) {
+            uint idx = lane_id * 8 + i;
+            uint r = idx / TILE_N;
+            uint c_local = idx % TILE_N;
+            uint gm = m + r;
+            uint gc = tile_c + c_local;
+            if (gm < M && gc < C) {
+                uint global_idx = batch_offset + gm * C + gc;
+                float x_val = float(X[global_idx]);
+                float norm = (x_val - smem_mean[c_local]) * smem_inv_std[c_local];
+                normalized_input[global_idx] = norm;
+                float y = smem_gamma[c_local] * norm + smem_beta[c_local];
+                y = clamp(y, -65504.0, 65504.0);
+                smem_in[idx] = float16_t(y);
+            } else {
+                smem_in[idx] = float16_t(0.0);
+            }
+        }
+        barrier();
+
+        if ((m + TILE_M <= M) && (tile_c + TILE_N <= C)) {
+            coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> res;
+            coopMatLoad(res, smem_in, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+            coopMatStore(res, Y, batch_offset + m * C + tile_c, C, gl_CooperativeMatrixLayoutRowMajor);
+        } else {
+            for (uint i = 0; i < 8; ++i) {
+                uint idx = lane_id * 8 + i;
+                uint r = idx / TILE_N;
+                uint c_local = idx % TILE_N;
+                uint gm = m + r;
+                uint gc = tile_c + c_local;
+                if (gm < M && gc < C) {
+                    Y[batch_offset + gm * C + gc] = smem_in[idx];
+                }
+            }
+        }
+        barrier();
+    }
+}

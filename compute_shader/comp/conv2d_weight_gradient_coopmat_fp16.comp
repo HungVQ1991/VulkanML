@@ -80,20 +80,22 @@ void main() {
         acc = coopMatMulAdd(matA, matB, acc);
     }
 
-    if (is_m_aligned && is_n_aligned) {
-        coopMatStore(acc, data_c, tile_row * dims.cols_b + tile_col, dims.cols_b, gl_CooperativeMatrixLayoutRowMajor);
-    } else {
-        coopMatStore(acc, smem_c, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
-        barrier();
-        for (uint i = 0; i < 8; ++i) {
-            uint idx = lane_id * 8 + i;
-            uint lr = idx / TILE_N;
-            uint lc = idx % TILE_N;
-            uint gr = tile_row + lr;
-            uint gc = tile_col + lc;
-            if (gr < dims.rows_a && gc < dims.cols_b) {
-                data_c[gr * dims.cols_b + gc] = smem_c[idx];
+    coopMatStore(acc, smem_c, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+    barrier();
+    for (uint i = 0; i < 8; ++i) {
+        uint idx = lane_id * 8 + i;
+        uint lr = idx / TILE_N;
+        uint lc = idx % TILE_N;
+        uint gr = tile_row + lr;
+        uint gc = tile_col + lc;
+        if (gr < dims.rows_a && gc < dims.cols_b) {
+            float val = smem_c[idx];
+            if (isnan(val) || isinf(val)) {
+                val = 0.0f;
+            } else {
+                val = clamp(val, -10000.0f, 10000.0f);
             }
+            data_c[gr * dims.cols_b + gc] = val;
         }
     }
 }

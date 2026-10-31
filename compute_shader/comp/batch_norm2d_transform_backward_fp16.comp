@@ -27,13 +27,34 @@ void main() {
 
     float g = gamma[c];
     float v = batch_var[c];
+    if (isnan(g) || isinf(g)) g = 1.0;
+    if (isnan(v) || isinf(v) || v <= 0.0) v = 1.0;
+
+    float inv_std = 1.0 / sqrt(v + pc.epsilon);
+    float dy = float(dY[idx]);
+    if (isnan(dy) || isinf(dy)) dy = 0.0;
+
+    // Evaluation mode (pc.spatial_count == 0): dy/dx = gamma / sqrt(running_var + eps)
+    if (pc.spatial_count == 0) {
+        float dx_val = g * inv_std * dy;
+        if (isnan(dx_val) || isinf(dx_val)) dx_val = 0.0;
+        dx_val = clamp(dx_val, -65504.0, 65504.0);
+        dX[idx] = float16_t(dx_val);
+        return;
+    }
+
     float dg = dgamma[c];
     float db = dbeta[c];
     float m = float(pc.spatial_count);
 
-    float inv_std = 1.0 / sqrt(v + pc.epsilon);
-    float dy = float(dY[idx]);
-    float xh = x_hat[idx];
+    if (isnan(dg) || isinf(dg)) dg = 0.0;
+    if (isnan(db) || isinf(db)) db = 0.0;
 
-    dX[idx] = float16_t((g * inv_std / m) * (m * dy - db - xh * dg));
+    float xh = x_hat[idx];
+    if (isnan(xh) || isinf(xh)) xh = 0.0;
+
+    float dx_val = (g * inv_std / m) * (m * dy - db - xh * dg);
+    if (isnan(dx_val) || isinf(dx_val)) dx_val = 0.0;
+    dx_val = clamp(dx_val, -65504.0, 65504.0);
+    dX[idx] = float16_t(dx_val);
 }

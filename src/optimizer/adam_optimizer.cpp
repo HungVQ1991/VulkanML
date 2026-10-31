@@ -11,6 +11,7 @@
 
 #include "engine/execution_engine.h"
 #include "helper/logger.h"
+#include "ops/optimizer/adam_step.h"
 
 
 Adam_Optimizer::Adam_Optimizer(float _learning_rate, float _beta1, float _beta2, float _epsilon, float _max_gradient, float _weight_decay)
@@ -148,17 +149,24 @@ void Adam_Optimizer::step(const std::vector<std::pair<Tensor *, Tensor *>> &_par
                 parameter_order.push_back(parameter);
             }
 
-            parameter->adamUpdate(*gradient,
-                                  iterator->second.first_moment_matrix,
-                                  iterator->second.second_moment_matrix,
-                                  learning_rate,
-                                  beta1,
-                                  beta2,
-                                  epsilon,
-                                  timestep,
-                                  max_gradient,
-                                  inv_scale,
-                                  weight_decay);
+            float eff_weight_decay = weight_decay;
+            if (!no_decay_parameters.empty() && no_decay_parameters.contains(parameter))
+            {
+                eff_weight_decay = 0.0f;
+            }
+
+            ops::optimizer::adamStep(*parameter,
+                                 *gradient,
+                                 iterator->second.first_moment_matrix,
+                                 iterator->second.second_moment_matrix,
+                                 learning_rate,
+                                 beta1,
+                                 beta2,
+                                 epsilon,
+                                 timestep,
+                                 max_gradient,
+                                 inv_scale,
+                                 eff_weight_decay);
         }
     }
 

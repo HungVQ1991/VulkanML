@@ -46,6 +46,7 @@ namespace gpu
         vector &operator=(vector &&other) noexcept;
 
         void allocateMemory(size_t _element_count, Data_Type _type = Data_Type::FLOAT32);
+        void allocateMemoryByBytes(size_t _byte_size, Data_Type _type = Data_Type::FLOAT32, size_t _logical_elements = 0);
         void freeMemory();
 
         void allocateHostVisible(size_t _byte_size);
@@ -58,14 +59,21 @@ namespace gpu
         void uploadRawData(const void *source_pointer, size_t size_in_bytes);
         void uploadData(const std::vector<float> &host_data);
         void uploadData(const std::vector<float16_t> &host_data);
+        void uploadData(const std::vector<uint32_t> &host_data);
 
         void downloadRawData(void *destination_pointer, size_t size_in_bytes) const;
         void downloadData(std::vector<float> &host_data) const;
         void downloadData(std::vector<float16_t> &host_data) const;
+        void downloadData(std::vector<uint32_t> &host_data) const;
 
         const Vulkan_Context &getContext() const noexcept { return context; }
         const Memory_Allocation &getAllocation() const noexcept { return allocation; }
-        size_t getElementCount() const noexcept { return element_count > 0 ? element_count : (buffer_size_in_bytes / getDataTypeSize(data_type)); }
+        size_t getElementCount() const noexcept
+        {
+            if (element_count > 0) return element_count;
+            if (data_type == Data_Type::TERNARY_INT2) return (buffer_size_in_bytes / sizeof(uint32_t)) * 16;
+            return buffer_size_in_bytes / getDataTypeSize(data_type);
+        }
         size_t getBufferSizeInBytes() const noexcept { return buffer_size_in_bytes; }
         size_t getSize() const noexcept { return getElementCount(); }
         size_t getSizeBytes() const noexcept { return buffer_size_in_bytes; }

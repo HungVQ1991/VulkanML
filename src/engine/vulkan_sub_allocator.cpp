@@ -1,4 +1,5 @@
 #include "engine/vulkan_sub_allocator.h"
+#include "engine/vulkan_context.h"
 
 #include <algorithm>
 #include <format>
@@ -147,33 +148,94 @@ uint32_t Vulkan_Sub_Allocator::findMemoryType(uint32_t _type_filter, VkMemoryPro
     throw std::runtime_error("Vulkan_Sub_Allocator::findMemoryType: Failed to find suitable memory type");
 }
 
-size_t Vulkan_Sub_Allocator::createChunk(const VkMemoryRequirements &_memory_requirements, VkMemoryPropertyFlags _memory_properties, bool _is_dedicated_arena)
+size_t Vulkan_Sub_Allocator::createChunk(const VkMemoryRequirements& _memory_requirements, VkMemoryPropertyFlags _memory_properties, bool _is_dedicated_arena)
 {
     uint32_t memory_type_index = findMemoryType(_memory_requirements.memoryTypeBits, _memory_properties);
     VkDeviceSize allocation_size = std::max(default_chunk_size, _memory_requirements.size);
 
-    Logger::logMessage(Input_Format{"Vulkan_Sub_Allocator::createChunk: Allocating new memory chunk of size {} bytes (memory_type_index={}, memory_properties={}, is_dedicated_arena={})",
-                                   allocation_size, memory_type_index, static_cast<uint32_t>(_memory_properties), _is_dedicated_arena},
-                       Log_Level::LOG_DEBUG,
-                       true,
-                       0,
-                       Log_Feature::MEMORY_ALLOCATION);
+
+    Logger::logMessage(Input_Format{ "Vulkan_Sub_Allocator::createChunk: Allocating new memory chunk of size {} bytes (memory_type_index={}, memory_properties={}, is_dedicated_arena={})",
+                                   allocation_size, memory_type_index, static_cast<uint32_t>(_memory_properties), _is_dedicated_arena },
+        Log_Level::LOG_DEBUG,
+        true,
+        0,
+        Log_Feature::MEMORY_ALLOCATION);
 
     VkMemoryAllocateInfo allocate_information{
         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
         .pNext = nullptr,
         .allocationSize = allocation_size,
-        .memoryTypeIndex = memory_type_index};
+        .memoryTypeIndex = memory_type_index };
 
     VkDeviceMemory device_memory = VK_NULL_HANDLE;
-    if (vkAllocateMemory(device, &allocate_information, nullptr, &device_memory) != VK_SUCCESS)
+    VkResult alloc_res = vkAllocateMemory(device, &allocate_information, nullptr, &device_memory);
+
+    if (alloc_res != VK_SUCCESS && allocation_size > _memory_requirements.size)
     {
-        Logger::logMessage("Vulkan_Sub_Allocator::createChunk: Failed to allocate device memory chunk",
-                           Log_Level::LOG_ERROR,
-                           true,
-                           0,
-                           Log_Feature::MEMORY_ALLOCATION);
+        VkDeviceSize candidate_sizes[] = {
+            std::max(allocation_size / 2, _memory_requirements.size),
+            std::max(allocation_size / 4, _memory_requirements.size),
+            std::max(allocation_size / 8, _memory_requirements.size),
+            _memory_requirements.size
+        };
+        for (VkDeviceSize candidate : candidate_sizes)
+        {
+            if (candidate >= allocation_size) continue;
+            allocate_information.allocationSize = candidate;
+            alloc_res = vkAllocateMemory(device, &allocate_information, nullptr, &device_memory);
+            if (alloc_res == VK_SUCCESS)
+            {
+                allocation_size = candidate;
+                break;
+            }
+        }
+    }
+
+    if (alloc_res != VK_SUCCESS)
+    {
+        for (uint32_t i = 0; i < physical_device_memory_properties.memoryTypeCount; ++i)
+        {
+            if (i == memory_type_index) continue;
+            if ((_memory_requirements.memoryTypeBits & (1u << i)) &&
+                (physical_device_memory_properties.memoryTypes[i].propertyFlags & _memory_properties) == _memory_properties)
+            {
+                allocate_information.memoryTypeIndex = i;
+                allocate_information.allocationSize = _memory_requirements.size;
+                alloc_res = vkAllocateMemory(device, &allocate_information, nullptr, &device_memory);
+                if (alloc_res == VK_SUCCESS)
+                {
+                    memory_type_index = i;
+                    allocation_size = _memory_requirements.size;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (alloc_res != VK_SUCCESS)
+    {
+        Logger::logMessage(Input_Format{ "Vulkan_Sub_Allocator::createChunk: Failed to allocate device memory chunk (requested size={}, error={})",
+                                       allocation_size, static_cast<int>(alloc_res) },
+            Log_Level::LOG_ERROR,
+            true,
+            0,
+            Log_Feature::MEMORY_ALLOCATION);
         throw std::runtime_error("Vulkan_Sub_Allocator::createChunk: Failed to allocate device memory chunk");
+    }
+
+    void* mapped_ptr = nullptr;
+    if ((_memory_properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0)
+    {
+        if (vkMapMemory(device, device_memory, 0, allocation_size, 0, &mapped_ptr) != VK_SUCCESS)
+        {
+            vkFreeMemory(device, device_memory, nullptr);
+            Logger::logMessage("Vulkan_Sub_Allocator::createChunk: Failed to map host visible memory chunk",
+                Log_Level::LOG_ERROR,
+                true,
+                0,
+                Log_Feature::MEMORY_ALLOCATION);
+            throw std::runtime_error("Vulkan_Sub_Allocator::createChunk: Failed to map host visible memory chunk");
+        }
     }
 
     Memory_Chunk new_chunk{
@@ -181,8 +243,9 @@ size_t Vulkan_Sub_Allocator::createChunk(const VkMemoryRequirements &_memory_req
         .chunk_size = allocation_size,
         .memory_type_index = memory_type_index,
         .memory_properties = _memory_properties,
-        .free_blocks = _is_dedicated_arena ? std::vector<Free_Block>{} : std::vector<Free_Block>{Free_Block{.offset = 0, .size = allocation_size}},
-        .is_dedicated_arena = _is_dedicated_arena};
+        .free_blocks = _is_dedicated_arena ? std::vector<Free_Block>{} : std::vector<Free_Block>{ Free_Block{ .offset = 0, .size = allocation_size } },
+        .is_dedicated_arena = _is_dedicated_arena,
+        .mapped_pointer = mapped_ptr };
 
     memory_chunks.push_back(std::move(new_chunk));
     return memory_chunks.size() - 1;
@@ -253,25 +316,30 @@ Vulkan_Sub_Allocator::Vulkan_Sub_Allocator(VkDevice _device, const Vulkan_Contex
 
 Vulkan_Sub_Allocator::~Vulkan_Sub_Allocator()
 {
-    Logger::logMessage(Input_Format{"Vulkan_Sub_Allocator::~Vulkan_Sub_Allocator: Freeing {} memory chunks", memory_chunks.size()},
-                       Log_Level::LOG_DEBUG,
-                       true,
-                       0,
-                       Log_Feature::MEMORY_ALLOCATION);
-    std::lock_guard<std::mutex> lock(allocator_mutex);
-    for (const auto &chunk : memory_chunks)
+    Logger::logMessage(Input_Format{ "Vulkan_Sub_Allocator::~Vulkan_Sub_Allocator: Freeing {} memory chunks", memory_chunks.size() },
+        Log_Level::LOG_DEBUG,
+        true,
+        0,
+        Log_Feature::MEMORY_ALLOCATION);
+    std::lock_guard<std::recursive_mutex> lock(allocator_mutex);
+    for (auto& chunk : memory_chunks)
     {
         if (chunk.device_memory != VK_NULL_HANDLE)
         {
+            if (chunk.mapped_pointer != nullptr)
+            {
+                vkUnmapMemory(device, chunk.device_memory);
+                chunk.mapped_pointer = nullptr;
+            }
             vkFreeMemory(device, chunk.device_memory, nullptr);
         }
         else
         {
             Logger::logMessage("Vulkan_Sub_Allocator::~Vulkan_Sub_Allocator: Null device_memory handle encountered in chunk",
-                               Log_Level::LOG_WARNING,
-                               false,
-                               0,
-                               Log_Feature::MEMORY_ALLOCATION);
+                Log_Level::LOG_WARNING,
+                false,
+                0,
+                Log_Feature::MEMORY_ALLOCATION);
         }
     }
 }
@@ -283,7 +351,7 @@ void Vulkan_Sub_Allocator::free(const Memory_Allocation &_allocation)
         return;
     }
 
-    std::lock_guard<std::mutex> lock(allocator_mutex);
+    std::lock_guard<std::recursive_mutex> lock(allocator_mutex);
     if (_allocation.chunk_index < memory_chunks.size())
     {
         if (memory_chunks[_allocation.chunk_index].is_dedicated_arena)
@@ -312,7 +380,7 @@ void Vulkan_Sub_Allocator::free(const Memory_Allocation &_allocation)
 
 Memory_Allocation Vulkan_Sub_Allocator::allocate(const VkMemoryRequirements &_memory_requirements, VkMemoryPropertyFlags _memory_properties, VkPhysicalDevice _target_physical_device)
 {
-    std::lock_guard<std::mutex> lock(allocator_mutex);
+    std::lock_guard<std::recursive_mutex> lock(allocator_mutex);
 
     Logger::logMessage(Input_Format{"Vulkan_Sub_Allocator::allocate: Requesting size {} bytes, alignment {} bytes, memory_properties {}",
                                    _memory_requirements.size, _memory_requirements.alignment, static_cast<uint32_t>(_memory_properties)},
@@ -415,10 +483,13 @@ Memory_Allocation Vulkan_Sub_Allocator::allocate(const VkMemoryRequirements &_me
                            Log_Feature::MEMORY_ALLOCATION);
 
         return Memory_Allocation{
-            .memory = chunk.device_memory,
-            .offset = allocated_offset,
-            .size = allocation_size,
-            .chunk_index = best_chunk_index};
+                    .memory = chunk.device_memory,
+                    .offset = allocated_offset,
+                    .size = allocation_size,
+                    .chunk_index = best_chunk_index,
+                    .mapped_pointer = (chunk.mapped_pointer != nullptr)
+                                          ? static_cast<void*>(static_cast<uint8_t*>(chunk.mapped_pointer) + allocated_offset)
+                                          : nullptr };
     }
 
     size_t new_chunk_index = createChunk(_memory_requirements, _memory_properties, false);
@@ -462,8 +533,11 @@ Memory_Allocation Vulkan_Sub_Allocator::allocate(const VkMemoryRequirements &_me
                        Log_Feature::MEMORY_ALLOCATION);
 
     return Memory_Allocation{
-        .memory = new_chunk.device_memory,
-        .offset = allocated_offset,
-        .size = allocation_size,
-        .chunk_index = new_chunk_index};
+            .memory = new_chunk.device_memory,
+            .offset = allocated_offset,
+            .size = allocation_size,
+            .chunk_index = new_chunk_index,
+            .mapped_pointer = (new_chunk.mapped_pointer != nullptr)
+                                  ? static_cast<void*>(static_cast<uint8_t*>(new_chunk.mapped_pointer) + allocated_offset)
+                                  : nullptr };
 }

@@ -14,6 +14,9 @@ enum class Cost_Type : uint32_t
     CCE,
     HUBER,
     FUSED_CCE,
+    ASL,
+    DICE,
+    DICE_BCE,
     COST_TYPE_END
 };
 

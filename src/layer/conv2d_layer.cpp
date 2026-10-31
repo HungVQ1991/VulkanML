@@ -17,6 +17,7 @@
 #include "helper/logger.h"
 #include "helper/magic_enum.hpp"
 #include "math/tensor.h"
+#include "ops/vision/conv2d.h"
 
 
 void Conv2d_Layer::initializeWeights()
@@ -101,13 +102,13 @@ Tensor Conv2d_Layer::forward(const Tensor &_input_tensor)
                 is_weights_fp16_dirty = false;
             }
 
-            input_tensor_fp16.conv2d(weights_fp16, biases_fp16, output_tensor_fp16, input_height, input_width, input_channels, output_channels, kernel_size, stride, padding, &im2col_scratch_fp16);
+            ops::vision::conv2d(input_tensor_fp16, weights_fp16, biases_fp16, output_tensor_fp16, input_height, input_width, input_channels, output_channels, kernel_size, stride, padding, &im2col_scratch_fp16);
 
             output_tensor = output_tensor_fp16;
         }
         else
         {
-            input_tensor.conv2d(weights, biases, output_tensor, input_height, input_width, input_channels, output_channels, kernel_size, stride, padding);
+            ops::vision::conv2d(input_tensor, weights, biases, output_tensor, input_height, input_width, input_channels, output_channels, kernel_size, stride, padding);
         }
         is_forward_completed = true;
         return output_tensor;
@@ -127,7 +128,8 @@ Tensor Conv2d_Layer::forward(const Tensor& _batched_input, const std::vector<Ten
         }
 
         Tensor output(_batched_input.getExecutionTarget());
-        _batched_input.conv2d(_batched_params[0],
+        ops::vision::conv2d(_batched_input,
+            _batched_params[0],
             _batched_params[1],
             output,
             input_height,
@@ -173,18 +175,18 @@ Tensor Conv2d_Layer::backward(const Tensor &_output_gradient)
 
             if (!is_accumulated)
             {
-                input_tensor_fp16.conv2dBackwardWeight(output_gradient_tensor_fp16, weights_gradient_tensor, biases_gradient_tensor, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding, &im2col_scratch_fp16);
+                ops::vision::conv2dBackwardWeight(input_tensor_fp16, output_gradient_tensor_fp16, weights_gradient_tensor, biases_gradient_tensor, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding, &im2col_scratch_fp16);
             }
             else
             {
                 Tensor step_weights_grad(weights_gradient_tensor.getShape(), execution_target);
                 Tensor step_biases_grad(biases_gradient_tensor.getShape(), execution_target);
-                input_tensor_fp16.conv2dBackwardWeight(output_gradient_tensor_fp16, step_weights_grad, step_biases_grad, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding, &im2col_scratch_fp16);
+                ops::vision::conv2dBackwardWeight(input_tensor_fp16, output_gradient_tensor_fp16, step_weights_grad, step_biases_grad, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding, &im2col_scratch_fp16);
                 weights_gradient_tensor = weights_gradient_tensor + step_weights_grad;
                 biases_gradient_tensor = biases_gradient_tensor + step_biases_grad;
             }
             logBufferAddress(&input_tensor_fp16, "input_tensor_fp16 (Backward)");
-            output_gradient_tensor_fp16.conv2dBackwardInput(weights_fp16, input_gradient_tensor_fp16, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding);
+            ops::vision::conv2dBackwardInput(output_gradient_tensor_fp16, weights_fp16, input_gradient_tensor_fp16, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding);
 
             if (input_tensor.getDataType() == Data_Type::FLOAT16)
             {
@@ -200,26 +202,35 @@ Tensor Conv2d_Layer::backward(const Tensor &_output_gradient)
         {
             if (!is_accumulated)
             {
-                input_tensor.conv2dBackwardWeight(_output_gradient, weights_gradient_tensor, biases_gradient_tensor, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding, &im2col_scratch);
+                ops::vision::conv2dBackwardWeight(input_tensor, _output_gradient, weights_gradient_tensor, biases_gradient_tensor, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding, &im2col_scratch);
             }
             else
             {
                 Tensor step_weights_grad(weights_gradient_tensor.getShape(), execution_target);
                 Tensor step_biases_grad(biases_gradient_tensor.getShape(), execution_target);
-                input_tensor.conv2dBackwardWeight(_output_gradient, step_weights_grad, step_biases_grad, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding, &im2col_scratch);
+                ops::vision::conv2dBackwardWeight(input_tensor, _output_gradient, step_weights_grad, step_biases_grad, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding, &im2col_scratch);
                 weights_gradient_tensor = weights_gradient_tensor + step_weights_grad;
                 biases_gradient_tensor = biases_gradient_tensor + step_biases_grad;
             }
             logBufferAddress(&input_tensor, "input_tensor (Backward)");
-            _output_gradient.conv2dBackwardInput(weights, input_gradient_tensor, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding);
+            ops::vision::conv2dBackwardInput(_output_gradient, weights, input_gradient_tensor, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding);
             return input_gradient_tensor;
         }
     }
 
 void Conv2d_Layer::resetGradient()
 {
-        is_forward_completed = false;
-    }
+    is_forward_completed = false;
+    im2col_scratch = Tensor(0, 0, execution_target);
+    im2col_scratch_fp16 = Tensor(0, 0, execution_target);
+    input_tensor = Tensor(0, 0, execution_target);
+    output_tensor = Tensor(0, 0, execution_target);
+    input_gradient_tensor = Tensor(0, 0, execution_target);
+    input_tensor_fp16 = Tensor(0, 0, execution_target);
+    output_tensor_fp16 = Tensor(0, 0, execution_target);
+    input_gradient_tensor_fp16 = Tensor(0, 0, execution_target);
+    output_gradient_tensor_fp16 = Tensor(0, 0, execution_target);
+}
 
 void Conv2d_Layer::resetGradients()
 {

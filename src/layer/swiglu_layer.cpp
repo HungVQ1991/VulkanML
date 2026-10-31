@@ -17,6 +17,7 @@
 #include "helper/logger.h"
 #include "helper/magic_enum.hpp"
 #include "math/tensor.h"
+#include "ops/llm/swiglu.h"
 
 
 SwiGLU_Layer::SwiGLU_Layer(Execution_Target _execution_target)
@@ -41,7 +42,7 @@ Tensor SwiGLU_Layer::forward(const Tensor &_input_tensor)
         }
 
         input_tensor = _input_tensor;
-        input_tensor.fusedSwiGLUForward(output_tensor);
+        ops::llm::fusedSwiGLUForward(input_tensor, output_tensor);
 
         is_forward_completed = true;
         return output_tensor;
@@ -51,7 +52,7 @@ Tensor SwiGLU_Layer::forward(const Tensor &a, const Tensor &b)
 {
         tensor_a = a;
         tensor_b = b;
-        tensor_a.swigluForward(tensor_b, output_tensor);
+        ops::llm::swigluForward(tensor_a, tensor_b, output_tensor);
 
         is_forward_completed = true;
         return output_tensor;
@@ -64,7 +65,7 @@ Tensor SwiGLU_Layer::backward(const Tensor &_output_gradient)
             throw std::logic_error("SwiGLU_Layer::backward called before forward");
         }
 
-        input_tensor.fusedSwiGLUBackward(_output_gradient, input_gradient_tensor);
+        ops::llm::fusedSwiGLUBackward(input_tensor, _output_gradient, input_gradient_tensor);
         return input_gradient_tensor;
     }
 

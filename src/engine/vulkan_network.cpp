@@ -83,10 +83,12 @@ VkPipeline Vulkan_Network::createComputePipeline(const std::string &_shader_path
         .pNext = nullptr,
         .requiredSubgroupSize = 32};
 
+    bool require_subgroup = is_coop && (context != nullptr && context->isSubgroupSizeControlEnabled());
+
     VkPipelineShaderStageCreateInfo shader_stage_create_information{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-        .pNext = is_coop ? &required_subgroup_size_create_information : nullptr,
-        .flags = is_coop ? static_cast<VkPipelineShaderStageCreateFlags>(VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT) : VkPipelineShaderStageCreateFlags{0},
+        .pNext = require_subgroup ? &required_subgroup_size_create_information : nullptr,
+        .flags = require_subgroup ? static_cast<VkPipelineShaderStageCreateFlags>(VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT) : VkPipelineShaderStageCreateFlags{0},
         .stage = VK_SHADER_STAGE_COMPUTE_BIT,
         .module = shader_module,
         .pName = "main",
@@ -117,18 +119,81 @@ VkPipeline Vulkan_Network::createComputePipeline(const std::string &_shader_path
     return pipeline;
 }
 
-void Vulkan_Network::createAllPipelines(const std::string &_folder_path)
+VkPipeline Vulkan_Network::createPipelineForEnum(Compute_Pipeline _pipeline) const
 {
-    if (_folder_path.empty())
+    bool is_fp16_pipeline = (_pipeline >= Compute_Pipeline::CAST_FP32_TO_FP16 &&
+                             _pipeline < Compute_Pipeline::COMPUTE_PIPELINE_END &&
+                             _pipeline != Compute_Pipeline::REDUCE_ABSMEAN_PASS1 &&
+                             _pipeline != Compute_Pipeline::REDUCE_ABSMEAN_PASS2 &&
+                             _pipeline != Compute_Pipeline::QUANTIZE_PACK_TERNARY);
+    if (is_fp16_pipeline && context != nullptr && !context->isFloat16Enabled())
     {
-        Logger::logMessage("Vulkan_Network::createAllPipelines: Shader folder path is empty",
+        Logger::logMessage(Input_Format{"Vulkan_Network::createPipelineForEnum: Skipping float16 pipeline {} because device does not have float16 enabled", magic_enum::enum_name(_pipeline)},
+                           Log_Level::LOG_INFO,
+                           true,
+                           0,
+                           Log_Feature::SHADER_GENERATION);
+        return VK_NULL_HANDLE;
+    }
+
+    bool is_coop_pipeline = (_pipeline == Compute_Pipeline::MATMUL_COOPMAT_FP16 ||
+                             _pipeline == Compute_Pipeline::MATMUL_ADD_COOPMAT_FP16 ||
+                             _pipeline == Compute_Pipeline::CONV2D_WEIGHT_GRADIENT_COOPMAT_FP16 ||
+                             _pipeline == Compute_Pipeline::LINEAR_BACKWARD_INPUT_COOPMAT_FP16 ||
+                             _pipeline == Compute_Pipeline::LINEAR_BACKWARD_WEIGHT_BIAS_COOPMAT_FP16 ||
+                             _pipeline == Compute_Pipeline::LINEAR_BACKWARD_WEIGHT_ADAM_COOPMAT_FP16 ||
+                             _pipeline == Compute_Pipeline::FLASH_ATTENTION_FP16 ||
+                             _pipeline == Compute_Pipeline::FLASH_ATTENTION_BACKWARD_FP16 ||
+                             _pipeline == Compute_Pipeline::FLASH_ATTENTION_BACKWARD_DQ_FP16 ||
+                             _pipeline == Compute_Pipeline::FLASH_ATTENTION_BACKWARD_DKV_FP16 ||
+                             _pipeline == Compute_Pipeline::UPSAMPLE2D_FORWARD_COOPMAT_FP16 ||
+                             _pipeline == Compute_Pipeline::UPSAMPLE2D_BACKWARD_COOPMAT_FP16 ||
+                             _pipeline == Compute_Pipeline::INSTANCE_NORM2D_FORWARD_COOPMAT_FP16 ||
+                             _pipeline == Compute_Pipeline::INSTANCE_NORM2D_BACKWARD_COOPMAT_FP16 ||
+                             _pipeline == Compute_Pipeline::DICE_BCE_LOSS_COOPMAT_FP16 ||
+                             _pipeline == Compute_Pipeline::DICE_BCE_GRADIENT_COOPMAT_FP16 ||
+                             _pipeline == Compute_Pipeline::LEAKY_RELU_FORWARD_COOPMAT_FP16 ||
+                             _pipeline == Compute_Pipeline::LEAKY_RELU_BACKWARD_COOPMAT_FP16 ||
+                             _pipeline == Compute_Pipeline::SIGMOID_FORWARD_COOPMAT_FP16 ||
+                             _pipeline == Compute_Pipeline::SIGMOID_BACKWARD_COOPMAT_FP16);
+    if (is_coop_pipeline && context != nullptr && !context->isCooperativeMatrixEnabled())
+    {
+        Logger::logMessage(Input_Format{"Vulkan_Network::createPipelineForEnum: Skipping cooperative matrix pipeline {} because device does not have cooperative matrix enabled", magic_enum::enum_name(_pipeline)},
+                           Log_Level::LOG_INFO,
+                           true,
+                           0,
+                           Log_Feature::SHADER_GENERATION);
+        return VK_NULL_HANDLE;
+    }
+
+    std::string shader_name = std::string(magic_enum::enum_name(_pipeline));
+    std::string shader_path = pipeline_folder + "/" + shader_name + ".spv";
+    std::ranges::transform(shader_path, shader_path.begin(), [](unsigned char character)
+                           { return static_cast<char>(std::tolower(character)); });
+
+    try
+    {
+        return createComputePipeline(shader_path, is_coop_pipeline);
+    }
+    catch (const std::exception &e)
+    {
+        Logger::logMessage(Input_Format{"Vulkan_Network::createPipelineForEnum: Failed to compile pipeline {}: {}", shader_name, e.what()},
                            Log_Level::LOG_WARNING,
                            true,
                            0,
                            Log_Feature::SHADER_GENERATION);
+        return VK_NULL_HANDLE;
+    }
+}
+
+void Vulkan_Network::createAllPipelines(const std::string &_folder_path)
+{
+    if (!_folder_path.empty())
+    {
+        pipeline_folder = _folder_path;
     }
 
-    Logger::logMessage(Input_Format{"Vulkan_Network::createAllPipelines: Creating all compute pipelines from folder: {}", _folder_path},
+    Logger::logMessage(Input_Format{"Vulkan_Network::createAllPipelines: Pre-compiling compute pipelines from folder: {}", pipeline_folder},
                        Log_Level::LOG_DEBUG,
                        true,
                        0,
@@ -137,54 +202,10 @@ void Vulkan_Network::createAllPipelines(const std::string &_folder_path)
     for (size_t i = 0; i < pipelines.size(); ++i)
     {
         auto pipeline_enum_value = magic_enum::enum_cast<Compute_Pipeline>(i);
-        if (!pipeline_enum_value.has_value())
+        if (pipeline_enum_value.has_value())
         {
-            Logger::logMessage(Input_Format{"Vulkan_Network::createAllPipelines: Failed to cast enum at index {}", i},
-                               Log_Level::LOG_WARNING,
-                               true,
-                               0,
-                               Log_Feature::SHADER_GENERATION);
-            continue;
+            getPipeline(pipeline_enum_value.value());
         }
-
-        Compute_Pipeline pipeline_enum = pipeline_enum_value.value();
-        bool is_fp16_pipeline = (pipeline_enum >= Compute_Pipeline::CAST_FP32_TO_FP16 &&
-                                 pipeline_enum < Compute_Pipeline::COMPUTE_PIPELINE_END);
-        if (is_fp16_pipeline && context != nullptr && !context->isFloat16Enabled())
-        {
-            Logger::logMessage("Vulkan_Network::createAllPipelines: Skipping float16 pipeline because device does not have float16 enabled",
-                               Log_Level::LOG_INFO,
-                               true,
-                               0,
-                               Log_Feature::SHADER_GENERATION);
-            pipelines[i] = VK_NULL_HANDLE;
-            continue;
-        }
-
-        bool is_coop_pipeline = (pipeline_enum == Compute_Pipeline::MATMUL_COOPMAT_FP16 ||
-                                 pipeline_enum == Compute_Pipeline::MATMUL_ADD_COOPMAT_FP16 ||
-                                 pipeline_enum == Compute_Pipeline::CONV2D_WEIGHT_GRADIENT_COOPMAT_FP16 ||
-                                 pipeline_enum == Compute_Pipeline::LINEAR_BACKWARD_INPUT_COOPMAT_FP16 ||
-                                 pipeline_enum == Compute_Pipeline::LINEAR_BACKWARD_WEIGHT_BIAS_COOPMAT_FP16 ||
-                                 pipeline_enum == Compute_Pipeline::LINEAR_BACKWARD_WEIGHT_ADAM_COOPMAT_FP16 ||
-                                 pipeline_enum == Compute_Pipeline::FLASH_ATTENTION_FP16 ||
-                                 pipeline_enum == Compute_Pipeline::FLASH_ATTENTION_BACKWARD_FP16);
-        if (is_coop_pipeline && context != nullptr && !context->isCooperativeMatrixEnabled())
-        {
-            Logger::logMessage("Vulkan_Network::createAllPipelines: Skipping cooperative matrix pipeline because device does not have cooperative matrix enabled",
-                               Log_Level::LOG_INFO,
-                               true,
-                               0,
-                               Log_Feature::SHADER_GENERATION);
-            pipelines[i] = VK_NULL_HANDLE;
-            continue;
-        }
-
-        std::string shader_path = _folder_path + "/" + std::string(magic_enum::enum_name(pipeline_enum)) + ".spv";
-        std::ranges::transform(shader_path, shader_path.begin(), [](unsigned char character)
-                               { return static_cast<char>(std::tolower(character)); });
-
-        pipelines[i] = createComputePipeline(shader_path, is_coop_pipeline);
     }
 }
 
@@ -260,10 +281,22 @@ Vulkan_Network::Vulkan_Network(const Vulkan_Context &_context, const std::string
             .pImmutableSamplers = nullptr};
     }
 
+    VkDescriptorSetLayoutCreateFlags layout_flags = 0;
+    if (context != nullptr && context->isPushDescriptorEnabled())
+    {
+        layout_flags |= VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+        is_push_descriptor_active = true;
+        Logger::logMessage("Vulkan_Network::Vulkan_Network: Configured descriptor set layout with VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR",
+                           Log_Level::LOG_INFO,
+                           true,
+                           0,
+                           Log_Feature::DEVICE_MANAGEMENT | Log_Feature::DISPATCH_EXECUTION);
+    }
+
     VkDescriptorSetLayoutCreateInfo descriptor_set_layout_create_information{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = nullptr,
-        .flags = 0,
+        .flags = layout_flags,
         .bindingCount = DESCRIPTOR_BINDINGS_COUNT,
         .pBindings = layout_bindings};
 
@@ -301,7 +334,7 @@ Vulkan_Network::Vulkan_Network(const Vulkan_Context &_context, const std::string
         throw std::runtime_error("Failed to create pipeline layout");
     }
 
-    createAllPipelines(pipeline_folder);
+    pipelines.fill(VK_NULL_HANDLE);
 
     guard.is_active = false;
 }
@@ -323,7 +356,29 @@ VkPipeline Vulkan_Network::getPipeline(Compute_Pipeline _pipeline) const
                            Log_Feature::DISPATCH_EXECUTION);
         return VK_NULL_HANDLE;
     }
-    return pipelines[pipeline_index];
+
+    // Fast path: already compiled
+    VkPipeline cached_pipeline = pipelines[pipeline_index];
+    if (cached_pipeline != VK_NULL_HANDLE)
+    {
+        return cached_pipeline;
+    }
+
+    // Slow path: thread-safe lazy compilation with double-checked locking
+    if (!pipeline_mutex)
+    {
+        pipeline_mutex = std::make_unique<std::mutex>();
+    }
+    std::lock_guard<std::mutex> lock(*pipeline_mutex);
+
+    if (pipelines[pipeline_index] != VK_NULL_HANDLE)
+    {
+        return pipelines[pipeline_index];
+    }
+
+    VkPipeline new_pipeline = createPipelineForEnum(_pipeline);
+    pipelines[pipeline_index] = new_pipeline;
+    return new_pipeline;
 }
 
 void Vulkan_Network::setPipelineFolder(const std::string &_pipeline_folder)

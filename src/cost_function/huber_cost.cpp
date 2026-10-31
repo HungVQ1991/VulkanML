@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "helper/logger.h"
+#include "ops/loss/loss_ops.h"
 
 
 Huber_Cost::Huber_Cost(float _delta, Execution_Target _execution_target)
@@ -65,7 +66,7 @@ float Huber_Cost::computeLoss(const Tensor &_prediction_matrix, const Tensor &_t
         }
 
         size_t total_elements = _prediction_matrix.getRows() * _prediction_matrix.getColumns();
-        _prediction_matrix.huberLoss(_target_matrix, loss_matrix, delta);
+        ops::loss::huber(_prediction_matrix, _target_matrix, loss_matrix, delta);
         return loss_matrix.getScalar() / static_cast<float>(total_elements);
     }
 

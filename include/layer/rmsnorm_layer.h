@@ -56,7 +56,9 @@ public:
     void loadCheckpoint(std::ifstream &_input_file_stream) override;
 
 
-    bool hasParameters() const noexcept override { return true; }    std::vector<std::pair<Tensor *, Tensor *>> getParametersAndGradients() override;
+    bool hasParameters() const noexcept override { return true; }
+    std::vector<std::pair<Tensor *, Tensor *>> getParametersAndGradients() override;
+    std::vector<const Tensor *> getNoDecayParameters() const override { return { &gamma }; }
 
     const Tensor &getWeights() const override { return gamma; }
     const Tensor &getWeightsGradient() const override { return gamma_gradient_tensor; }

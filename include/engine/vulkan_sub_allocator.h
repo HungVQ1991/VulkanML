@@ -17,6 +17,7 @@ struct Memory_Allocation
     VkDeviceSize offset = 0;
     VkDeviceSize size = 0;
     size_t chunk_index = 0;
+    void* mapped_pointer = nullptr;
 };
 
 struct Free_Block
@@ -33,6 +34,7 @@ struct Memory_Chunk
     VkMemoryPropertyFlags memory_properties = 0;
     std::vector<Free_Block> free_blocks;
     bool is_dedicated_arena = false;
+    void* mapped_pointer = nullptr;
 };
 
 struct Tensor_Lifetime
@@ -97,7 +99,7 @@ private:
     std::vector<Memory_Chunk> memory_chunks;
     VkDeviceSize default_chunk_size = 64 * 1024 * 1024;
     size_t arena_chunk_index = std::numeric_limits<size_t>::max();
-    mutable std::mutex allocator_mutex;
+    mutable std::recursive_mutex allocator_mutex;
     Memory_Planner memory_planner;
 
     uint32_t findMemoryType(uint32_t _type_filter, VkMemoryPropertyFlags _memory_properties) const;

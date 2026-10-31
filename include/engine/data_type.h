@@ -7,6 +7,8 @@
 #include <string_view>
 #include <vector>
 
+#include "math/shape.h"
+
 #if defined(__STDCPP_FLOAT16_T__)
 #include <stdfloat>
 #endif
@@ -14,7 +16,8 @@
 enum class Data_Type
 {
     FLOAT32,
-    FLOAT16
+    FLOAT16,
+    TERNARY_INT2
 };
 
 #if defined(__STDCPP_FLOAT16_T__)
@@ -32,6 +35,8 @@ constexpr size_t getDataTypeSize(Data_Type _type) noexcept
     {
     case Data_Type::FLOAT16:
         return 2;
+    case Data_Type::TERNARY_INT2:
+        return 4; // Physical word size (uint32_t) holding 16 packed 2-bit values
     case Data_Type::FLOAT32:
     default:
         return 4;
@@ -44,6 +49,8 @@ constexpr std::string_view getDataTypeGlslName(Data_Type _type) noexcept
     {
     case Data_Type::FLOAT16:
         return "float16_t";
+    case Data_Type::TERNARY_INT2:
+        return "uint";
     case Data_Type::FLOAT32:
     default:
         return "float";
@@ -56,9 +63,36 @@ constexpr std::string_view getDataTypeName(Data_Type _type) noexcept
     {
     case Data_Type::FLOAT16:
         return "FLOAT16";
+    case Data_Type::TERNARY_INT2:
+        return "TERNARY_INT2";
     case Data_Type::FLOAT32:
     default:
         return "FLOAT32";
+    }
+}
+
+inline size_t getTensorStorageBytes(Data_Type _type, const Shape &_shape) noexcept
+{
+    switch (_type)
+    {
+    case Data_Type::FLOAT16:
+        return _shape.getTotalElements() * 2;
+    case Data_Type::FLOAT32:
+        return _shape.getTotalElements() * 4;
+    case Data_Type::TERNARY_INT2:
+    {
+        if (_shape.getTotalElements() == 0)
+        {
+            return 0;
+        }
+        size_t rank = _shape.getRank();
+        size_t last_dim = (rank == 0) ? 1 : _shape[rank - 1];
+        size_t num_rows = (rank <= 1) ? 1 : (_shape.getTotalElements() / last_dim);
+        size_t words_per_row = (last_dim + 15) / 16;
+        return num_rows * words_per_row * sizeof(uint32_t);
+    }
+    default:
+        return _shape.getTotalElements() * 4;
     }
 }
 

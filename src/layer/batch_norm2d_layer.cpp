@@ -17,6 +17,7 @@
 #include "helper/logger.h"
 #include "helper/magic_enum.hpp"
 #include "math/tensor.h"
+#include "ops/normalization/batchnorm.h"
 
 
 Batch_Norm_2d_Layer::Batch_Norm_2d_Layer(uint32_t _height, uint32_t _width, uint32_t _channels, float _epsilon, float _momentum, Execution_Target _execution_target)
@@ -47,7 +48,8 @@ Tensor Batch_Norm_2d_Layer::forward(const Tensor &_input_tensor)
 {
         input_tensor = _input_tensor;
 
-        input_tensor.batchNorm2dForward(
+        ops::normalization::batchNorm2dForward(
+            input_tensor,
             gamma,
             beta,
             running_mean,
@@ -74,7 +76,7 @@ Tensor Batch_Norm_2d_Layer::forward(const Tensor& _batched_input, const std::vec
         if (_batched_params.size() != getPopulationParameterDims().size())
         {
             Logger::logMessage(Input_Format{ "Batch_Norm_2d_Layer::forward: expected {} batched parameter tensors (gamma, beta, running_mean, running_variance), got {}",
-                                            getPopulationParameterDims().size(), _batched_params.size() },
+                                             getPopulationParameterDims().size(), _batched_params.size() },
                 Log_Level::LOG_ERROR,
                 true,
                 0,
@@ -87,7 +89,8 @@ Tensor Batch_Norm_2d_Layer::forward(const Tensor& _batched_input, const std::vec
         Tensor normalized_input_tensor(getExecutionTarget());
         Tensor output_tensor_result(getExecutionTarget());
 
-        _batched_input.batchNorm2dForward(
+        ops::normalization::batchNorm2dForward(
+            _batched_input,
             _batched_params[0],
             _batched_params[1],
             const_cast<Tensor&>(_batched_params[2]),
@@ -124,9 +127,10 @@ Tensor Batch_Norm_2d_Layer::backward(const Tensor &_output_gradient)
             throw std::logic_error("Backward called before forward");
         }
 
-        if (!is_accumulated)
+        if (!is_training)
         {
-            _output_gradient.batchNorm2dBackward(
+            ops::normalization::batchNorm2dBackward(
+                _output_gradient,
                 gamma,
                 batch_variance,
                 normalized_input,
@@ -136,13 +140,36 @@ Tensor Batch_Norm_2d_Layer::backward(const Tensor &_output_gradient)
                 input_height,
                 input_width,
                 channels,
-                epsilon);
+                epsilon,
+                false,
+                running_variance);
+            logBufferAddress(&input_tensor, "input_tensor (Backward Eval)");
+            return input_gradient_tensor;
+        }
+
+        if (!is_accumulated)
+        {
+            ops::normalization::batchNorm2dBackward(
+                _output_gradient,
+                gamma,
+                batch_variance,
+                normalized_input,
+                gamma_gradient_tensor,
+                beta_gradient_tensor,
+                input_gradient_tensor,
+                input_height,
+                input_width,
+                channels,
+                epsilon,
+                true,
+                running_variance);
         }
         else
         {
             Tensor step_gamma_grad(gamma_gradient_tensor.getShape(), execution_target);
             Tensor step_beta_grad(beta_gradient_tensor.getShape(), execution_target);
-            _output_gradient.batchNorm2dBackward(
+            ops::normalization::batchNorm2dBackward(
+                _output_gradient,
                 gamma,
                 batch_variance,
                 normalized_input,
@@ -152,7 +179,9 @@ Tensor Batch_Norm_2d_Layer::backward(const Tensor &_output_gradient)
                 input_height,
                 input_width,
                 channels,
-                epsilon);
+                epsilon,
+                true,
+                running_variance);
             gamma_gradient_tensor = gamma_gradient_tensor + step_gamma_grad;
             beta_gradient_tensor = beta_gradient_tensor + step_beta_grad;
         }
@@ -163,8 +192,12 @@ Tensor Batch_Norm_2d_Layer::backward(const Tensor &_output_gradient)
 
 void Batch_Norm_2d_Layer::resetGradient()
 {
-        is_forward_completed = false;
-    }
+    is_forward_completed = false;
+    input_tensor = Tensor(0, 0, execution_target);
+    output_tensor = Tensor(0, 0, execution_target);
+    normalized_input = Tensor(0, 0, execution_target);
+    input_gradient_tensor = Tensor(0, 0, execution_target);
+}
 
 void Batch_Norm_2d_Layer::resetGradients()
 {
@@ -200,6 +233,7 @@ void Batch_Norm_2d_Layer::loadCheckpoint(std::ifstream &_input_file_stream)
         running_variance = Tensor::loadTensor(_input_file_stream, execution_target);
         gamma_gradient_tensor = Tensor::loadTensor(_input_file_stream, execution_target);
         beta_gradient_tensor = Tensor::loadTensor(_input_file_stream, execution_target);
+        sanitizeRunningStats();
     }
 
 void Batch_Norm_2d_Layer::saveInference(std::ofstream &_output_file_stream) const
@@ -216,6 +250,7 @@ void Batch_Norm_2d_Layer::loadInference(std::ifstream &_input_file_stream)
         beta = Tensor::loadTensor(_input_file_stream, execution_target);
         running_mean = Tensor::loadTensor(_input_file_stream, execution_target);
         running_variance = Tensor::loadTensor(_input_file_stream, execution_target);
+        sanitizeRunningStats();
     }
 
 std::function<float(std::mt19937&)> Batch_Norm_2d_Layer::getPopulationParameterInitializer(size_t param_index) const
@@ -372,4 +407,48 @@ void Batch_Norm_2d_Layer::setIsForwardCompleted(bool _is_completed) noexcept
 { is_forward_completed = _is_completed; }
 
 void Batch_Norm_2d_Layer::setTrainingMode(bool _is_training)
-{ is_training = _is_training; }
+{
+    is_training = _is_training;
+    if (!_is_training)
+    {
+        sanitizeRunningStats();
+    }
+}
+
+void Batch_Norm_2d_Layer::sanitizeRunningStats()
+{
+    if (channels == 0) return;
+
+    auto rm_data = running_mean.getData();
+    auto rv_data = running_variance.getData();
+    bool rm_bad = false;
+    bool rv_bad = false;
+
+    for (float v : rm_data)
+    {
+        if (std::isnan(v) || std::isinf(v)) { rm_bad = true; break; }
+    }
+    for (float v : rv_data)
+    {
+        if (std::isnan(v) || std::isinf(v) || v <= 0.0f) { rv_bad = true; break; }
+    }
+
+    if (rm_bad)
+    {
+        std::vector<float> clean_rm(channels, 0.0f);
+        for (size_t c = 0; c < rm_data.size() && c < channels; ++c)
+        {
+            clean_rm[c] = (std::isnan(rm_data[c]) || std::isinf(rm_data[c])) ? 0.0f : rm_data[c];
+        }
+        running_mean = Tensor(1, channels, clean_rm, execution_target);
+    }
+    if (rv_bad)
+    {
+        std::vector<float> clean_rv(channels, 1.0f);
+        for (size_t c = 0; c < rv_data.size() && c < channels; ++c)
+        {
+            clean_rv[c] = (std::isnan(rv_data[c]) || std::isinf(rv_data[c]) || rv_data[c] <= 0.0f) ? 1.0f : rv_data[c];
+        }
+        running_variance = Tensor(1, channels, clean_rv, execution_target);
+    }
+}

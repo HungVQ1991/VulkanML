@@ -15,12 +15,11 @@ Pipeline_Cache_Manager::Pipeline_Cache_Manager(const Vulkan_Context &_context, V
 
 Pipeline_Cache_Manager::~Pipeline_Cache_Manager()
 {
-    savePipelineCache();
-
     VkDevice device = context.getDevice();
     if (pipeline_cache != VK_NULL_HANDLE)
     {
         vkDestroyPipelineCache(device, pipeline_cache, nullptr);
+        pipeline_cache = VK_NULL_HANDLE;
     }
 
     for (auto &pipeline_pair : cached_pipelines)
@@ -28,6 +27,7 @@ Pipeline_Cache_Manager::~Pipeline_Cache_Manager()
         if (pipeline_pair.second != VK_NULL_HANDLE)
         {
             vkDestroyPipeline(device, pipeline_pair.second, nullptr);
+            pipeline_pair.second = VK_NULL_HANDLE;
         }
     }
 }

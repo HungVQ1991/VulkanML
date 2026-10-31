@@ -63,6 +63,8 @@ class Gpu_Tensor_Impl : public Tensor_Impl
 private:
     std::shared_ptr<gpu::vector> storage;
     mutable std::vector<float> host_cache;
+    mutable std::vector<uint32_t> host_cache_u32;
+    mutable std::shared_ptr<gpu::vector> cached_indices_storage;
     mutable std::shared_ptr<gpu::vector> cached_fp16_storage;
     mutable bool is_fp16_cache_dirty = true;
 
@@ -81,8 +83,7 @@ public:
         getEffectiveFp16Storage();
     }    std::shared_ptr<gpu::vector> getEffectiveFp16Storage() const;
 
-
-private:
+public:
     template <typename Pipeline_Enum, typename Push_Constants_Type>
     void pushToGraph(Pipeline_Enum pipeline_id,
                      const std::vector<std::shared_ptr<gpu::vector>> &buffers,
@@ -122,17 +123,34 @@ private:
         }
     }
 
-    const Gpu_Tensor_Impl &castToGpu(const Tensor_Impl &other) const noexcept
+    static const Gpu_Tensor_Impl &castToGpu(const Tensor_Impl &other) noexcept
     {
         return static_cast<const Gpu_Tensor_Impl &>(other);
     }
 
-    Gpu_Tensor_Impl &castToGpu(Tensor_Impl &other) const noexcept
+    static Gpu_Tensor_Impl &castToGpu(Tensor_Impl &other) noexcept
     {
         return static_cast<Gpu_Tensor_Impl &>(other);
-    }    std::shared_ptr<Gpu_Tensor_Impl> ensureContiguousSelf() const;
+    }
 
+    std::shared_ptr<Gpu_Tensor_Impl> ensureContiguousSelf() const;
 
+    const std::shared_ptr<gpu::vector> &getStorageBuffer() const noexcept { return storage; }
+    std::shared_ptr<gpu::vector> &getStorageBuffer() noexcept { return storage; }
+    const std::shared_ptr<gpu::vector> &getCachedFp16Storage() const noexcept { return cached_fp16_storage; }
+    std::shared_ptr<gpu::vector> &getCachedFp16Storage() noexcept { return cached_fp16_storage; }
+    void setCachedFp16Storage(std::shared_ptr<gpu::vector> s) const noexcept { cached_fp16_storage = std::move(s); }
+    bool isFp16CacheDirty() const noexcept { return is_fp16_cache_dirty; }
+    void setFp16CacheDirty(bool dirty) const noexcept { is_fp16_cache_dirty = dirty; }
+    const std::vector<float> &getHostCache() const noexcept { return host_cache; }
+    std::vector<float> &getHostCache() noexcept { return host_cache; }
+    void clearHostCache() const noexcept { host_cache.clear(); }
+    std::shared_ptr<gpu::vector> getOrUploadIndicesBuffer(const std::vector<int32_t>& indices) const;
+
+    const std::vector<uint32_t> &getPackedData() const override;
+    void uploadPackedData(const std::vector<uint32_t> &packed_data) override;
+
+private:
     template <typename Pipeline_Enum>
     void executeElementwise(const Tensor_Impl &other, Tensor_Impl &output, Pipeline_Enum pipeline_id, bool is_broadcast_allowed) const
     {

@@ -1,0 +1,71 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer Pred_Buffer {
+    float pred_data[];
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer Target_Buffer {
+    float target_data[];
+};
+
+layout(std430, set = 0, binding = 2) writeonly buffer Loss_Buffer {
+    float loss_data[];
+};
+
+layout(push_constant) uniform Push_Constants {
+    uint total_elements;
+    float gamma_pos;
+    float gamma_neg;
+    float clip_margin;
+    float epsilon_val;
+} push_constants;
+
+shared float shared_sum[256];
+
+void main() {
+    uint global_idx = gl_GlobalInvocationID.x;
+    uint local_idx = gl_LocalInvocationID.x;
+
+    float element_loss = 0.0f;
+    if (global_idx < push_constants.total_elements) {
+        float p = clamp(pred_data[global_idx], push_constants.epsilon_val, 1.0f - push_constants.epsilon_val);
+        float y = target_data[global_idx];
+
+        // Positive class loss
+        float pos_loss = 0.0f;
+        if (y > 0.0f) {
+            float pt = 1.0f - p;
+            float mod_factor = (push_constants.gamma_pos > 0.0f) ? pow(pt, push_constants.gamma_pos) : 1.0f;
+            pos_loss = -y * mod_factor * log(p);
+        }
+
+        // Negative class loss with probability margin shifting
+        float neg_loss = 0.0f;
+        if (y < 1.0f) {
+            float p_m = max(p - push_constants.clip_margin, 0.0f);
+            p_m = clamp(p_m, 0.0f, 1.0f - push_constants.epsilon_val);
+            if (p_m > 0.0f) {
+                float mod_factor = (push_constants.gamma_neg > 0.0f) ? pow(p_m, push_constants.gamma_neg) : 1.0f;
+                neg_loss = -(1.0f - y) * mod_factor * log(1.0f - p_m);
+            }
+        }
+
+        element_loss = pos_loss + neg_loss;
+    }
+
+    shared_sum[local_idx] = element_loss;
+    barrier();
+
+    for (uint stride = gl_WorkGroupSize.x / 2; stride > 0; stride >>= 1) {
+        if (local_idx < stride) {
+            shared_sum[local_idx] += shared_sum[local_idx + stride];
+        }
+        barrier();
+    }
+
+    if (local_idx == 0) {
+        loss_data[gl_WorkGroupID.x] = shared_sum[0];
+    }
+}

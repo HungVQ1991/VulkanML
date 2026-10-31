@@ -17,6 +17,7 @@
 #include "helper/logger.h"
 #include "helper/magic_enum.hpp"
 #include "math/tensor.h"
+#include "ops/llm/embedding.h"
 
 
 void Embedding_Layer::initializeWeights()
@@ -60,7 +61,7 @@ Tensor Embedding_Layer::forward(const std::vector<int32_t> &token_ids) const
         last_indices_tensor = Tensor(Shape{ token_ids.size() }, std::move(idx_float), execution_target);
         output_tensor.setDataType(data_type);
         output_tensor.reshape(Shape{ token_ids.size(), embedding_dim });
-        weight.embeddingForward(last_indices_tensor, output_tensor);
+        ops::llm::embeddingForward(weight, last_indices_tensor, output_tensor);
         return output_tensor;
     }
 
@@ -83,7 +84,7 @@ Tensor Embedding_Layer::forward(const std::vector<std::vector<int32_t>> &batch_t
         last_indices_tensor = Tensor(Shape{ B, S }, std::move(idx_float), execution_target);
         output_tensor.setDataType(data_type);
         output_tensor.reshape(Shape{ B, S, embedding_dim });
-        weight.embeddingForward(last_indices_tensor, output_tensor);
+        ops::llm::embeddingForward(weight, last_indices_tensor, output_tensor);
         return output_tensor;
     }
 
@@ -96,7 +97,7 @@ Tensor Embedding_Layer::forward(const Tensor &_input_tensor)
         last_indices_tensor = _input_tensor;
         output_tensor.setDataType(data_type);
         output_tensor.reshape(Shape{ _input_tensor.getTotalElements(), embedding_dim });
-        weight.embeddingForward(last_indices_tensor, output_tensor);
+        ops::llm::embeddingForward(weight, last_indices_tensor, output_tensor);
         if (_input_tensor.getShape().getRank() == 2)
         {
             output_tensor.reshape(Shape{ _input_tensor.getShape()[0], _input_tensor.getShape()[1], embedding_dim });
@@ -117,7 +118,7 @@ Tensor Embedding_Layer::backward(const Tensor &_output_gradient)
             flat_grad.reshape(Shape{ flat_grad.getTotalElements() / embedding_dim, embedding_dim });
         }
 
-        weight.embeddingBackward(last_indices_tensor, flat_grad, weight_gradient);
+        ops::llm::embeddingBackward(weight, last_indices_tensor, flat_grad, weight_gradient);
         return Tensor(0, 0);
     }
 

@@ -4,7 +4,10 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <memory>
+#include <mutex>
 #include <vulkan/vulkan.h>
+#include "helper/magic_enum.hpp"
 
 class Vulkan_Context;
 
@@ -22,6 +25,10 @@ enum Compute_Pipeline
     TRANSPOSE,
     RELU,
     RELU_BACKWARD,
+    LEAKY_RELU_FORWARD,
+    LEAKY_RELU_BACKWARD,
+    SIGMOID_FORWARD,
+    SIGMOID_BACKWARD,
     GELU,
     GELU_BACKWARD,
     SGD_UPDATE,
@@ -36,8 +43,12 @@ enum Compute_Pipeline
     CONV2D_BACKWARD_PASS_WEIGHT_BIAS_GRADIENT,
     MAXPOOL2D_FORWARD,
     MAXPOOL2D_BACKWARD,
+    AVGPOOL2D_FORWARD,
+    AVGPOOL2D_BACKWARD,
     GLOBAL_AVGPOOL_FORWARD,
     GLOBAL_AVGPOOL_BACKWARD,
+    UPSAMPLE2D_FORWARD,
+    UPSAMPLE2D_BACKWARD,
     BATCH_NORM_STATS_FORWARD,
     BATCH_NORM_TRANSFORM_FORWARD,
     BATCH_NORM_STATS_BACKWARD,
@@ -46,11 +57,19 @@ enum Compute_Pipeline
     BATCH_NORM2D_TRANSFORM_FORWARD,
     BATCH_NORM2D_STATS_BACKWARD,
     BATCH_NORM2D_TRANSFORM_BACKWARD,
+    INSTANCE_NORM2D_FORWARD,
+    INSTANCE_NORM2D_BACKWARD,
     CCE_LOSS,
     MSE_LOSS,
     MAE_LOSS,
     BCE_LOSS,
     HUBER_LOSS,
+    ASL_LOSS,
+    ASL_GRADIENT,
+    DICE_LOSS,
+    DICE_GRADIENT,
+    DICE_BCE_LOSS,
+    DICE_BCE_GRADIENT,
     MATRIX_INVERSE,
     NORMALIZE,
     CONCATENATE_COLUMNS,
@@ -91,6 +110,8 @@ enum Compute_Pipeline
     BATCH_NORM2D_TRANSFORM_BACKWARD_FP16,
     MAXPOOL2D_FORWARD_FP16,
     MAXPOOL2D_BACKWARD_FP16,
+    AVGPOOL2D_FORWARD_FP16,
+    AVGPOOL2D_BACKWARD_FP16,
     BATCH_NORM_STATS_FORWARD_FP16,
     BATCH_NORM_TRANSFORM_FORWARD_FP16,
     BATCH_NORM_STATS_BACKWARD_FP16,
@@ -114,6 +135,8 @@ enum Compute_Pipeline
     FUSED_SWIGLU_BACKWARD_FP16,
     FLASH_ATTENTION_FP16,
     FLASH_ATTENTION_BACKWARD_FP16,
+    FLASH_ATTENTION_BACKWARD_DQ_FP16,
+    FLASH_ATTENTION_BACKWARD_DKV_FP16,
     EMBEDDING_FORWARD_FP16,
     ADD_FP16,
     SUB_FP16,
@@ -136,7 +159,42 @@ enum Compute_Pipeline
     ADAM_UPDATE_FP16,
     LINEAR_BACKWARD_WEIGHT_ADAM_FP16,
     LINEAR_BACKWARD_WEIGHT_ADAM_COOPMAT_FP16,
+    ASL_LOSS_FP16,
+    ASL_GRADIENT_FP16,
+    DICE_LOSS_FP16,
+    DICE_GRADIENT_FP16,
+    UPSAMPLE2D_FORWARD_FP16,
+    UPSAMPLE2D_BACKWARD_FP16,
+    UPSAMPLE2D_FORWARD_COOPMAT_FP16,
+    UPSAMPLE2D_BACKWARD_COOPMAT_FP16,
+    INSTANCE_NORM2D_FORWARD_FP16,
+    INSTANCE_NORM2D_BACKWARD_FP16,
+    INSTANCE_NORM2D_FORWARD_COOPMAT_FP16,
+    INSTANCE_NORM2D_BACKWARD_COOPMAT_FP16,
+    DICE_BCE_LOSS_FP16,
+    DICE_BCE_GRADIENT_FP16,
+    DICE_BCE_LOSS_COOPMAT_FP16,
+    DICE_BCE_GRADIENT_COOPMAT_FP16,
+    LEAKY_RELU_FORWARD_FP16,
+    LEAKY_RELU_BACKWARD_FP16,
+    LEAKY_RELU_FORWARD_COOPMAT_FP16,
+    LEAKY_RELU_BACKWARD_COOPMAT_FP16,
+    SIGMOID_FORWARD_FP16,
+    SIGMOID_BACKWARD_FP16,
+    SIGMOID_FORWARD_COOPMAT_FP16,
+    SIGMOID_BACKWARD_COOPMAT_FP16,
+    REDUCE_ABSMEAN_PASS1,
+    REDUCE_ABSMEAN_PASS2,
+    FAKEQUANT_TERNARY,
+    QUANTIZE_PACK_TERNARY,
+    MATMUL_TERNARY_FP16,
     COMPUTE_PIPELINE_END
+};
+
+template <>
+struct magic_enum::customize::enum_range<Compute_Pipeline> {
+    static constexpr int min = 0;
+    static constexpr int max = 256; 
 };
 
 class Vulkan_Network
@@ -148,12 +206,15 @@ private:
     VkDevice device = VK_NULL_HANDLE;
     VkDescriptorSetLayout descriptor_set_layout = VK_NULL_HANDLE;
     VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
+    bool is_push_descriptor_active = false;
 
-    std::array<VkPipeline, Compute_Pipeline::COMPUTE_PIPELINE_END> pipelines{};
+    mutable std::unique_ptr<std::mutex> pipeline_mutex = std::make_unique<std::mutex>();
+    mutable std::array<VkPipeline, Compute_Pipeline::COMPUTE_PIPELINE_END> pipelines{};
 
     std::vector<char> readSpirvFile(const std::string &_file_path) const;
     VkShaderModule createShaderModule(const std::vector<char> &_code_buffer) const;
     VkPipeline createComputePipeline(const std::string &_shader_path, bool is_coop = false) const;
+    VkPipeline createPipelineForEnum(Compute_Pipeline _pipeline) const;
     void createAllPipelines(const std::string &_folder_path);
     void cleanUp() noexcept;
 
@@ -173,6 +234,7 @@ public:
     VkPipelineLayout getPipelineLayout() const noexcept { return pipeline_layout; }
     VkDescriptorSetLayout getDescriptorSetLayout() const noexcept { return descriptor_set_layout; }
     VkDevice getDevice() const noexcept { return device; }
+    bool isPushDescriptorActive() const noexcept { return is_push_descriptor_active; }
 
     bool hasPipeline(Compute_Pipeline _pipeline) const noexcept
     {

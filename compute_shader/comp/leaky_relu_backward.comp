@@ -1,0 +1,27 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly restrict buffer InputBuffer {
+    float X[];
+};
+
+layout(std430, set = 0, binding = 1) readonly restrict buffer GradOutputBuffer {
+    float dY[];
+};
+
+layout(std430, set = 0, binding = 2) writeonly restrict buffer GradInputBuffer {
+    float dX[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint total_elements;
+    float negative_slope;
+} pc;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.total_elements) return;
+
+    dX[idx] = (X[idx] >= 0.0f) ? dY[idx] : (dY[idx] * pc.negative_slope);
+}
