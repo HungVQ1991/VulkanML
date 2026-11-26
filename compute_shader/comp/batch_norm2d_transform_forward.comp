@@ -1,0 +1,69 @@
+#version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#endif
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+#ifdef USE_FP16
+layout(std430, binding = 0) readonly buffer InputX { float16_t X[]; };
+#else
+layout(std430, binding = 0) readonly buffer InputX { float X[]; };
+#endif
+layout(std430, binding = 1) readonly buffer Mean { float mean[]; };
+layout(std430, binding = 2) readonly buffer Var { float variance[]; };
+layout(std430, binding = 3) readonly buffer Gamma { float gamma[]; };
+layout(std430, binding = 4) readonly buffer Beta { float beta[]; };
+#ifdef USE_FP16
+layout(std430, binding = 5) writeonly buffer OutputY { float16_t Y[]; };
+#else
+layout(std430, binding = 5) writeonly buffer OutputY { float Y[]; };
+#endif
+layout(std430, binding = 6) writeonly buffer XHat { float x_hat[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint total_elements;
+    uint channels;
+    float epsilon;
+} pc;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.total_elements) return;
+
+    uint c = idx % pc.channels;
+#ifdef USE_FP16
+
+#endif
+    float m = mean[c];
+    float v = variance[c];
+    float g = gamma[c];
+    float b = beta[c];
+
+    if (isnan(m) || isinf(m)) m = 0.0;
+    if (isnan(v) || isinf(v) || v < 0.0) v = 1.0;
+    if (isnan(g) || isinf(g)) g = 1.0;
+    if (isnan(b) || isinf(b)) b = 0.0;
+
+#ifdef USE_FP16
+    float x_val = float(X[idx]);
+#else
+    float x_val = X[idx];
+#endif
+    if (isnan(x_val) || isinf(x_val)) x_val = m;
+
+    float norm = (x_val - m) / sqrt(v + pc.epsilon);
+    if (isnan(norm) || isinf(norm)) norm = 0.0;
+    norm = clamp(norm, -100.0, 100.0);
+    x_hat[idx] = norm;
+
+    float y_val = g * norm + b;
+    if (isnan(y_val) || isinf(y_val)) y_val = b;
+#ifdef USE_FP16
+    y_val = clamp(y_val, -65504.0, 65504.0);
+    Y[idx] = float16_t(y_val);
+#else
+    Y[idx] = y_val;
+#endif
+}

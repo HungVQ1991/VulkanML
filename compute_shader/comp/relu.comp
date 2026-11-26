@@ -1,0 +1,32 @@
+#version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#endif
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+#ifdef USE_FP16
+layout(std430, binding = 0) readonly buffer Buffer_A { float16_t data_a[]; };
+layout(std430, binding = 1) writeonly buffer Buffer_C { float16_t data_c[]; };
+#else
+layout(std430, binding = 0) readonly buffer Buffer_A { float data_a[]; };
+layout(std430, binding = 1) writeonly buffer Buffer_C { float data_c[]; };
+#endif
+
+layout(push_constant) uniform Relu_Dimensions {
+    uint total_elements;
+} dims;
+
+void main() {
+    uint elem_idx = (gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 256u + gl_LocalInvocationID.x;
+    if (elem_idx < dims.total_elements) {
+#ifdef USE_FP16
+        float16_t val = data_a[elem_idx];
+        data_c[elem_idx] = max(float16_t(0.0), val);
+#else
+        float val = data_a[elem_idx];
+        data_c[elem_idx] = max(0.0, val);
+#endif
+    }
+}

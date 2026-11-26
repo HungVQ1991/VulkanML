@@ -1,0 +1,98 @@
+#version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#endif
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+#ifdef USE_FP16
+layout(set = 0, binding = 0) readonly buffer Input_Buffer { float16_t input_data[]; };
+layout(set = 0, binding = 1) readonly buffer Weight_Buffer { float16_t weight_data[]; };
+layout(set = 0, binding = 2) readonly buffer Bias_Buffer { float16_t bias_data[]; };
+layout(set = 0, binding = 3) writeonly buffer Output_Buffer { float16_t output_data[]; };
+#else
+layout(set = 0, binding = 0) readonly buffer Input_Buffer { float input_data[]; };
+layout(set = 0, binding = 1) readonly buffer Weight_Buffer { float weight_data[]; };
+layout(set = 0, binding = 2) readonly buffer Bias_Buffer { float bias_data[]; };
+layout(set = 0, binding = 3) writeonly buffer Output_Buffer { float output_data[]; };
+#endif
+
+layout(push_constant) uniform Push_Constants {
+    uint batch_size;
+    uint in_h;
+    uint in_w;
+    uint in_c;
+    uint out_h;
+    uint out_w;
+    uint out_c;
+    uint kernel_size;
+    uint stride;
+    uint padding;
+} params;
+
+void main() {
+    uint out_c_idx = gl_GlobalInvocationID.x;
+    uint out_w_idx = gl_GlobalInvocationID.y;
+    uint n_out_h_idx = gl_GlobalInvocationID.z;
+
+    if (out_c_idx >= params.out_c || out_w_idx >= params.out_w || n_out_h_idx >= params.batch_size * params.out_h) {
+        return;
+    }
+
+    uint n_idx = n_out_h_idx / params.out_h;
+    uint out_h_idx = n_out_h_idx % params.out_h;
+
+#ifdef USE_FP16
+    float sum = float(bias_data[out_c_idx]);
+#else
+    float sum = bias_data[out_c_idx];
+#endif
+
+    uint in_row_stride = params.in_w * params.in_c;
+    uint in_batch_stride = params.in_h * in_row_stride;
+    uint w_kc_stride = params.in_c * params.out_c;
+    uint n_in_base = n_idx * in_batch_stride;
+
+    for (uint ky = 0; ky < params.kernel_size; ky++) {
+        int in_y = int(out_h_idx * params.stride + ky) - int(params.padding);
+        if (in_y < 0 || in_y >= int(params.in_h)) {
+            continue;
+        }
+        uint in_y_base = n_in_base + uint(in_y) * in_row_stride;
+        uint ky_w_base = ky * params.kernel_size * w_kc_stride + out_c_idx;
+
+        for (uint kx = 0; kx < params.kernel_size; kx++) {
+            int in_x = int(out_w_idx * params.stride + kx) - int(params.padding);
+            if (in_x < 0 || in_x >= int(params.in_w)) {
+                continue;
+            }
+
+            uint in_idx = in_y_base + uint(in_x) * params.in_c;
+            uint w_idx = ky_w_base + kx * w_kc_stride;
+
+            for (uint in_c_idx = 0; in_c_idx < params.in_c; in_c_idx++) {
+#ifdef USE_FP16
+                sum += float(input_data[in_idx]) * float(weight_data[w_idx]);
+#else
+                sum += input_data[in_idx] * weight_data[w_idx];
+#endif
+                in_idx++;
+                w_idx += params.out_c;
+            }
+        }
+    }
+
+    uint out_row_stride = params.out_w * params.out_c;
+    uint out_batch_stride = params.out_h * out_row_stride;
+    uint out_idx = n_idx * out_batch_stride +
+                   out_h_idx * out_row_stride +
+                   out_w_idx * params.out_c +
+                   out_c_idx;
+
+#ifdef USE_FP16
+    output_data[out_idx] = float16_t(sum);
+#else
+    output_data[out_idx] = sum;
+#endif
+}

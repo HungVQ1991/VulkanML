@@ -1,0 +1,69 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer InMatrix   { float16_t data_in[]; };
+layout(std430, binding = 0) readonly buffer InMatrix4  { f16vec4   data_in4[]; };
+layout(std430, binding = 1) writeonly buffer OutY      { float16_t data_y[]; };
+layout(std430, binding = 1) writeonly buffer OutY4     { f16vec4   data_y4[]; };
+
+layout(push_constant) uniform Constants {
+    uint total_elements;
+    uint half_dim;
+} pcs;
+
+const float NEG_LOG2E = -1.44269504;
+
+float evalSwigluScalar(float a, float b) {
+    if (isnan(a) || isinf(a)) a = 0.0;
+    if (isnan(b) || isinf(b)) b = 0.0;
+    float sig_a = 1.0 / (1.0 + exp2(clamp(a, -85.0, 85.0) * NEG_LOG2E));
+    float y = (a * sig_a) * b;
+    if (isnan(y) || isinf(y)) y = 0.0;
+    return clamp(y, -65504.0, 65504.0);
+}
+
+vec4 evalSwigluVec4(vec4 a, vec4 b) {
+    if (isnan(a.x) || isinf(a.x)) a.x = 0.0;
+    if (isnan(a.y) || isinf(a.y)) a.y = 0.0;
+    if (isnan(a.z) || isinf(a.z)) a.z = 0.0;
+    if (isnan(a.w) || isinf(a.w)) a.w = 0.0;
+    if (isnan(b.x) || isinf(b.x)) b.x = 0.0;
+    if (isnan(b.y) || isinf(b.y)) b.y = 0.0;
+    if (isnan(b.z) || isinf(b.z)) b.z = 0.0;
+    if (isnan(b.w) || isinf(b.w)) b.w = 0.0;
+    vec4 sig_a = vec4(1.0) / (vec4(1.0) + exp2(clamp(a, vec4(-85.0), vec4(85.0)) * NEG_LOG2E));
+    vec4 y = (a * sig_a) * b;
+    if (isnan(y.x) || isinf(y.x)) y.x = 0.0;
+    if (isnan(y.y) || isinf(y.y)) y.y = 0.0;
+    if (isnan(y.z) || isinf(y.z)) y.z = 0.0;
+    if (isnan(y.w) || isinf(y.w)) y.w = 0.0;
+    return clamp(y, vec4(-65504.0), vec4(65504.0));
+}
+
+void main() {
+    if (pcs.half_dim == 0u) return;
+    uint wg_id = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
+    uint tid = wg_id * 256u + gl_LocalInvocationID.x;
+
+    if ((pcs.half_dim & 3u) == 0u) {
+        uint total_vecs = pcs.total_elements >> 2u;
+        if (tid >= total_vecs) return;
+
+        uint half_dim4 = pcs.half_dim >> 2u;
+        uint row = tid / half_dim4;
+        uint col4 = tid % half_dim4;
+        uint in_base4 = row * (half_dim4 * 2u) + col4;
+
+        vec4 y = evalSwigluVec4(vec4(data_in4[in_base4]), vec4(data_in4[in_base4 + half_dim4]));
+        data_y4[tid] = f16vec4(y);
+    } else {
+        if (tid >= pcs.total_elements) return;
+        uint row = tid / pcs.half_dim;
+        uint col = tid % pcs.half_dim;
+        uint in_base = row * (pcs.half_dim * 2u) + col;
+        data_y[tid] = float16_t(evalSwigluScalar(float(data_in[in_base]), float(data_in[in_base + pcs.half_dim])));
+    }
+}

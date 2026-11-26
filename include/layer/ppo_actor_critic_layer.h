@@ -21,308 +21,189 @@ private:
     std::vector<std::unique_ptr<ILayer>> actor;
     std::vector<std::unique_ptr<ILayer>> critic;
 
-    std::uint64_t actor_output_dimension = 0;
-    Matrix input_matrix;
-    Matrix output_matrix;
-    Matrix actor_output_matrix;
-    Matrix critic_output_matrix;
-    Matrix current_actor;
-    Matrix current_critic;
-    Matrix actor_gradient;
-    Matrix critic_gradient;
-    Matrix actor_input_gradient;
-    Matrix critic_input_gradient;
-    Matrix input_gradient;
+    uint64_t actor_output_dimension = 0;
+    Tensor input_tensor;
+    Tensor output_tensor;
+    Tensor actor_output_tensor;
+    Tensor critic_output_tensor;
+    Tensor current_actor;
+    Tensor current_critic;
+    Tensor actor_gradient;
+    Tensor critic_gradient;
+    Tensor actor_input_gradient;
+    Tensor critic_input_gradient;
+    Tensor input_gradient_tensor;
 
     bool is_forward_completed = false;
     Execution_Target execution_target = Execution_Target::CPU;
 
 public:
-    PPO_Actor_Critic_Layer(std::uint64_t _actor_output_dimension, Execution_Target _execution_target = Execution_Target::CPU)
-        : actor_output_dimension(_actor_output_dimension),
-          input_matrix(0, 0, _execution_target),
-          output_matrix(0, 0, _execution_target),
-          actor_output_matrix(0, 0, _execution_target),
-          critic_output_matrix(0, 0, _execution_target),
-          current_actor(0, 0, _execution_target),
-          current_critic(0, 0, _execution_target),
-          actor_gradient(0, 0, _execution_target),
-          critic_gradient(0, 0, _execution_target),
-          actor_input_gradient(0, 0, _execution_target),
-          critic_input_gradient(0, 0, _execution_target),
-          input_gradient(0, 0, _execution_target),
-          is_forward_completed(false),
-          execution_target(_execution_target)
-    {
-    }
+    using ILayer::forward;
+    PPO_Actor_Critic_Layer(uint64_t _actor_output_dimension, Execution_Target _execution_target = Execution_Target::CPU);
 
     ~PPO_Actor_Critic_Layer() noexcept override = default;
 
     template <std::derived_from<ILayer> Layer_Type_T, typename... Args>
-    Layer_Type_T &addActorLayer(Args &&...args)
+    Layer_Type_T& addActorLayer(Args &&...args)
     {
         auto new_layer = std::make_unique<Layer_Type_T>(std::forward<Args>(args)...);
-        Layer_Type_T &layer_reference = *new_layer;
-        actor.push_back(std::move(new_layer));
+        Layer_Type_T& layer_reference = *new_layer;
+        addActorLayer(std::move(new_layer));
         return layer_reference;
     }
 
     template <std::derived_from<ILayer> Layer_Type_T, typename... Args>
-    Layer_Type_T &addCriticLayer(Args &&...args)
+    Layer_Type_T& addCriticLayer(Args &&...args)
     {
         auto new_layer = std::make_unique<Layer_Type_T>(std::forward<Args>(args)...);
-        Layer_Type_T &layer_reference = *new_layer;
-        critic.push_back(std::move(new_layer));
+        Layer_Type_T& layer_reference = *new_layer;
+        addCriticLayer(std::move(new_layer));
         return layer_reference;
     }
-
-    void addActorLayer(std::unique_ptr<ILayer> _layer)
+    void addActorLayer(std::unique_ptr<ILayer> _layer);
+    void addCriticLayer(std::unique_ptr<ILayer> _layer);
+    Tensor forward(const Tensor& _input_tensor) override;
+    Tensor forward(const Tensor& _batched_input, const std::vector<Tensor>& _batched_params) const override;
+    std::unique_ptr<ILayer> clone() const override;
+    Tensor backward(const Tensor& _output_gradient) override;
+    void resetGradient() override;
+    void resetGradients() override;
+    bool supportsStaticGraph() const noexcept override
     {
-        actor.push_back(std::move(_layer));
-    }
-
-    void addCriticLayer(std::unique_ptr<ILayer> _layer)
-    {
-        critic.push_back(std::move(_layer));
-    }
-
-    void setExecutionTarget(Execution_Target _new_execution_target) override
-    {
-        if (_new_execution_target == execution_target)
+        for (const auto &layer : actor)
         {
-            return;
+            if (layer && !layer->supportsStaticGraph()) return false;
         }
-
-        logChangeExecutionTarget(_new_execution_target);
-        execution_target = _new_execution_target;
-
-        for (auto &layer : actor)
+        for (const auto &layer : critic)
         {
-            layer->setExecutionTarget(_new_execution_target);
+            if (layer && !layer->supportsStaticGraph()) return false;
         }
-        for (auto &layer : critic)
-        {
-            layer->setExecutionTarget(_new_execution_target);
-        }
-
-        input_matrix.setExecutionTarget(_new_execution_target);
-        output_matrix.setExecutionTarget(_new_execution_target);
-        actor_output_matrix.setExecutionTarget(_new_execution_target);
-        critic_output_matrix.setExecutionTarget(_new_execution_target);
-        current_actor.setExecutionTarget(_new_execution_target);
-        current_critic.setExecutionTarget(_new_execution_target);
-        actor_gradient.setExecutionTarget(_new_execution_target);
-        critic_gradient.setExecutionTarget(_new_execution_target);
-        actor_input_gradient.setExecutionTarget(_new_execution_target);
-        critic_input_gradient.setExecutionTarget(_new_execution_target);
-        input_gradient.setExecutionTarget(_new_execution_target);
-    }
-
-    void setTrainingMode(bool _is_training) override
-    {
-        for (auto &layer : actor)
-        {
-            layer->setTrainingMode(_is_training);
-        }
-        for (auto &layer : critic)
-        {
-            layer->setTrainingMode(_is_training);
-        }
-    }
-
-    Matrix forward(const Matrix &_input_matrix) override
-    {
-        input_matrix = _input_matrix;
-
-        current_actor = input_matrix;
-        for (auto &layer : actor)
-        {
-            current_actor = layer->forward(current_actor);
-        }
-        actor_output_matrix = current_actor;
-
-        current_critic = input_matrix;
-        for (auto &layer : critic)
-        {
-            current_critic = layer->forward(current_critic);
-        }
-        critic_output_matrix = current_critic;
-
-        actor_output_matrix.concatenateCollumns(critic_output_matrix, output_matrix);
-
-        is_forward_completed = true;
-        return output_matrix;
-    }
-
-    Matrix backward(const Matrix &_output_gradient) override
-    {
-        if (!is_forward_completed)
-        {
-            Logger::logMessage(Input_Format{"PPO_Actor_Critic_Layer::backward: Backward called before forward"},
-                               Log_Level::LOG_ERROR,
-                               true,
-                               0,
-                               Log_Feature::BACKWARD_PROPAGATION);
-            throw std::logic_error("Backward called before forward");
-        }
-
-        if (_output_gradient.getColumns() <= actor_output_dimension || _output_gradient.getRows() != input_matrix.getRows())
-        {
-            Logger::logMessage(Input_Format{"PPO_Actor_Critic_Layer::backward: Output gradient dimension mismatch"},
-                               Log_Level::LOG_ERROR,
-                               true,
-                               0,
-                               Log_Feature::BACKWARD_PROPAGATION);
-            throw std::invalid_argument("Output gradient dimension mismatch");
-        }
-
-        _output_gradient.splitCollumns(static_cast<std::size_t>(actor_output_dimension), actor_gradient, critic_gradient);
-
-        Matrix current_actor_gradient = actor_gradient;
-        for (auto it = actor.rbegin(); it != actor.rend(); ++it)
-        {
-            current_actor_gradient = (*it)->backward(current_actor_gradient);
-        }
-        actor_input_gradient = current_actor_gradient;
-
-        Matrix current_critic_gradient = critic_gradient;
-        for (auto it = critic.rbegin(); it != critic.rend(); ++it)
-        {
-            current_critic_gradient = (*it)->backward(current_critic_gradient);
-        }
-        critic_input_gradient = current_critic_gradient;
-
-        actor_input_gradient.add(critic_input_gradient, input_gradient);
-        return input_gradient;
-    }
-
-    void resetGradient() override
-    {
-        is_forward_completed = false;
-        for (auto &layer : actor)
-        {
-            layer->resetGradient();
-        }
-        for (auto &layer : critic)
-        {
-            layer->resetGradient();
-        }
-    }
-
-    bool hasParameters() const noexcept override
-    {
         return true;
     }
+    void prepareInference() override;
+    void quantizeToTernary() override;
+    void dequantizeFromTernary() override;
+    [[nodiscard]] bool isTernary() const noexcept override;
+    void snapshotNonTrainableState(std::vector<std::vector<float>> &_out) const override;
+    void restoreNonTrainableState(const std::vector<std::vector<float>> &_in, size_t &_cursor) override;
+    void saveConfiguration(std::ofstream& _output_file_stream) const override;
+    void saveInference(std::ofstream& _output_file_stream) const override;
+    void loadInference(std::ifstream& _input_file_stream) override;
+    void saveCheckpoint(std::ofstream& _output_file_stream) const override;
+    void loadCheckpoint(std::ifstream& _input_file_stream) override;
+    std::function<float(std::mt19937&)> getPopulationParameterInitializer(size_t param_index) const override;
+    std::vector<float> getPopulationParameter(size_t param_index) const override;
+    std::vector<std::pair<Tensor*, Tensor*>> getParametersAndGradients() override;
+    std::vector<const Tensor*> getNoDecayParameters() const override;
+    void setMixedPrecision(bool _enable) noexcept override;
+    void invalidateWeightCache() noexcept override;
 
-    Layer_Type getLayerType() const noexcept override
+    std::vector<bool> getPopulationParameterIsEvolvable() const override
     {
-        return Layer_Type::PPO_ACTOR_CRITIC;
+        std::vector<bool> total_evolvable;
+        for (const auto& layer : actor)
+        {
+            if (!layer) continue;
+            auto evolvable = layer->getPopulationParameterIsEvolvable();
+            total_evolvable.insert(total_evolvable.end(), evolvable.begin(), evolvable.end());
+        }
+        for (const auto& layer : critic)
+        {
+            if (!layer) continue;
+            auto evolvable = layer->getPopulationParameterIsEvolvable();
+            total_evolvable.insert(total_evolvable.end(), evolvable.begin(), evolvable.end());
+        }
+        return total_evolvable;
     }
-
-    Matrix getInput() override
+    std::vector<Shape> getPopulationParameterDims() const override
     {
-        return input_matrix;
+        std::vector<Shape> total_dims;
+        for (const auto& layer : actor)
+        {
+            if (!layer) continue;
+            auto dims = layer->getPopulationParameterDims();
+            total_dims.insert(total_dims.end(), dims.begin(), dims.end());
+        }
+        for (const auto& layer : critic)
+        {
+            if (!layer) continue;
+            auto dims = layer->getPopulationParameterDims();
+            total_dims.insert(total_dims.end(), dims.begin(), dims.end());
+        }
+        return total_dims;
     }
+    const std::vector<std::unique_ptr<ILayer>>& getActor() const noexcept;
+    const std::vector<std::unique_ptr<ILayer>>& getCritic() const noexcept;
+    const Tensor& getCriticInputGradient() const noexcept;
+    const Tensor& getActorInputGradient() const noexcept;
 
-    Matrix getOutput() override
+    const Tensor& getInputGradient() const noexcept { return input_gradient_tensor; }
+    const Tensor& getCriticOutput() const noexcept;
+    const Tensor& getActorOutput() const noexcept;
+    const Tensor& getCurrentCritic() const noexcept;
+    const Tensor& getCurrentActor() const noexcept;
+    const Tensor& getCriticGradient() const noexcept;
+    const Tensor& getActorGradient() const noexcept;
+
+    const Tensor& getOutput() const override { return output_tensor; }
+    const Tensor& getInput() const override { return input_tensor; }
+    uint64_t getActorOutputDimension() const noexcept;
+
+    Layer_Type getLayerType() const noexcept override { return Layer_Type::PPO_ACTOR_CRITIC; }
+    Execution_Target getExecutionTarget() const override { return execution_target; }
+    bool supportsPopulationBatch() const noexcept override
     {
-        return output_matrix;
+        for (const auto& layer : actor)
+        {
+            if (layer && !layer->supportsPopulationBatch())
+            {
+                return false;
+            }
+        }
+        for (const auto& layer : critic)
+        {
+            if (layer && !layer->supportsPopulationBatch())
+            {
+                return false;
+            }
+        }
+        return true;
     }
-
-    Matrix getActorOutput() const
+    bool isForwardCompleted() const noexcept { return is_forward_completed; }
+    bool hasParameters() const noexcept override
     {
-        return actor_output_matrix;
+        for (const auto& layer : actor)
+        {
+            if (layer && layer->hasParameters())
+            {
+                return true;
+            }
+        }
+        for (const auto& layer : critic)
+        {
+            if (layer && layer->hasParameters())
+            {
+                return true;
+            }
+        }
+        return false;
     }
+    void setPopulationParameter(size_t param_index, std::vector<float> flat_data) override;
+    void setCriticInputGradient(const Tensor& _tensor);
+    void setActorInputGradient(const Tensor& _tensor);
 
-    Matrix getCriticOutput() const
-    {
-        return critic_output_matrix;
-    }
+    void setInputGradient(const Tensor& _tensor) { input_gradient_tensor = _tensor; }
+    void setCriticGradient(const Tensor& _tensor);
+    void setActorGradient(const Tensor& _tensor);
+    void setCriticOutput(const Tensor& _tensor);
+    void setActorOutput(const Tensor& _tensor);
 
-    Execution_Target getExecutionTarget() const override
-    {
-        return execution_target;
-    }
+    void setOutput(const Tensor& _tensor) { output_tensor = _tensor; }
+    void setInput(const Tensor& _tensor) { input_tensor = _tensor; }
+    void setActorOutputDimension(uint64_t _dimension) noexcept;
+    void setExecutionTarget(Execution_Target _new_execution_target) override;
+    void setAccumulated(bool _is_accumulated) noexcept override;
+    void setTrainingMode(bool _is_training) override;
+    void setIsForwardCompleted(bool _is_completed) noexcept;
 
-    std::vector<std::pair<Matrix *, Matrix *>> getParametersAndGradients() override
-    {
-        std::vector<std::pair<Matrix *, Matrix *>> all_parameters;
-        for (auto &layer : actor)
-        {
-            auto params = layer->getParametersAndGradients();
-            all_parameters.insert(all_parameters.end(), params.begin(), params.end());
-        }
-        for (auto &layer : critic)
-        {
-            auto params = layer->getParametersAndGradients();
-            all_parameters.insert(all_parameters.end(), params.begin(), params.end());
-        }
-        return all_parameters;
-    }
-
-    void saveConfiguration(std::ofstream &_output_file_stream) const override
-    {
-        _output_file_stream.write(reinterpret_cast<const char *>(&actor_output_dimension), sizeof(actor_output_dimension));
-        std::uint64_t actor_count = static_cast<std::uint64_t>(actor.size());
-        std::uint64_t critic_count = static_cast<std::uint64_t>(critic.size());
-        _output_file_stream.write(reinterpret_cast<const char *>(&actor_count), sizeof(actor_count));
-        _output_file_stream.write(reinterpret_cast<const char *>(&critic_count), sizeof(critic_count));
-
-        for (const auto &layer : actor)
-        {
-            layer->saveConfiguration(_output_file_stream);
-        }
-        for (const auto &layer : critic)
-        {
-            layer->saveConfiguration(_output_file_stream);
-        }
-    }
-
-    void saveInference(std::ofstream &_output_file_stream) const override
-    {
-        for (const auto &layer : actor)
-        {
-            layer->saveInference(_output_file_stream);
-        }
-        for (const auto &layer : critic)
-        {
-            layer->saveInference(_output_file_stream);
-        }
-    }
-
-    void loadInference(std::ifstream &_input_file_stream) override
-    {
-        for (auto &layer : actor)
-        {
-            layer->loadInference(_input_file_stream);
-        }
-        for (auto &layer : critic)
-        {
-            layer->loadInference(_input_file_stream);
-        }
-    }
-
-    void saveCheckpoint(std::ofstream &_output_file_stream) const override
-    {
-        for (const auto &layer : actor)
-        {
-            layer->saveCheckpoint(_output_file_stream);
-        }
-        for (const auto &layer : critic)
-        {
-            layer->saveCheckpoint(_output_file_stream);
-        }
-    }
-
-    void loadCheckpoint(std::ifstream &_input_file_stream) override
-    {
-        for (auto &layer : actor)
-        {
-            layer->loadCheckpoint(_input_file_stream);
-        }
-        for (auto &layer : critic)
-        {
-            layer->loadCheckpoint(_input_file_stream);
-        }
-    }
 };

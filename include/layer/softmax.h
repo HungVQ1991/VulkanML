@@ -15,121 +15,51 @@
 class Softmax_Layer : public ILayer
 {
 private:
-    Matrix input_matrix;
-    Matrix cached_output_matrix;
-    Matrix input_gradient;
+    Tensor input_tensor;
+    Tensor output_tensor;
+    Tensor input_gradient_tensor;
+    Tensor input_fp32;
+    Tensor grad_fp32;
+    Tensor input_grad_fp32;
     bool is_fused_with_loss = false;
+    bool is_forward_completed = false;
     Execution_Target execution_target = Execution_Target::CPU;
 
 public:
-    explicit Softmax_Layer(bool _is_fused_with_loss = false, Execution_Target _execution_target = Execution_Target::CPU)
-        : input_matrix(0, 0, _execution_target),
-          cached_output_matrix(0, 0, _execution_target),
-          input_gradient(0, 0, _execution_target),
-          is_fused_with_loss(_is_fused_with_loss),
-          execution_target(_execution_target)
-    {
-    }
+    using ILayer::forward;
+    explicit Softmax_Layer(bool _is_fused_with_loss = false, Execution_Target _execution_target = Execution_Target::CPU);
 
     ~Softmax_Layer() noexcept override = default;
+    Tensor forward(const Tensor &_input_tensor) override;
+    Tensor forward(const Tensor& _batched_input, const std::vector<Tensor>& _batched_params) const override;
+    std::unique_ptr<ILayer> clone() const override;
+    Tensor backward(const Tensor& _output_gradient) override;
+    void resetGradient() override;
+    void saveConfiguration(std::ofstream &_output_file_stream) const override;
+    void saveInference(std::ofstream &_output_file_stream) const override;
+    void loadInference(std::ifstream &_input_file_stream) override;
+    void saveCheckpoint(std::ofstream &_output_file_stream) const override;
+    void loadCheckpoint(std::ifstream &_input_file_stream) override;
 
-    Matrix forward(const Matrix &_input_matrix) override
-    {
-        Logger::logMessage(Input_Format{"Softmax_Layer::forward: rows={}, columns={}",
-                                        _input_matrix.getRows(),
-                                        _input_matrix.getColumns()},
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           1,
-                           Log_Feature::ACTIVATION_COMPUTE | Log_Feature::FORWARD_EVALUATION);
-
-        input_matrix = _input_matrix;
-        input_matrix.softmax(cached_output_matrix);
-        return cached_output_matrix;
-    }
-
-    Matrix backward(const Matrix &_output_gradient) override
-    {
-        Logger::logMessage(Input_Format{"Softmax_Layer::backward: output_gradient rows={}, columns={}, is_fused_with_loss={}",
-                                        _output_gradient.getRows(),
-                                        _output_gradient.getColumns(),
-                                        is_fused_with_loss},
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           1,
-                           Log_Feature::ACTIVATION_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
-
-        logBufferAddress(&input_matrix, "input_matrix (Backward)");
-        if (is_fused_with_loss)
-        {
-            return _output_gradient;
-        }
-
-        cached_output_matrix.softmaxBackward(_output_gradient, input_gradient);
-        return input_gradient;
-    }
-
-    void resetGradient() override
-    {
-    }
-
-    bool hasParameters() const noexcept override
-    {
-        return false;
-    }
-
-    Layer_Type getLayerType() const noexcept override
-    {
-        return Layer_Type::SOFTMAX;
-    }
-
-    Matrix getInput() override
-    {
-        return input_matrix;
-    }
-
-    Matrix getOutput() override
-    {
-        return cached_output_matrix;
-    }
-
+    std::function<float(std::mt19937&)> getPopulationParameterInitializer(size_t) const override { return [](std::mt19937&) { return 0.0f; }; }
+    std::vector<Shape> getPopulationParameterDims() const override { return {}; }
+    std::vector<bool> getPopulationParameterIsEvolvable() const override { return {}; }
+    const Tensor &getInputGradient() const noexcept { return input_gradient_tensor; }
+    const Tensor &getInput() const override { return input_tensor; }
+    const Tensor &getOutput() const override { return output_tensor; }
     Execution_Target getExecutionTarget() const override { return execution_target; }
+    Layer_Type getLayerType() const noexcept override { return Layer_Type::SOFTMAX; }
+    bool supportsPopulationBatch() const override { return true; }
+    bool isForwardCompleted() const noexcept { return is_forward_completed; }
+    bool isFusedWithLoss() const noexcept;
 
-    bool isFusedWithLoss() const noexcept
-    {
-        return is_fused_with_loss;
-    }
+    bool hasParameters() const noexcept override { return false; }
+    void setPopulationParameter(size_t param_index, std::vector<float> flat_data) override;
 
-    void setFusedWithLoss(bool _is_fused_with_loss) noexcept
-    {
-        is_fused_with_loss = _is_fused_with_loss;
-    }
+    void setInputGradient(const Tensor &_tensor) { input_gradient_tensor = _tensor; }
+    void setInput(const Tensor &_tensor) { input_tensor = _tensor; }
+    void setOutput(const Tensor &_tensor) { output_tensor = _tensor; }
+    void setExecutionTarget(Execution_Target _new_execution_target) override;
+    void setIsForwardCompleted(bool _is_completed) noexcept;
 
-    void saveConfiguration(std::ofstream &_output_file_stream) const override
-    {
-        std::uint8_t fused_value = is_fused_with_loss ? 1 : 0;
-        _output_file_stream.write(reinterpret_cast<const char *>(&fused_value), sizeof(fused_value));
-    }
-
-    void saveInference(std::ofstream &_output_file_stream) const override {}
-    void loadInference(std::ifstream &_input_file_stream) override {}
-    void saveCheckpoint(std::ofstream &_output_file_stream) const override {}
-    void loadCheckpoint(std::ifstream &_input_file_stream) override {}
-
-    void setExecutionTarget(Execution_Target _new_execution_target) override
-    {
-        if (execution_target == _new_execution_target)
-        {
-            return;
-        }
-
-        logChangeExecutionTarget(_new_execution_target);
-
-        execution_target = _new_execution_target;
-        input_matrix.setExecutionTarget(_new_execution_target);
-        cached_output_matrix.setExecutionTarget(_new_execution_target);
-        input_gradient.setExecutionTarget(_new_execution_target);
-    }
 };
-
-using Softmax = Softmax_Layer;

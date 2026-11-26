@@ -1,0 +1,85 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer GradOutBuffer { float grad_out[]; };
+layout(std430, binding = 1) readonly buffer InBuffer { float in_data[]; };
+layout(std430, binding = 2) readonly buffer InvRmsBuffer { float inv_rms_data[]; };
+layout(std430, binding = 3) buffer GradGammaBuffer { float grad_gamma[]; };
+
+layout(push_constant) uniform Constants {
+    uint batch_size;
+    uint dim;
+    uint accumulate;
+} pcs;
+
+shared float s_sum[16][17];
+
+void main() {
+    if (pcs.dim == 0u || pcs.batch_size == 0u) return;
+
+    uint lx = gl_LocalInvocationID.x;
+    uint ly = gl_LocalInvocationID.y;
+    uint c = gl_WorkGroupID.x * 16u + lx;
+
+    float sum = 0.0;
+    if (c < pcs.dim) {
+        uint dim = pcs.dim;
+        uint batch = pcs.batch_size;
+        uint stride16 = 16u * dim;
+        uint stride64 = 64u * dim;
+
+        float s0 = 0.0;
+        float s1 = 0.0;
+        float s2 = 0.0;
+        float s3 = 0.0;
+
+        uint r = ly;
+        uint offset = r * dim + c;
+        for (; r + 48u < batch; r += 64u) {
+            float inv0 = inv_rms_data[r];
+            float inv1 = inv_rms_data[r + 16u];
+            float inv2 = inv_rms_data[r + 32u];
+            float inv3 = inv_rms_data[r + 48u];
+
+            uint o1 = offset + stride16;
+            uint o2 = o1 + stride16;
+            uint o3 = o2 + stride16;
+
+            s0 = fma(grad_out[offset], in_data[offset] * inv0, s0);
+            s1 = fma(grad_out[o1],     in_data[o1]     * inv1, s1);
+            s2 = fma(grad_out[o2],     in_data[o2]     * inv2, s2);
+            s3 = fma(grad_out[o3],     in_data[o3]     * inv3, s3);
+
+            offset += stride64;
+        }
+        for (; r < batch; r += 16u) {
+            float inv0 = inv_rms_data[r];
+            s0 = fma(grad_out[offset], in_data[offset] * inv0, s0);
+            offset += stride16;
+        }
+        sum = (s0 + s1) + (s2 + s3);
+    }
+
+    s_sum[ly][lx] = sum;
+    barrier();
+
+    if (ly < 8u) {
+        s_sum[ly][lx] += s_sum[ly + 8u][lx];
+    }
+    barrier();
+
+    if (ly < 4u) {
+        s_sum[ly][lx] += s_sum[ly + 4u][lx];
+    }
+    barrier();
+
+    if (ly == 0u && c < pcs.dim) {
+        float total = (s_sum[0][lx] + s_sum[1][lx]) + (s_sum[2][lx] + s_sum[3][lx]);
+        if (pcs.accumulate != 0u) {
+            grad_gamma[c] += total;
+        } else {
+            grad_gamma[c] = total;
+        }
+    }
+}

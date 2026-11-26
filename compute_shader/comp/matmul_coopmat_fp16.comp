@@ -1,0 +1,226 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_KHR_shader_subgroup_basic : require
+
+#define TILE_M 64u
+#define TILE_N 64u
+#define TILE_K 32u
+#define SMEM_A_STRIDE 5u
+#define SMEM_B_STRIDE 9u
+
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer Matrix_A    { float16_t data_a[]; };
+layout(std430, binding = 0) readonly buffer Matrix_A_V4 { uvec4     data_a4[]; };
+layout(std430, binding = 1) readonly buffer Matrix_B    { float16_t data_b[]; };
+layout(std430, binding = 1) readonly buffer Matrix_B_V4 { uvec4     data_b4[]; };
+layout(std430, binding = 2) writeonly buffer Matrix_C   { float16_t data_c[]; };
+
+layout(push_constant) uniform Matrix_Dimensions {
+    uint batch_count;
+    uint rows_a;
+    uint cols_a;
+    uint cols_b;
+    uint broadcast_b;
+    uint batch_rank;
+    uint pad0;
+    uint pad1;
+    uvec4 batch_dims;
+    uvec4 a_batch_strides;
+    uvec4 b_batch_strides;
+} dims;
+
+shared uvec4     smem_a[TILE_M * SMEM_A_STRIDE];
+shared uvec4     smem_b[TILE_K * SMEM_B_STRIDE];
+shared float16_t smem_epilogue[4u * 256u];
+
+uvec4 pack8FromA(uint batch_off, uint gr, uint gc, uint rows, uint cols) {
+    if (gr >= rows || gc >= cols) return uvec4(0u);
+    uint row_off = batch_off + gr * cols;
+    float h0 = float(data_a[row_off + gc]);
+    float h1 = (gc + 1u < cols) ? float(data_a[row_off + gc + 1u]) : 0.0;
+    float h2 = (gc + 2u < cols) ? float(data_a[row_off + gc + 2u]) : 0.0;
+    float h3 = (gc + 3u < cols) ? float(data_a[row_off + gc + 3u]) : 0.0;
+    float h4 = (gc + 4u < cols) ? float(data_a[row_off + gc + 4u]) : 0.0;
+    float h5 = (gc + 5u < cols) ? float(data_a[row_off + gc + 5u]) : 0.0;
+    float h6 = (gc + 6u < cols) ? float(data_a[row_off + gc + 6u]) : 0.0;
+    float h7 = (gc + 7u < cols) ? float(data_a[row_off + gc + 7u]) : 0.0;
+    return uvec4(
+        packHalf2x16(vec2(h0, h1)),
+        packHalf2x16(vec2(h2, h3)),
+        packHalf2x16(vec2(h4, h5)),
+        packHalf2x16(vec2(h6, h7))
+    );
+}
+
+uvec4 pack8FromB(uint batch_off, uint gr, uint gc, uint rows, uint cols) {
+    if (gr >= rows || gc >= cols) return uvec4(0u);
+    uint row_off = batch_off + gr * cols;
+    float h0 = float(data_b[row_off + gc]);
+    float h1 = (gc + 1u < cols) ? float(data_b[row_off + gc + 1u]) : 0.0;
+    float h2 = (gc + 2u < cols) ? float(data_b[row_off + gc + 2u]) : 0.0;
+    float h3 = (gc + 3u < cols) ? float(data_b[row_off + gc + 3u]) : 0.0;
+    float h4 = (gc + 4u < cols) ? float(data_b[row_off + gc + 4u]) : 0.0;
+    float h5 = (gc + 5u < cols) ? float(data_b[row_off + gc + 5u]) : 0.0;
+    float h6 = (gc + 6u < cols) ? float(data_b[row_off + gc + 6u]) : 0.0;
+    float h7 = (gc + 7u < cols) ? float(data_b[row_off + gc + 7u]) : 0.0;
+    return uvec4(
+        packHalf2x16(vec2(h0, h1)),
+        packHalf2x16(vec2(h2, h3)),
+        packHalf2x16(vec2(h4, h5)),
+        packHalf2x16(vec2(h6, h7))
+    );
+}
+
+void main() {
+    uint batch = gl_WorkGroupID.z;
+    if (batch >= dims.batch_count) return;
+
+    uint tile_row = gl_WorkGroupID.y * TILE_M;
+    uint tile_col = gl_WorkGroupID.x * TILE_N;
+    if (tile_row >= dims.rows_a || tile_col >= dims.cols_b) return;
+
+    uint tid       = gl_LocalInvocationID.x;
+    uint wave_id   = tid >> 5u;
+    uint lane_id   = tid & 31u;
+    uint wave_m    = wave_id >> 1u;
+    uint wave_n    = wave_id & 1u;
+    uint wave_base = wave_id * 256u;
+
+    uint rows_a = dims.rows_a;
+    uint cols_a = dims.cols_a;
+    uint cols_b = dims.cols_b;
+
+    uint a_batch_idx = batch;
+    uint b_batch_idx = (dims.broadcast_b == 1u) ? 0u : batch;
+    if (dims.batch_rank > 0u) {
+        a_batch_idx = 0u;
+        b_batch_idx = 0u;
+        uint rem = batch;
+        for (int d = int(dims.batch_rank) - 1; d >= 0; --d) {
+            uint dim_d = dims.batch_dims[d];
+            uint coord = rem % dim_d;
+            rem /= dim_d;
+            a_batch_idx += coord * dims.a_batch_strides[d];
+            b_batch_idx += coord * dims.b_batch_strides[d];
+        }
+    }
+
+    uint a_batch_off = a_batch_idx * rows_a * cols_a;
+    uint b_batch_off = b_batch_idx * cols_a * cols_b;
+    uint c_batch_off = batch * rows_a * cols_b;
+
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc[2][2];
+    acc[0][0] = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+    acc[0][1] = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+    acc[1][0] = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+    acc[1][1] = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+
+    bool a_vec_aligned = ((cols_a & 7u) == 0u);
+    bool b_vec_aligned = ((cols_b & 7u) == 0u);
+
+    uint ax_r0 = tid >> 2u;
+    uint ax_r1 = ax_r0 + 32u;
+    uint ax_c4 = tid & 3u;
+    uint ax_c  = ax_c4 * 8u;
+
+    uint bw_r0 = tid >> 3u;
+    uint bw_r1 = bw_r0 + 16u;
+    uint bw_c4 = tid & 7u;
+    uint bw_c  = bw_c4 * 8u;
+
+    for (uint k = 0u; k < cols_a; k += TILE_K) {
+        if (a_vec_aligned && (tile_row + TILE_M <= rows_a) && (k + TILE_K <= cols_a)) {
+            uint row_stride4 = cols_a >> 3u;
+            uint base4 = (a_batch_off >> 3u) + tile_row * row_stride4 + (k >> 3u);
+            smem_a[ax_r0 * SMEM_A_STRIDE + ax_c4] = data_a4[base4 + ax_r0 * row_stride4 + ax_c4];
+            smem_a[ax_r1 * SMEM_A_STRIDE + ax_c4] = data_a4[base4 + ax_r1 * row_stride4 + ax_c4];
+        } else if (a_vec_aligned) {
+            uint row_stride4 = cols_a >> 3u;
+            uint base4 = (a_batch_off >> 3u) + (k >> 3u);
+            bool k_in = ((k >> 3u) + ax_c4 < row_stride4);
+            uint gr0 = tile_row + ax_r0;
+            uint gr1 = tile_row + ax_r1;
+            smem_a[ax_r0 * SMEM_A_STRIDE + ax_c4] = (gr0 < rows_a && k_in) ? data_a4[base4 + gr0 * row_stride4 + ax_c4] : uvec4(0u);
+            smem_a[ax_r1 * SMEM_A_STRIDE + ax_c4] = (gr1 < rows_a && k_in) ? data_a4[base4 + gr1 * row_stride4 + ax_c4] : uvec4(0u);
+        } else {
+            smem_a[ax_r0 * SMEM_A_STRIDE + ax_c4] = pack8FromA(a_batch_off, tile_row + ax_r0, k + ax_c, rows_a, cols_a);
+            smem_a[ax_r1 * SMEM_A_STRIDE + ax_c4] = pack8FromA(a_batch_off, tile_row + ax_r1, k + ax_c, rows_a, cols_a);
+        }
+
+        if (b_vec_aligned && (k + TILE_K <= cols_a) && (tile_col + TILE_N <= cols_b)) {
+            uint row_stride4 = cols_b >> 3u;
+            uint base4 = (b_batch_off >> 3u) + k * row_stride4 + (tile_col >> 3u);
+            smem_b[bw_r0 * SMEM_B_STRIDE + bw_c4] = data_b4[base4 + bw_r0 * row_stride4 + bw_c4];
+            smem_b[bw_r1 * SMEM_B_STRIDE + bw_c4] = data_b4[base4 + bw_r1 * row_stride4 + bw_c4];
+        } else if (b_vec_aligned) {
+            uint row_stride4 = cols_b >> 3u;
+            uint base4 = (b_batch_off >> 3u) + (tile_col >> 3u);
+            bool n_in = ((tile_col >> 3u) + bw_c4 < row_stride4);
+            uint gk0 = k + bw_r0;
+            uint gk1 = k + bw_r1;
+            smem_b[bw_r0 * SMEM_B_STRIDE + bw_c4] = (gk0 < cols_a && n_in) ? data_b4[base4 + gk0 * row_stride4 + bw_c4] : uvec4(0u);
+            smem_b[bw_r1 * SMEM_B_STRIDE + bw_c4] = (gk1 < cols_a && n_in) ? data_b4[base4 + gk1 * row_stride4 + bw_c4] : uvec4(0u);
+        } else {
+            smem_b[bw_r0 * SMEM_B_STRIDE + bw_c4] = pack8FromB(b_batch_off, k + bw_r0, tile_col + bw_c, cols_a, cols_b);
+            smem_b[bw_r1 * SMEM_B_STRIDE + bw_c4] = pack8FromB(b_batch_off, k + bw_r1, tile_col + bw_c, cols_a, cols_b);
+        }
+
+        barrier();
+
+        for (uint k_sub = 0u; k_sub < 2u; ++k_sub) {
+            coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> matA0, matA1;
+            coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> matB0, matB1;
+
+            uint a_off0 = (wave_m * 32u)        * SMEM_A_STRIDE + k_sub * 2u;
+            uint a_off1 = (wave_m * 32u + 16u)  * SMEM_A_STRIDE + k_sub * 2u;
+            uint b_off0 = (k_sub * 16u) * SMEM_B_STRIDE + ((wave_n * 32u)        >> 3u);
+            uint b_off1 = (k_sub * 16u) * SMEM_B_STRIDE + ((wave_n * 32u + 16u)  >> 3u);
+
+            coopMatLoad(matA0, smem_a, a_off0, SMEM_A_STRIDE, gl_CooperativeMatrixLayoutRowMajor);
+            coopMatLoad(matA1, smem_a, a_off1, SMEM_A_STRIDE, gl_CooperativeMatrixLayoutRowMajor);
+            coopMatLoad(matB0, smem_b, b_off0, SMEM_B_STRIDE, gl_CooperativeMatrixLayoutRowMajor);
+            coopMatLoad(matB1, smem_b, b_off1, SMEM_B_STRIDE, gl_CooperativeMatrixLayoutRowMajor);
+
+            acc[0][0] = coopMatMulAdd(matA0, matB0, acc[0][0]);
+            acc[0][1] = coopMatMulAdd(matA0, matB1, acc[0][1]);
+            acc[1][0] = coopMatMulAdd(matA1, matB0, acc[1][0]);
+            acc[1][1] = coopMatMulAdd(matA1, matB1, acc[1][1]);
+        }
+
+        barrier();
+    }
+
+    for (uint wm = 0u; wm < 2u; ++wm) {
+        uint sub_row = tile_row + wave_m * 32u + wm * 16u;
+        if (sub_row >= rows_a) continue;
+        for (uint wn = 0u; wn < 2u; ++wn) {
+            uint sub_col = tile_col + wave_n * 32u + wn * 16u;
+            if (sub_col >= cols_b) continue;
+
+            coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> res;
+            res = coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(acc[wm][wn]);
+
+            if (b_vec_aligned && (sub_row + 16u <= rows_a) && (sub_col + 16u <= cols_b)) {
+                coopMatStore(res, data_c, c_batch_off + sub_row * cols_b + sub_col, cols_b, gl_CooperativeMatrixLayoutRowMajor);
+            } else {
+                coopMatStore(res, smem_epilogue, wave_base, 16u, gl_CooperativeMatrixLayoutRowMajor);
+                controlBarrier(gl_ScopeSubgroup, gl_ScopeSubgroup, gl_StorageSemanticsShared, gl_SemanticsAcquireRelease);
+                for (uint i = 0u; i < 8u; ++i) {
+                    uint idx = lane_id + i * 32u;
+                    uint lr = idx >> 4u;
+                    uint lc = idx & 15u;
+                    uint gr = sub_row + lr;
+                    uint gc = sub_col + lc;
+                    if (gr < rows_a && gc < cols_b) {
+                        data_c[c_batch_off + gr * cols_b + gc] = smem_epilogue[wave_base + idx];
+                    }
+                }
+                controlBarrier(gl_ScopeSubgroup, gl_ScopeSubgroup, gl_StorageSemanticsShared, gl_SemanticsAcquireRelease);
+            }
+        }
+    }
+}

@@ -1,12 +1,15 @@
 #pragma once
 
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <format>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -16,222 +19,153 @@
 
 class Adam_Optimizer : public IOptimizer
 {
-private:
+public:
     struct Parameter_State
     {
-        Matrix first_moment_matrix;
-        Matrix second_moment_matrix;
+        Tensor first_moment_matrix;
+        Tensor second_moment_matrix;
 
-        Parameter_State(std::size_t _rows, std::size_t _columns, Execution_Target _execution_target)
-            : first_moment_matrix(_rows, _columns, std::vector<float>(_rows * _columns, 0.0f), _execution_target),
-              second_moment_matrix(_rows, _columns, std::vector<float>(_rows * _columns, 0.0f), _execution_target)
+        Parameter_State(size_t _rows, size_t _columns, Execution_Target _execution_target)
+            : Parameter_State(Shape{_rows, _columns}, _execution_target)
         {
         }
 
-        Parameter_State(Matrix _first_moment, Matrix _second_moment)
+        Parameter_State(const Shape &_shape, Execution_Target _execution_target);
+
+        Parameter_State(Tensor _first_moment, Tensor _second_moment)
             : first_moment_matrix(std::move(_first_moment)),
               second_moment_matrix(std::move(_second_moment))
         {
         }
+
+        Parameter_State clone() const
+        {
+            return Parameter_State(first_moment_matrix.clone(), second_moment_matrix.clone());
+        }
+
+        const Tensor &getSecondMomentMatrix() const noexcept { return second_moment_matrix; }
+        const Tensor &getFirstMomentMatrix() const noexcept { return first_moment_matrix; }
+
+        void setSecondMomentMatrix(const Tensor &_matrix) { second_moment_matrix = _matrix; }
+        void setFirstMomentMatrix(const Tensor &_matrix) { first_moment_matrix = _matrix; }
     };
+
+private:
+    static constexpr uint64_t ADAM_CHECKPOINT_MAGIC_V2 = 0x4144414D56320001ULL;
 
     float learning_rate = 0.001f;
     float beta1 = 0.9f;
     float beta2 = 0.999f;
     float epsilon = 1e-8f;
     float max_gradient = 1.0f;
-    std::size_t timestep = 0;
+    float weight_decay = 0.0f;
+    size_t timestep = 0;
     ILearning_Rate *learning_rate_scheduler = nullptr;
+    std::weak_ptr<bool> scheduler_lifetime_token;
 
-    std::unordered_map<Matrix *, Parameter_State> parameter_states;
-    std::vector<Matrix *> parameter_order;
+    std::unordered_map<Tensor *, Parameter_State> parameter_states;
+    std::unordered_map<Tensor *, std::weak_ptr<bool>> parameter_tokens;
+    std::vector<Tensor *> parameter_order;
     std::vector<Parameter_State> loaded_states;
+    size_t loaded_state_cursor = 0;
+    std::vector<uint8_t> loaded_no_decay_flags;
+    std::unordered_set<const Tensor *> no_decay_parameters;
+    std::unordered_map<const Tensor *, std::weak_ptr<bool>> no_decay_tokens;
+    struct Backend_State;
+    std::unique_ptr<Backend_State> backend_state;
+    bool pending_gpu_overflow = false;
+    uint64_t config_generation = 0;
+
+    static void validateHyperparameters(float _lr, float _b1, float _b2, float _eps, float _max_grad, float _wd);
+    void latchCompletedGpuOverflows() noexcept;
 
 public:
     explicit Adam_Optimizer(float _learning_rate = 0.001f,
                             float _beta1 = 0.9f,
                             float _beta2 = 0.999f,
                             float _epsilon = 1e-8f,
-                            float _max_gradient = 1.0f)
-        : learning_rate(_learning_rate),
-          beta1(_beta1),
-          beta2(_beta2),
-          epsilon(_epsilon),
-          max_gradient(_max_gradient),
-          learning_rate_scheduler(nullptr)
-    {
-        if (learning_rate <= 0.0f)
-        {
-            Logger::logMessage("Adam_Optimizer::Adam_Optimizer: Initial learning rate is non-positive",
-                               Log_Level::LOG_WARNING,
-                               true,
-                               0,
-                               Log_Feature::OPTIMIZER_STEP);
-        }
-        Logger::logMessage(std::format("Adam_Optimizer::Adam_Optimizer: learning_rate={}, beta1={}, beta2={}, epsilon={}, max_gradient={}",
-                                       learning_rate,
-                                       beta1,
-                                       beta2,
-                                       epsilon,
-                                       max_gradient),
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::OPTIMIZER_STEP);
-    }
-
+                            float _max_gradient = 1.0f,
+                            float _weight_decay = 0.0f);
     explicit Adam_Optimizer(ILearning_Rate &_learning_rate_scheduler,
                             float _beta1 = 0.9f,
                             float _beta2 = 0.999f,
                             float _epsilon = 1e-8f,
-                            float _max_gradient = 1.0f)
-        : learning_rate(_learning_rate_scheduler.getCurrentRate()),
-          beta1(_beta1),
-          beta2(_beta2),
-          epsilon(_epsilon),
-          max_gradient(_max_gradient),
-          learning_rate_scheduler(&_learning_rate_scheduler)
+                            float _max_gradient = 1.0f,
+                            float _weight_decay = 0.0f);
+
+    Adam_Optimizer(const Adam_Optimizer &) = delete;
+    Adam_Optimizer &operator=(const Adam_Optimizer &) = delete;
+    Adam_Optimizer(Adam_Optimizer &&other) noexcept;
+    Adam_Optimizer &operator=(Adam_Optimizer &&other) noexcept;
+    ~Adam_Optimizer() noexcept override;
+    void step(const std::vector<std::pair<Tensor *, Tensor *>> &_parameter_gradient_pairs) override;
+    void stepDynamicParams(float _grad_scale = 1.0f) override;
+    void step(const std::vector<std::pair<Tensor *, Tensor *>> &_parameter_gradient_pairs, float _grad_scale) override;
+    void reset() override;
+    void saveCheckpoint(std::ofstream &_output_file_stream) const override;
+    void loadCheckpoint(std::ifstream &_input_file_stream, Execution_Target _execution_target = Execution_Target::CPU) override;
+
+    const std::unordered_map<Tensor *, Parameter_State> &getParameterStates() const noexcept { return parameter_states; }
+    const std::vector<Parameter_State> &getLoadedStates() const noexcept { return loaded_states; }
+    const std::vector<Tensor *> &getParameterOrder() const noexcept { return parameter_order; }
+    ILearning_Rate *getLearningRateScheduler() const noexcept override
     {
-        if (learning_rate <= 0.0f)
-        {
-            Logger::logMessage("Adam_Optimizer::Adam_Optimizer: Initial learning rate is non-positive",
-                               Log_Level::LOG_WARNING,
-                               true,
-                               0,
-                               Log_Feature::OPTIMIZER_STEP);
-        }
-        Logger::logMessage(std::format("Adam_Optimizer::Adam_Optimizer (ILearning_Rate): learning_rate={}, beta1={}, beta2={}, epsilon={}, max_gradient={}",
-                                       learning_rate,
-                                       beta1,
-                                       beta2,
-                                       epsilon,
-                                       max_gradient),
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::OPTIMIZER_STEP);
+        return (learning_rate_scheduler && !scheduler_lifetime_token.expired()) ? learning_rate_scheduler : nullptr;
     }
+    size_t getTimestep() const noexcept { return timestep; }
+    Optimizer_Type getType() const noexcept override { return Optimizer_Type::ADAM_OPTIMIZER; }
+    float getLearningRate() const noexcept override { return learning_rate; }
+    float getMaxGradient() const noexcept override { return max_gradient; }
+    float getEpsilon() const noexcept { return epsilon; }
+    float getBeta1() const noexcept { return beta1; }
+    float getBeta2() const noexcept { return beta2; }
+    float getWeightDecay() const noexcept override { return weight_decay; }
+    uint64_t getConfigGeneration() const noexcept override { return config_generation; }
+    bool consumeGpuOverflowDetected() noexcept override;
 
-    ~Adam_Optimizer() noexcept override = default;
-
-     Optimizer_Type getType() const noexcept override
+    void setWeightDecay(float _weight_decay) override
     {
-        return Optimizer_Type::ADAM_OPTIMIZER;
-    }
-
-    void step(const std::vector<std::pair<Matrix *, Matrix *>> &_parameter_gradient_pairs) override
-    {
-        if (learning_rate_scheduler != nullptr)
+        validateHyperparameters(learning_rate, beta1, beta2, epsilon, max_gradient, _weight_decay);
+        if (weight_decay != _weight_decay)
         {
-            learning_rate = learning_rate_scheduler->getCurrentRate();
-        }
-
-        if (parameter_states.empty() && !loaded_states.empty())
-        {
-            for (std::size_t i = 0; i < _parameter_gradient_pairs.size() && i < loaded_states.size(); ++i)
-            {
-                Matrix *parameter = _parameter_gradient_pairs[i].first;
-                if (parameter)
-                {
-                    if (parameter->getRows() == loaded_states[i].first_moment_matrix.getRows() &&
-                        parameter->getColumns() == loaded_states[i].first_moment_matrix.getColumns())
-                    {
-                        parameter_states.emplace(parameter, std::move(loaded_states[i]));
-                    }
-                    else
-                    {
-                        Logger::logMessage("Adam_Optimizer::step: Parameter shape mismatch with loaded state, reinitializing state",
-                                           Log_Level::LOG_WARNING,
-                                           true,
-                                           0,
-                                           Log_Feature::OPTIMIZER_STEP);
-                        parameter_states.emplace(parameter, Parameter_State(parameter->getRows(), parameter->getColumns(), parameter->getExecutionTarget()));
-                    }
-                    parameter_order.push_back(parameter);
-                }
-            }
-            loaded_states.clear();
-        }
-
-        ++timestep;
-
-        for (const auto &[parameter, gradient] : _parameter_gradient_pairs)
-        {
-            if (!parameter || !gradient)
-            {
-                Logger::logMessage("Adam_Optimizer::step: Null parameter or gradient pointer encountered",
-                                   Log_Level::LOG_WARNING,
-                                   true,
-                                   0,
-                                   Log_Feature::OPTIMIZER_STEP);
-                continue;
-            }
-
-            auto iterator = parameter_states.find(parameter);
-            if (iterator == parameter_states.end())
-            {
-                auto [new_iterator, is_inserted] = parameter_states.emplace(parameter, Parameter_State(parameter->getRows(), parameter->getColumns(), parameter->getExecutionTarget()));
-                iterator = new_iterator;
-                parameter_order.push_back(parameter);
-            }
-
-            parameter->adamUpdate(*gradient,
-                                  iterator->second.first_moment_matrix,
-                                  iterator->second.second_moment_matrix,
-                                  learning_rate,
-                                  beta1,
-                                  beta2,
-                                  epsilon,
-                                  timestep,
-                                  max_gradient);
+            weight_decay = _weight_decay;
+            ++config_generation;
         }
     }
-
-    void reset() override
+    void setParameterStates(const std::unordered_map<Tensor *, Parameter_State> &_parameter_states)
     {
-        Logger::logMessage("Adam_Optimizer::reset: Resetting optimizer states and timestep",
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::OPTIMIZER_STEP);
-        parameter_states.clear();
+        parameter_states = _parameter_states;
+        parameter_tokens.clear();
         parameter_order.clear();
-        loaded_states.clear();
-        timestep = 0;
+        parameter_order.reserve(parameter_states.size());
+        for (const auto &[p, st] : parameter_states)
+        {
+            (void)st;
+            if (p)
+            {
+                parameter_tokens[p] = p->getLifetimeToken();
+                parameter_order.push_back(p);
+            }
+        }
     }
+    void setLoadedStates(const std::vector<Parameter_State> &_loaded_states);
+    void setParameterOrder(const std::vector<Tensor *> &_parameter_order);
 
-     float getLearningRate() const noexcept
+    void setLearningRateScheduler(ILearning_Rate *_learning_rate_scheduler) noexcept override
     {
-        return learning_rate;
+        learning_rate_scheduler = _learning_rate_scheduler;
+        scheduler_lifetime_token = _learning_rate_scheduler ? _learning_rate_scheduler->getLifetimeToken() : std::weak_ptr<bool>{};
     }
-
-     float getMaxGradient() const noexcept
+    void detachLearningRateScheduler() noexcept override
     {
-        return max_gradient;
+        learning_rate_scheduler = nullptr;
+        scheduler_lifetime_token.reset();
     }
-
-     float getBeta1() const noexcept
-    {
-        return beta1;
-    }
-
-     float getBeta2() const noexcept
-    {
-        return beta2;
-    }
-
-     float getEpsilon() const noexcept
-    {
-        return epsilon;
-    }
-
-     std::size_t getTimestep() const noexcept
-    {
-        return timestep;
-    }
-
+    void setExecutionTarget(Execution_Target _target) override;
+    void setTimestep(size_t _timestep) noexcept { timestep = _timestep; }
     void setLearningRate(float _learning_rate) override
     {
+        validateHyperparameters(_learning_rate, beta1, beta2, epsilon, max_gradient, weight_decay);
         if (_learning_rate <= 0.0f)
         {
             Logger::logMessage("Adam_Optimizer::setLearningRate: learning_rate is non-positive",
@@ -240,105 +174,72 @@ public:
                                0,
                                Log_Feature::OPTIMIZER_STEP);
         }
-        Logger::logMessage(std::format("Adam_Optimizer::setLearningRate: old_learning_rate={}, new_learning_rate={}",
-                                       learning_rate,
-                                       _learning_rate),
+        Logger::logMessage(Input_Format{"Adam_Optimizer::setLearningRate: old_learning_rate={}, new_learning_rate={}",
+                                        learning_rate,
+                                        _learning_rate},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
                            Log_Feature::OPTIMIZER_STEP);
         learning_rate = _learning_rate;
-        learning_rate_scheduler = nullptr;
     }
-
-    void saveCheckpoint(std::ofstream &_output_file_stream) const override
+    void setMaxGradient(float _max_gradient) override
     {
-        if (!_output_file_stream.is_open())
+        validateHyperparameters(learning_rate, beta1, beta2, epsilon, _max_gradient, weight_decay);
+        if (max_gradient != _max_gradient)
         {
-            Logger::logMessage("Adam_Optimizer::saveCheckpoint: Output stream is not open",
-                               Log_Level::LOG_ERROR,
-                               true,
-                               0,
-                               Log_Feature::MODEL_SERIALIZATION);
-            return;
+            max_gradient = _max_gradient;
+            ++config_generation;
         }
-
-        Logger::logMessage(std::format("Adam_Optimizer::saveCheckpoint: Saving checkpoint at timestep={}, learning_rate={}",
-                                       timestep,
-                                       learning_rate),
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::MODEL_SERIALIZATION);
-
-        std::uint64_t timestep_value = static_cast<std::uint64_t>(timestep);
-        _output_file_stream.write(reinterpret_cast<const char *>(&timestep_value), sizeof(timestep_value));
-        _output_file_stream.write(reinterpret_cast<const char *>(&learning_rate), sizeof(learning_rate));
-        _output_file_stream.write(reinterpret_cast<const char *>(&beta1), sizeof(beta1));
-        _output_file_stream.write(reinterpret_cast<const char *>(&beta2), sizeof(beta2));
-        _output_file_stream.write(reinterpret_cast<const char *>(&epsilon), sizeof(epsilon));
-        _output_file_stream.write(reinterpret_cast<const char *>(&max_gradient), sizeof(max_gradient));
-
-        std::uint32_t state_count = static_cast<std::uint32_t>(parameter_order.size());
-        _output_file_stream.write(reinterpret_cast<const char *>(&state_count), sizeof(state_count));
-
-        for (Matrix *parameter : parameter_order)
+    }
+    void setEpsilon(float _epsilon)
+    {
+        validateHyperparameters(learning_rate, beta1, beta2, _epsilon, max_gradient, weight_decay);
+        if (epsilon != _epsilon)
         {
-            auto iterator = parameter_states.find(parameter);
-            if (iterator != parameter_states.end())
+            epsilon = _epsilon;
+            ++config_generation;
+        }
+    }
+    void setBeta1(float _beta1)
+    {
+        validateHyperparameters(learning_rate, _beta1, beta2, epsilon, max_gradient, weight_decay);
+        if (beta1 != _beta1)
+        {
+            beta1 = _beta1;
+            ++config_generation;
+        }
+    }
+    void setBeta2(float _beta2)
+    {
+        validateHyperparameters(learning_rate, beta1, _beta2, epsilon, max_gradient, weight_decay);
+        if (beta2 != _beta2)
+        {
+            beta2 = _beta2;
+            ++config_generation;
+        }
+    }
+    void setNoDecayParameters(std::unordered_set<const Tensor *> _no_decay) override
+    {
+        no_decay_parameters = std::move(_no_decay);
+        no_decay_tokens.clear();
+        for (const Tensor *p : no_decay_parameters)
+        {
+            if (p)
             {
-                iterator->second.first_moment_matrix.saveMatrix(_output_file_stream);
-                iterator->second.second_moment_matrix.saveMatrix(_output_file_stream);
+                no_decay_tokens[p] = p->getLifetimeToken();
             }
         }
+        ++config_generation;
     }
-
-    void loadCheckpoint(std::ifstream &_input_file_stream, Execution_Target _execution_target = Execution_Target::CPU) override
+    void addNoDecayParameter(const Tensor *_param)
     {
-        if (!_input_file_stream.is_open())
+        if (_param)
         {
-            Logger::logMessage("Adam_Optimizer::loadCheckpoint: Input stream is not open",
-                               Log_Level::LOG_ERROR,
-                               true,
-                               0,
-                               Log_Feature::MODEL_SERIALIZATION);
-            return;
-        }
-
-        reset();
-
-        std::uint64_t timestep_value = 0;
-        _input_file_stream.read(reinterpret_cast<char *>(&timestep_value), sizeof(timestep_value));
-        timestep = static_cast<std::size_t>(timestep_value);
-
-        _input_file_stream.read(reinterpret_cast<char *>(&learning_rate), sizeof(learning_rate));
-        _input_file_stream.read(reinterpret_cast<char *>(&beta1), sizeof(beta1));
-        _input_file_stream.read(reinterpret_cast<char *>(&beta2), sizeof(beta2));
-        _input_file_stream.read(reinterpret_cast<char *>(&epsilon), sizeof(epsilon));
-        _input_file_stream.read(reinterpret_cast<char *>(&max_gradient), sizeof(max_gradient));
-
-        std::uint32_t state_count = 0;
-        _input_file_stream.read(reinterpret_cast<char *>(&state_count), sizeof(state_count));
-
-        Logger::logMessage(std::format("Adam_Optimizer::loadCheckpoint: Loaded timestep={}, learning_rate={}, beta1={}, beta2={}, epsilon={}, max_gradient={}, state_count={}",
-                                       timestep,
-                                       learning_rate,
-                                       beta1,
-                                       beta2,
-                                       epsilon,
-                                       max_gradient,
-                                       state_count),
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::MODEL_SERIALIZATION);
-
-        loaded_states.reserve(state_count);
-        for (std::uint32_t i = 0; i < state_count; ++i)
-        {
-            Matrix first_moment = Matrix::loadMatrix(_input_file_stream, _execution_target);
-            Matrix second_moment = Matrix::loadMatrix(_input_file_stream, _execution_target);
-            loaded_states.emplace_back(std::move(first_moment), std::move(second_moment));
+            no_decay_parameters.insert(_param);
+            no_decay_tokens[_param] = _param->getLifetimeToken();
+            ++config_generation;
         }
     }
+    const std::unordered_set<const Tensor *> &getNoDecayParameters() const noexcept { return no_decay_parameters; }
 };

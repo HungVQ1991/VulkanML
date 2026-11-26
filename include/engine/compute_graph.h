@@ -21,48 +21,18 @@ public:
     Compute_Graph(Compute_Graph &&other) noexcept = default;
     Compute_Graph &operator=(Compute_Graph &&other) noexcept = default;
 
-    void addNode(const Compute_Node &_node)
-    {
-        nodes.push_back(_node);
-    }
+    void addNode(const Compute_Node &_node);
+    void addNode(Compute_Node &&_node);
+    void clear() noexcept;
+    void print() const;
 
-    void addNode(Compute_Node &&_node)
-    {
-        nodes.push_back(std::move(_node));
-    }
+    const Compute_Node &getNode(size_t _index) const { return nodes.at(_index); }
+    Compute_Node &getNode(size_t _index) { return nodes.at(_index); }
+    const std::vector<Compute_Node> &getNodes() const noexcept { return nodes; }
+    std::vector<Compute_Node> &getNodes() noexcept { return nodes; }
+    size_t getNodeCount() const noexcept { return nodes.size(); }
+    bool isEmpty() const noexcept { return nodes.empty(); }
 
-    const std::vector<Compute_Node> &getNodes() const noexcept
-    {
-        return nodes;
-    }
-
-    std::vector<Compute_Node> &getNodes() noexcept
-    {
-        return nodes;
-    }
-
-    const Compute_Node &getNode(std::size_t _index) const
-    {
-        return nodes.at(_index);
-    }
-
-    Compute_Node &getNode(std::size_t _index)
-    {
-        return nodes.at(_index);
-    }
-
-    std::size_t getNodeCount() const noexcept
-    {
-        return nodes.size();
-    }
-
-    bool isEmpty() const noexcept
-    {
-        return nodes.empty();
-    }
-
-    void clear() noexcept
-    {
-        nodes.clear();
-    }
+    void setNodes(const std::vector<Compute_Node> &_nodes) { nodes = _nodes; }
+    void setNodes(std::vector<Compute_Node> &&_nodes) noexcept { nodes = std::move(_nodes); }
 };

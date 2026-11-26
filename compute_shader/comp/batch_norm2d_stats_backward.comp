@@ -1,0 +1,68 @@
+#version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#endif
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+#ifdef USE_FP16
+layout(std430, binding = 0) readonly buffer GradOutput { float16_t dY[]; };
+#else
+layout(std430, binding = 0) readonly buffer GradOutput { float dY[]; };
+#endif
+layout(std430, binding = 1) readonly buffer XHat { float x_hat[]; };
+layout(std430, binding = 2) writeonly buffer GradGamma { float dgamma[]; };
+layout(std430, binding = 3) writeonly buffer GradBeta { float dbeta[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint total_elements;
+    uint channels;
+    uint spatial_count;
+} pc;
+
+shared float shared_dg[256];
+shared float shared_db[256];
+
+void main() {
+    uint c = gl_WorkGroupID.x;
+    uint tid = gl_LocalInvocationID.x;
+    uint C = pc.channels;
+    uint M = pc.spatial_count;
+    if (c >= C || M == 0u || pc.total_elements == 0u) return;
+
+    float dg = 0.0;
+    float db = 0.0;
+    for (uint m = tid; m < M; m += 256u) {
+        uint idx = m * C + c;
+#ifdef USE_FP16
+        float dy = float(dY[idx]);
+#else
+        float dy = dY[idx];
+#endif
+        dg += dy * x_hat[idx];
+        db += dy;
+    }
+    shared_dg[tid] = dg;
+    shared_db[tid] = db;
+    barrier();
+
+    for (uint s = 128u; s > 0u; s >>= 1u) {
+        if (tid < s) {
+            shared_dg[tid] += shared_dg[tid + s];
+            shared_db[tid] += shared_db[tid + s];
+        }
+        barrier();
+    }
+
+    if (tid == 0u) {
+        float tot_dg = shared_dg[0];
+        float tot_db = shared_db[0];
+        if (isnan(tot_dg) || isinf(tot_dg)) tot_dg = 0.0;
+        if (isnan(tot_db) || isinf(tot_db)) tot_db = 0.0;
+        tot_dg = clamp(tot_dg, -1e5, 1e5);
+        tot_db = clamp(tot_db, -1e5, 1e5);
+        dgamma[c] = tot_dg;
+        dbeta[c] = tot_db;
+    }
+}

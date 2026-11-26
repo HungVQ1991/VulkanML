@@ -1,0 +1,120 @@
+#version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#endif
+
+#define TILE_SIZE 16
+
+layout(local_size_x = TILE_SIZE, local_size_y = TILE_SIZE, local_size_z = 1) in;
+
+#ifdef USE_FP16
+layout(std430, binding = 0) readonly buffer Matrix_A { float16_t data_a[]; };
+layout(std430, binding = 1) readonly buffer Matrix_B { float16_t data_b[]; };
+layout(std430, binding = 2) writeonly buffer Matrix_C { float16_t data_c[]; };
+#else
+layout(std430, binding = 0) readonly buffer Matrix_A { float data_a[]; };
+layout(std430, binding = 1) readonly buffer Matrix_B { float data_b[]; };
+layout(std430, binding = 2) writeonly buffer Matrix_C { float data_c[]; };
+#endif
+
+layout(push_constant) uniform Matrix_Dimensions {
+    uint batch_count;
+    uint rows_a;
+    uint cols_a;
+    uint cols_b;
+    uint broadcast_b;
+    uint batch_rank;
+    uint pad0;
+    uint pad1;
+    uvec4 batch_dims;
+    uvec4 a_batch_strides;
+    uvec4 b_batch_strides;
+} dims;
+
+#ifdef USE_FP16
+shared float16_t tile_a[TILE_SIZE][TILE_SIZE];
+shared float16_t tile_b[TILE_SIZE][TILE_SIZE];
+#else
+shared float tile_a[TILE_SIZE][TILE_SIZE];
+shared float tile_b[TILE_SIZE][TILE_SIZE];
+#endif
+
+void main() {
+    uint col = gl_GlobalInvocationID.x;
+    uint row = gl_GlobalInvocationID.y;
+    uint batch = gl_GlobalInvocationID.z;
+
+    uint local_row = gl_LocalInvocationID.y;
+    uint local_col = gl_LocalInvocationID.x;
+
+    if (batch >= dims.batch_count) return;
+
+    float sum = 0.0;
+    uint num_tiles = (dims.cols_a + TILE_SIZE - 1) / TILE_SIZE;
+
+    uint a_batch_idx = batch;
+    uint b_batch_idx = (dims.broadcast_b == 1u) ? 0u : batch;
+    if (dims.batch_rank > 0u) {
+        a_batch_idx = 0u;
+        b_batch_idx = 0u;
+        uint rem = batch;
+        for (int d = int(dims.batch_rank) - 1; d >= 0; --d) {
+            uint dim_d = dims.batch_dims[d];
+            uint coord = rem % dim_d;
+            rem /= dim_d;
+            a_batch_idx += coord * dims.a_batch_strides[d];
+            b_batch_idx += coord * dims.b_batch_strides[d];
+        }
+    }
+
+    uint a_batch_offset = a_batch_idx * dims.rows_a * dims.cols_a;
+    uint b_batch_offset = b_batch_idx * dims.cols_a * dims.cols_b;
+
+    for (uint t = 0; t < num_tiles; ++t) {
+        uint tiled_col_a = t * TILE_SIZE + local_col;
+        if (row < dims.rows_a && tiled_col_a < dims.cols_a) {
+            tile_a[local_row][local_col] = data_a[a_batch_offset + row * dims.cols_a + tiled_col_a];
+        } else {
+#ifdef USE_FP16
+            tile_a[local_row][local_col] = float16_t(0.0);
+#else
+            tile_a[local_row][local_col] = 0.0;
+#endif
+        }
+
+        uint tiled_row_b = t * TILE_SIZE + local_row;
+        if (tiled_row_b < dims.cols_a && col < dims.cols_b) {
+            tile_b[local_row][local_col] = data_b[b_batch_offset + tiled_row_b * dims.cols_b + col];
+        } else {
+#ifdef USE_FP16
+            tile_b[local_row][local_col] = float16_t(0.0);
+#else
+            tile_b[local_row][local_col] = 0.0;
+#endif
+        }
+
+        barrier();
+
+        #pragma unroll
+        for (uint k = 0; k < TILE_SIZE; ++k) {
+#ifdef USE_FP16
+            sum += float(tile_a[local_row][k]) * float(tile_b[k][local_col]);
+#else
+            sum += tile_a[local_row][k] * tile_b[k][local_col];
+#endif
+        }
+
+        barrier();
+    }
+
+    if (row < dims.rows_a && col < dims.cols_b) {
+#ifdef USE_FP16
+        float val = sum;
+        if (isnan(val) || isinf(val)) val = 0.0;
+        data_c[batch * dims.rows_a * dims.cols_b + row * dims.cols_b + col] = float16_t(clamp(val, -65504.0, 65504.0));
+#else
+        data_c[batch * dims.rows_a * dims.cols_b + row * dims.cols_b + col] = sum;
+#endif
+    }
+}

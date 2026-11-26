@@ -1,0 +1,70 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(std430, binding = 0) readonly buffer Matrix_X {
+    float16_t data_x[];
+};
+
+layout(std430, binding = 1) readonly buffer Matrix_W {
+    uint data_w[];
+};
+
+layout(std430, binding = 2) readonly buffer Biases {
+    float16_t data_b[];
+};
+
+layout(std430, binding = 3) readonly buffer GammaBuffer {
+    float gamma;
+    float inv_gamma;
+};
+
+layout(std430, binding = 4) writeonly buffer Matrix_Y {
+    float16_t data_y[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint M;
+    uint K;
+    uint N;
+    uint words_per_row;
+    uint has_bias;
+} pcs;
+
+void main() {
+    uint n = gl_GlobalInvocationID.x;
+    uint m = gl_GlobalInvocationID.y;
+
+    if (m >= pcs.M || n >= pcs.N) return;
+
+    float acc = 0.0;
+    uint x_row_offset = m * pcs.K;
+    uint w_row_offset = n * pcs.words_per_row;
+
+    for (uint w = 0u; w < pcs.words_per_row; ++w) {
+        uint packed_val = data_w[w_row_offset + w];
+        uint k_base = w * 16u;
+
+        #pragma unroll
+        for (uint b = 0u; b < 16u; ++b) {
+            uint k = k_base + b;
+            if (k < pcs.K) {
+                uint code = (packed_val >> (b * 2u)) & 3u;
+                int weight = int(code & 1u) * (1 - int(code & 2u));
+                acc += float(data_x[x_row_offset + k]) * float(weight);
+            }
+        }
+    }
+
+    acc = acc * gamma;
+    if (pcs.has_bias != 0u) {
+        acc += float(data_b[n]);
+    }
+
+    if (isnan(acc) || isinf(acc)) {
+        acc = 0.0;
+    }
+    data_y[m * pcs.N + n] = float16_t(clamp(acc, -65504.0, 65504.0));
+}

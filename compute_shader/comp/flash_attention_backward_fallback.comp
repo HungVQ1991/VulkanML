@@ -1,0 +1,154 @@
+#version 450
+
+layout(local_size_x = 1, local_size_y = 16, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer QBuffer  { float q_data[]; };
+layout(std430, binding = 1) readonly buffer KBuffer  { float k_data[]; };
+layout(std430, binding = 2) readonly buffer VBuffer  { float v_data[]; };
+layout(std430, binding = 3) readonly buffer OBuffer  { float o_data[]; };
+layout(std430, binding = 4) readonly buffer DOBuffer { float do_data[]; };
+layout(std430, binding = 5) buffer DQBuffer          { float dq_data[]; };
+layout(std430, binding = 6) buffer DKBuffer          { float dk_data[]; };
+layout(std430, binding = 7) buffer DVBuffer          { float dv_data[]; };
+layout(std430, binding = 8) buffer LBuffer           { float l_data[]; };
+
+layout(push_constant) uniform Constants {
+    uint batch_size;
+    uint seq_len;
+    uint head_dim;
+    uint is_causal;
+    float scale;
+    uint pass_type;
+    uint recompute_l;
+    uint gqa_group_size;
+    uint num_heads;
+    uint is_bshd;
+} pcs;
+
+void main() {
+    uint b = gl_WorkGroupID.z;
+    uint idx = gl_GlobalInvocationID.y;
+    if (b >= pcs.batch_size || idx >= pcs.seq_len) return;
+
+    uint S = pcs.seq_len;
+    uint D = pcs.head_dim;
+    uint group = max(pcs.gqa_group_size, 1u);
+    uint H = max(pcs.num_heads, 1u);
+    uint H_kv = max(H / group, 1u);
+
+    if (pcs.pass_type == 0) {
+        uint q_head_base;
+        uint q_row_stride;
+        uint kv_head_base;
+        uint kv_row_stride;
+        if (pcs.is_bshd != 0u) {
+            uint batch_idx = b / H;
+            uint head_idx = b % H;
+            uint kv_head_idx = head_idx / group;
+            q_head_base = (batch_idx * S * H + head_idx) * D;
+            q_row_stride = H * D;
+            kv_head_base = (batch_idx * S * H_kv + kv_head_idx) * D;
+            kv_row_stride = H_kv * D;
+        } else {
+            q_head_base = b * S * D;
+            q_row_stride = D;
+            kv_head_base = (b / group) * S * D;
+            kv_row_stride = D;
+        }
+        uint i = idx;
+        uint q_base = q_head_base + i * q_row_stride;
+        uint max_j = (pcs.is_causal != 0) ? (i + 1) : S;
+
+        float l_i = -1e20;
+        if (pcs.recompute_l != 0) {
+            float m = -1e20;
+            float l = 0.0;
+            for (uint j = 0; j < max_j; ++j) {
+                uint k_base = kv_head_base + j * kv_row_stride;
+                float dot_val = 0.0;
+                for (uint d = 0; d < D; ++d) {
+                    dot_val += q_data[q_base + d] * k_data[k_base + d];
+                }
+                float s_val = dot_val * pcs.scale;
+                float m_new = max(m, s_val);
+                l = l * exp(m - m_new) + exp(s_val - m_new);
+                m = m_new;
+            }
+            l_i = (l > 0.0) ? (m + log(l)) : -1e20;
+            l_data[b * S + i] = l_i;
+        } else {
+            l_i = l_data[b * S + i];
+        }
+
+        float di = 0.0;
+        for (uint d = 0; d < D; ++d) {
+            di += do_data[q_base + d] * o_data[q_base + d];
+            dq_data[q_base + d] = 0.0;
+        }
+
+        for (uint j = 0; j < max_j; ++j) {
+            uint kv_base = kv_head_base + j * kv_row_stride;
+            float dot_val = 0.0;
+            float dp_val = 0.0;
+            for (uint d = 0; d < D; ++d) {
+                dot_val += q_data[q_base + d] * k_data[kv_base + d];
+                dp_val  += do_data[q_base + d] * v_data[kv_base + d];
+            }
+            float p_val = (l_i > -1e19) ? exp(dot_val * pcs.scale - l_i) : 0.0;
+            float ds_val = p_val * (dp_val - di) * pcs.scale;
+            for (uint d = 0; d < D; ++d) {
+                dq_data[q_base + d] += ds_val * k_data[kv_base + d];
+            }
+        }
+    } else {
+        uint kv_head_base;
+        uint kv_row_stride;
+        uint q_row_stride;
+        uint batch_idx = 0u;
+        uint kv_head_idx = 0u;
+        if (pcs.is_bshd != 0u) {
+            batch_idx = b / H_kv;
+            kv_head_idx = b % H_kv;
+            kv_head_base = (batch_idx * S * H_kv + kv_head_idx) * D;
+            kv_row_stride = H_kv * D;
+            q_row_stride = H * D;
+        } else {
+            kv_head_base = b * S * D;
+            kv_row_stride = D;
+            q_row_stride = D;
+        }
+        uint j = idx;
+        uint kv_base = kv_head_base + j * kv_row_stride;
+        for (uint d = 0; d < D; ++d) {
+            dk_data[kv_base + d] = 0.0;
+            dv_data[kv_base + d] = 0.0;
+        }
+
+        uint start_i = (pcs.is_causal != 0) ? j : 0;
+        for (uint g = 0; g < group; ++g) {
+            uint q_b = b * group + g;
+            uint q_head_base = (pcs.is_bshd != 0u)
+                ? ((batch_idx * S * H + (kv_head_idx * group + g)) * D)
+                : (q_b * S * D);
+            for (uint i = start_i; i < S; ++i) {
+                uint q_base = q_head_base + i * q_row_stride;
+                float l_i = l_data[q_b * S + i];
+                float di = 0.0;
+                float dot_val = 0.0;
+                float dp_val = 0.0;
+                for (uint d = 0; d < D; ++d) {
+                    float do_d = do_data[q_base + d];
+                    di      += do_d * o_data[q_base + d];
+                    dot_val += q_data[q_base + d] * k_data[kv_base + d];
+                    dp_val  += do_d * v_data[kv_base + d];
+                }
+                float p_val = (l_i > -1e19) ? exp(dot_val * pcs.scale - l_i) : 0.0;
+                float ds_val = p_val * (dp_val - di) * pcs.scale;
+                for (uint d = 0; d < D; ++d) {
+                    dk_data[kv_base + d] += ds_val * q_data[q_base + d];
+                    dv_data[kv_base + d] += p_val * do_data[q_base + d];
+                }
+            }
+        }
+    }
+}

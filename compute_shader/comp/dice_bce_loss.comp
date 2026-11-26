@@ -1,0 +1,105 @@
+#version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#endif
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer Pred_Buffer {
+#ifdef USE_FP16
+    float16_t pred_data[];
+#else
+    float pred_data[];
+#endif
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer Target_Buffer {
+#ifdef USE_FP16
+    float16_t target_data[];
+#else
+    float target_data[];
+#endif
+};
+
+layout(std430, set = 0, binding = 2) writeonly buffer Loss_Buffer {
+    float loss_data[];
+};
+
+layout(push_constant) uniform Push_Constants {
+    uint total_elements;
+    float dice_weight;
+    float bce_weight;
+    float epsilon;
+} pc;
+
+shared float shared_inter[256];
+shared float shared_pred[256];
+shared float shared_target[256];
+shared float shared_bce[256];
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    uint tid = gl_LocalInvocationID.x;
+    uint stride_total = gl_WorkGroupSize.x * gl_NumWorkGroups.x;
+
+    float inter_val = 0.0f;
+    float pred_val = 0.0f;
+    float target_val = 0.0f;
+    float bce_val = 0.0f;
+
+    for (uint idx = gid; idx < pc.total_elements; idx += stride_total) {
+#ifdef USE_FP16
+        float p = clamp(float(pred_data[idx]), pc.epsilon, 1.0f - pc.epsilon);
+        float y = float(target_data[idx]);
+#else
+        float p = clamp(pred_data[idx], pc.epsilon, 1.0f - pc.epsilon);
+        float y = target_data[idx];
+#endif
+        inter_val += p * y;
+        pred_val += p;
+        target_val += y;
+        bce_val += -(y * log(p) + (1.0f - y) * log(1.0f - p));
+    }
+
+    shared_inter[tid] = inter_val;
+    shared_pred[tid] = pred_val;
+    shared_target[tid] = target_val;
+    shared_bce[tid] = bce_val;
+    barrier();
+
+    for (uint stride = 128; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            shared_inter[tid] += shared_inter[tid + stride];
+            shared_pred[tid] += shared_pred[tid + stride];
+            shared_target[tid] += shared_target[tid + stride];
+            shared_bce[tid] += shared_bce[tid + stride];
+        }
+        barrier();
+    }
+
+    if (tid == 0) {
+        if (gl_NumWorkGroups.x == 1u) {
+            float total_inter = shared_inter[0];
+            float total_pred = shared_pred[0];
+            float total_target = shared_target[0];
+            float total_bce = shared_bce[0];
+
+            float dice_denom = total_pred + total_target + pc.epsilon;
+            float dice_numer = 2.0f * total_inter + pc.epsilon;
+            float dice_loss = 1.0f - (dice_numer / dice_denom);
+            float bce_loss = total_bce / float(pc.total_elements);
+
+            loss_data[0] = pc.dice_weight * dice_loss + pc.bce_weight * bce_loss;
+            loss_data[1] = total_inter;
+            loss_data[2] = total_pred;
+            loss_data[3] = total_target;
+        } else {
+            uint base = gl_WorkGroupID.x * 4u;
+            loss_data[base + 0u] = shared_inter[0];
+            loss_data[base + 1u] = shared_pred[0];
+            loss_data[base + 2u] = shared_target[0];
+            loss_data[base + 3u] = shared_bce[0];
+        }
+    }
+}

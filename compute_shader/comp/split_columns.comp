@@ -1,0 +1,48 @@
+#version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#define BUF_T float16_t
+#else
+#define BUF_T float
+#endif
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer MatrixIn {
+    BUF_T data_in[];
+};
+
+layout(std430, set = 0, binding = 1) writeonly buffer MatrixLeft {
+    BUF_T data_left[];
+};
+
+layout(std430, set = 0, binding = 2) writeonly buffer MatrixRight {
+    BUF_T data_right[];
+};
+
+layout(push_constant) uniform Uniform_Params {
+    uint rows;
+    uint columns_left;
+    uint columns_right;
+} params;
+
+void main() {
+    uint idx = (gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 256u + gl_LocalInvocationID.x;
+    uint total_cols = params.columns_left + params.columns_right;
+    if (params.rows == 0u || total_cols == 0u) {
+        return;
+    }
+    uint total_elements = params.rows * total_cols;
+    if (idx >= total_elements) {
+        return;
+    }
+
+    uint row = idx / total_cols;
+    uint col = idx - row * total_cols;
+    if (col < params.columns_left) {
+        data_left[row * params.columns_left + col] = data_in[idx];
+    } else {
+        data_right[row * params.columns_right + (col - params.columns_left)] = data_in[idx];
+    }
+}

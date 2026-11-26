@@ -1,0 +1,84 @@
+#version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#endif
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer Pred_Buffer {
+#ifdef USE_FP16
+    float16_t pred_data[];
+#else
+    float pred_data[];
+#endif
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer Target_Buffer {
+#ifdef USE_FP16
+    float16_t target_data[];
+#else
+    float target_data[];
+#endif
+};
+
+layout(std430, set = 0, binding = 2) readonly buffer Stats_Buffer {
+    float stats_data[];
+};
+
+layout(std430, set = 0, binding = 3) writeonly buffer Grad_Buffer {
+#ifdef USE_FP16
+    float16_t grad_data[];
+#else
+    float grad_data[];
+#endif
+};
+
+layout(push_constant) uniform Push_Constants {
+    uint total_elements;
+    float epsilon_val;
+} push_constants;
+
+void main() {
+    uint wg_id = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
+    uint global_idx = wg_id * 256u + gl_LocalInvocationID.x;
+    if (global_idx >= push_constants.total_elements) return;
+
+#ifdef USE_FP16
+    float raw_p = float(pred_data[global_idx]);
+#else
+    float raw_p = pred_data[global_idx];
+#endif
+    if (raw_p < 0.0f || raw_p > 1.0f) {
+#ifdef USE_FP16
+        grad_data[global_idx] = float16_t(0.0f);
+#else
+        grad_data[global_idx] = 0.0f;
+#endif
+        return;
+    }
+
+#ifdef USE_FP16
+    float y = float(target_data[global_idx]);
+#else
+    float y = target_data[global_idx];
+#endif
+    float total_inter = stats_data[1];
+    float total_pred = stats_data[2];
+    float total_target = stats_data[3];
+
+#ifdef USE_FP16
+    float denom = max(total_pred + total_target + push_constants.epsilon_val, 1e-4f);
+#else
+    float denom = total_pred + total_target + push_constants.epsilon_val;
+#endif
+    float numer = 2.0f * total_inter + push_constants.epsilon_val;
+
+    float dice_grad = (denom > 0.0f) ? ((numer - 2.0f * y * denom) / (denom * denom)) : 0.0f;
+    if (isnan(dice_grad) || isinf(dice_grad)) dice_grad = 0.0f;
+#ifdef USE_FP16
+    grad_data[global_idx] = float16_t(clamp(dice_grad, -65504.0f, 65504.0f));
+#else
+    grad_data[global_idx] = dice_grad;
+#endif
+}

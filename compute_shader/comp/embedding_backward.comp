@@ -1,0 +1,86 @@
+#version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#endif
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer IndicesBuffer { float indices_data[]; };
+#ifdef USE_FP16
+layout(std430, binding = 1) readonly buffer GradOutBuffer { float16_t grad_out_data[]; };
+#else
+layout(std430, binding = 1) readonly buffer GradOutBuffer { float grad_out_data[]; };
+#endif
+layout(std430, binding = 2) buffer WeightGradBuffer { uint weight_grad_raw[]; };
+
+layout(push_constant) uniform Constants {
+    uint num_tokens;
+    uint embedding_dim;
+    uint vocab_size;
+    uint chunk_size;
+    int padding_idx;
+} pc;
+
+void atomicAddFloat(uint offset, float val) {
+    uint old_val = weight_grad_raw[offset];
+    while (true) {
+        float old_float = uintBitsToFloat(old_val);
+        float new_float = old_float + val;
+        uint new_val = floatBitsToUint(new_float);
+        if (new_val == old_val) break;
+        uint prev_val = atomicCompSwap(weight_grad_raw[offset], old_val, new_val);
+        if (prev_val == old_val) break;
+        old_val = prev_val;
+    }
+}
+
+void main() {
+    uint dim_idx = gl_WorkGroupID.x * 256u + gl_LocalInvocationID.x;
+    if (dim_idx >= pc.embedding_dim || pc.chunk_size == 0u || pc.num_tokens == 0u || pc.vocab_size == 0u) return;
+
+    uint start_t = gl_WorkGroupID.y * pc.chunk_size;
+    if (start_t >= pc.num_tokens) return;
+    uint end_t = min(start_t + pc.chunk_size, pc.num_tokens);
+
+    int cur_tok = -1;
+    float acc = 0.0;
+
+    for (uint t = start_t; t < end_t; ++t) {
+        float raw_idx = indices_data[t];
+        if (isnan(raw_idx) || isinf(raw_idx)) continue;
+        int row = int(round(raw_idx));
+        if (row < 0 || row == pc.padding_idx || uint(row) >= pc.vocab_size) continue;
+
+#ifdef USE_FP16
+        float g = float(grad_out_data[t * pc.embedding_dim + dim_idx]);
+        if (isnan(g) || isinf(g)) g = 0.0;
+        g = clamp(g, -65504.0, 65504.0);
+#else
+        float g = grad_out_data[t * pc.embedding_dim + dim_idx];
+#endif
+        if (row == cur_tok) {
+            acc += g;
+        } else {
+            if (cur_tok >= 0 && acc != 0.0) {
+                uint out_idx = uint(cur_tok) * pc.embedding_dim + dim_idx;
+                if (gl_NumWorkGroups.y == 1u) {
+                    weight_grad_raw[out_idx] = floatBitsToUint(uintBitsToFloat(weight_grad_raw[out_idx]) + acc);
+                } else {
+                    atomicAddFloat(out_idx, acc);
+                }
+            }
+            cur_tok = row;
+            acc = g;
+        }
+    }
+
+    if (cur_tok >= 0 && acc != 0.0) {
+        uint out_idx = uint(cur_tok) * pc.embedding_dim + dim_idx;
+        if (gl_NumWorkGroups.y == 1u) {
+            weight_grad_raw[out_idx] = floatBitsToUint(uintBitsToFloat(weight_grad_raw[out_idx]) + acc);
+        } else {
+            atomicAddFloat(out_idx, acc);
+        }
+    }
+}

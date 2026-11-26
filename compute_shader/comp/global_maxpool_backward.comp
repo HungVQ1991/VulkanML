@@ -1,0 +1,53 @@
+#version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#endif
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+#ifdef USE_FP16
+layout(set = 0, binding = 0) readonly buffer Grad_Output_Buffer { float16_t grad_output[]; };
+#else
+layout(set = 0, binding = 0) readonly buffer Grad_Output_Buffer { float grad_output[]; };
+#endif
+layout(set = 0, binding = 1) readonly buffer Mask_Buffer { float mask_data[]; };
+#ifdef USE_FP16
+layout(set = 0, binding = 2) writeonly buffer Grad_Input_Buffer { float16_t grad_input[]; };
+#else
+layout(set = 0, binding = 2) writeonly buffer Grad_Input_Buffer { float grad_input[]; };
+#endif
+
+layout(push_constant) uniform Push_Constants {
+    uint batch_size;
+    uint in_h;
+    uint in_w;
+    uint channels;
+} params;
+
+void main() {
+    if (params.in_h == 0u || params.in_w == 0u) return;
+    uint c_idx = gl_GlobalInvocationID.x;
+    uint w_idx = gl_GlobalInvocationID.y;
+    uint n_h_idx = gl_GlobalInvocationID.z;
+
+    if (c_idx >= params.channels || w_idx >= params.in_w || n_h_idx >= params.batch_size * params.in_h) {
+        return;
+    }
+
+    uint n_idx = n_h_idx / params.in_h;
+    uint h_idx = n_h_idx % params.in_h;
+    uint spatial_idx = h_idx * params.in_w + w_idx;
+    uint out_idx = n_idx * params.channels + c_idx;
+
+    float m = mask_data[out_idx];
+    bool is_match = (m >= 0.0 && spatial_idx == uint(round(m)));
+#ifdef USE_FP16
+    float16_t grad = is_match ? grad_output[out_idx] : float16_t(0.0);
+#else
+    float grad = is_match ? grad_output[out_idx] : 0.0;
+#endif
+
+    uint in_idx = ((n_idx * params.in_h + h_idx) * params.in_w + w_idx) * params.channels + c_idx;
+    grad_input[in_idx] = grad;
+}

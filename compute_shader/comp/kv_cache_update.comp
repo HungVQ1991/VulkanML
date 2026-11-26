@@ -1,0 +1,38 @@
+#version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#define BUF_T float16_t
+#else
+#define BUF_T float
+#endif
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer SrcBuffer { BUF_T src_data[]; };
+layout(std430, binding = 1) writeonly buffer DstBuffer { BUF_T dst_data[]; };
+
+layout(push_constant) uniform Constants {
+    uint batch_heads;
+    uint copy_seq_len;
+    uint src_stride_seq;
+    uint dst_stride_seq;
+    uint head_dim;
+    uint src_offset_seq;
+    uint dst_offset_seq;
+} pc;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    uint total = pc.batch_heads * pc.copy_seq_len * pc.head_dim;
+    if (idx >= total) return;
+
+    uint d = idx % pc.head_dim;
+    uint tmp = idx / pc.head_dim;
+    uint s = tmp % pc.copy_seq_len;
+    uint bh = tmp / pc.copy_seq_len;
+
+    uint src_idx = ((bh * pc.src_stride_seq) + (pc.src_offset_seq + s)) * pc.head_dim + d;
+    uint dst_idx = ((bh * pc.dst_stride_seq) + (pc.dst_offset_seq + s)) * pc.head_dim + d;
+    dst_data[dst_idx] = src_data[src_idx];
+}

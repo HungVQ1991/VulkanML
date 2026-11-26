@@ -15,121 +15,44 @@
 class Relu_Layer : public ILayer
 {
 private:
-    Matrix input_matrix;
-    Matrix output_matrix;
-    Matrix input_gradient;
+    Tensor input_tensor;
+    Tensor output_tensor;
+    Tensor input_gradient_tensor;
     bool is_forward_completed = false;
     Execution_Target execution_target = Execution_Target::CPU;
 
 public:
-    explicit Relu_Layer(Execution_Target _execution_target = Execution_Target::CPU)
-        : input_matrix(0, 0, _execution_target),
-          output_matrix(0, 0, _execution_target),
-          input_gradient(0, 0, _execution_target),
-          is_forward_completed(false),
-          execution_target(_execution_target)
-    {
-    }
+    using ILayer::forward;
+    explicit Relu_Layer(Execution_Target _execution_target = Execution_Target::CPU);
 
     ~Relu_Layer() noexcept override = default;
+    Tensor forward(const Tensor &_input_tensor) override;
+    Tensor forward(const Tensor& _batched_input, const std::vector<Tensor>& _batched_params) const override;
+    Tensor backward(const Tensor &_output_gradient) override;
+    void resetGradient() override;
+    std::unique_ptr<ILayer> clone() const override;
+    void saveConfiguration(std::ofstream &_output_file_stream) const override;
+    void saveInference(std::ofstream &_output_file_stream) const override;
+    void loadInference(std::ifstream &_input_file_stream) override;
+    void saveCheckpoint(std::ofstream &_output_file_stream) const override;
+    void loadCheckpoint(std::ifstream &_input_file_stream) override;
 
-    Matrix forward(const Matrix &_input_matrix) override
-    {
-        Logger::logMessage(Input_Format{"Relu_Layer::forward: rows={}, columns={}",
-                                        _input_matrix.getRows(),
-                                        _input_matrix.getColumns()},
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           1,
-                           Log_Feature::ACTIVATION_COMPUTE | Log_Feature::FORWARD_EVALUATION);
-
-        input_matrix = _input_matrix;
-        input_matrix.relu(output_matrix);
-        is_forward_completed = true;
-        return output_matrix;
-    }
-
-    Matrix backward(const Matrix &_output_gradient) override
-    {
-        if (!is_forward_completed)
-        {
-            Logger::logMessage(Input_Format{"Relu_Layer::backward: Relu backward called before forward"},
-                               Log_Level::LOG_ERROR,
-                               true,
-                               0,
-                               Log_Feature::ACTIVATION_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
-            throw std::logic_error("Relu backward called before forward");
-        }
-
-        if (_output_gradient.getRows() != output_matrix.getRows() || _output_gradient.getColumns() != output_matrix.getColumns())
-        {
-            Logger::logMessage(Input_Format{"Relu_Layer::backward: Relu gradient dimensions must match output dimensions"},
-                               Log_Level::LOG_ERROR,
-                               true,
-                               0,
-                               Log_Feature::ACTIVATION_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
-            throw std::invalid_argument("Relu gradient dimensions must match output dimensions");
-        }
-
-        Logger::logMessage(Input_Format{"Relu_Layer::backward: output_gradient rows={}, columns={}",
-                                        _output_gradient.getRows(),
-                                        _output_gradient.getColumns()},
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           1,
-                           Log_Feature::ACTIVATION_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
-
-        output_matrix.reluBackward(_output_gradient, input_gradient);
-        return input_gradient;
-    }
-
-    void resetGradient() override
-    {
-        is_forward_completed = false;
-    }
-
-    bool hasParameters() const noexcept override
-    {
-        return false;
-    }
-
-    Layer_Type getLayerType() const noexcept override
-    {
-        return Layer_Type::RELU;
-    }
-
-    Matrix getInput() override
-    {
-        return input_matrix;
-    }
-
-    Matrix getOutput() override
-    {
-        return output_matrix;
-    }
-
+    std::function<float(std::mt19937&)> getPopulationParameterInitializer(size_t) const override { return [](std::mt19937&) { return 0.0f; }; }
+    std::vector<Shape> getPopulationParameterDims() const override { return {}; }
+    std::vector<bool> getPopulationParameterIsEvolvable() const override { return {}; }
+    const Tensor &getInputGradient() const noexcept { return input_gradient_tensor; }
+    const Tensor &getInput() const override { return input_tensor; }
+    const Tensor &getOutput() const override { return output_tensor; }
     Execution_Target getExecutionTarget() const override { return execution_target; }
+    Layer_Type getLayerType() const noexcept override { return Layer_Type::RELU; }
+    bool supportsPopulationBatch() const noexcept override { return true; }
+    bool isForwardCompleted() const noexcept { return is_forward_completed; }
+    bool hasParameters() const noexcept override { return false; }
+    void setPopulationParameter(size_t param_index, std::vector<float> flat_data) override;
 
-    void saveConfiguration(std::ofstream &_output_file_stream) const override {}
-    void saveInference(std::ofstream &_output_file_stream) const override {}
-    void loadInference(std::ifstream &_input_file_stream) override {}
-    void saveCheckpoint(std::ofstream &_output_file_stream) const override {}
-    void loadCheckpoint(std::ifstream &_input_file_stream) override {}
+    void setInputGradient(const Tensor &_tensor) { input_gradient_tensor = _tensor; }
+    void setInput(const Tensor &_tensor) { input_tensor = _tensor; }
+    void setOutput(const Tensor &_tensor) { output_tensor = _tensor; }
+    void setExecutionTarget(Execution_Target _new_execution_target) override;
 
-    void setExecutionTarget(Execution_Target _new_execution_target) override
-    {
-        if (execution_target == _new_execution_target)
-        {
-            return;
-        }
-
-        logChangeExecutionTarget(_new_execution_target);
-
-        execution_target = _new_execution_target;
-        input_matrix.setExecutionTarget(_new_execution_target);
-        output_matrix.setExecutionTarget(_new_execution_target);
-        input_gradient.setExecutionTarget(_new_execution_target);
-    }
 };
-
-using ReLU = Relu_Layer;

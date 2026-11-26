@@ -1,0 +1,48 @@
+#version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#endif
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer Input_Buffer {
+#ifdef USE_FP16
+    float16_t input_data[];
+#else
+    float input_data[];
+#endif
+};
+
+layout(std430, set = 0, binding = 1) writeonly buffer Output_Buffer {
+#ifdef USE_FP16
+    float16_t output_data[];
+#else
+    float output_data[];
+#endif
+};
+
+layout(push_constant) uniform Push_Constants {
+    uint total_elements;
+    float scalar;
+#ifdef USE_FP16
+    uint preserve_nonfinite;
+#endif
+} push_constants;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx < push_constants.total_elements) {
+#ifdef USE_FP16
+        float val = float(input_data[idx]) * push_constants.scalar;
+        if (push_constants.preserve_nonfinite != 0u) {
+            output_data[idx] = float16_t(val);
+        } else {
+            if (isnan(val) || isinf(val)) val = 0.0;
+            output_data[idx] = float16_t(clamp(val, -65504.0, 65504.0));
+        }
+#else
+        output_data[idx] = input_data[idx] * push_constants.scalar;
+#endif
+    }
+}

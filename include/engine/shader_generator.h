@@ -1,17 +1,15 @@
 #pragma once
 
+#include <algorithm>
+#include <bitset>
 #include <cstddef>
 #include <cstdint>
-#include <format>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 #include <vulkan/vulkan.h>
-
-#include "helper/logger.h"
-
-extern bool is_coop;
 
 enum class Buffer_Access
 {
@@ -22,10 +20,20 @@ enum class Buffer_Access
 
 struct Specialization_Constant_Entry
 {
-    std::uint32_t constant_id;
+    uint32_t constant_id;
     std::string name;
     std::string type_name;
     std::string default_val;
+
+    const std::string &getDefaultVal() const noexcept { return default_val; }
+    const std::string &getTypeName() const noexcept { return type_name; }
+    const std::string &getName() const noexcept { return name; }
+    uint32_t getConstantId() const noexcept { return constant_id; }
+
+    void setDefaultVal(const std::string &_default_val) { default_val = _default_val; }
+    void setTypeName(const std::string &_type_name) { type_name = _type_name; }
+    void setName(const std::string &_name) { name = _name; }
+    void setConstantId(uint32_t _constant_id) noexcept { constant_id = _constant_id; }
 };
 
 class Specialization_Map_Builder
@@ -36,253 +44,150 @@ private:
 
 public:
     template <typename T>
-    void addConstant(std::uint32_t _constant_id, const T &_value)
+        requires std::is_trivially_copyable_v<T>
+    void addConstant(uint32_t _constant_id, const T &_value)
     {
-        std::size_t offset = data.size();
-        std::size_t size = sizeof(T);
+        for (const auto &entry : entries)
+        {
+            if (entry.constantID == _constant_id)
+            {
+                throw std::invalid_argument("Specialization_Map_Builder::addConstant: Duplicate constant_id");
+            }
+        }
 
-        entries.push_back(VkSpecializationMapEntry{
-            .constantID = _constant_id,
-            .offset = static_cast<std::uint32_t>(offset),
-            .size = size});
-
-        const auto *byte_pointer = reinterpret_cast<const std::uint8_t *>(&_value);
-        data.insert(data.end(), byte_pointer, byte_pointer + size);
+        size_t offset = data.size();
+        if constexpr (std::is_same_v<std::remove_cv_t<T>, bool>)
+        {
+            VkBool32 vk_val = _value ? VK_TRUE : VK_FALSE;
+            constexpr size_t size = sizeof(VkBool32);
+            entries.push_back(VkSpecializationMapEntry{
+                .constantID = _constant_id,
+                .offset = static_cast<uint32_t>(offset),
+                .size = size});
+            const auto *byte_pointer = reinterpret_cast<const std::uint8_t *>(&vk_val);
+            data.insert(data.end(), byte_pointer, byte_pointer + size);
+        }
+        else
+        {
+            size_t size = sizeof(T);
+            entries.push_back(VkSpecializationMapEntry{
+                .constantID = _constant_id,
+                .offset = static_cast<uint32_t>(offset),
+                .size = size});
+            const auto *byte_pointer = reinterpret_cast<const std::uint8_t *>(&_value);
+            data.insert(data.end(), byte_pointer, byte_pointer + size);
+        }
     }
 
-     VkSpecializationInfo build() const noexcept
+    VkSpecializationInfo build() const & noexcept
     {
         return VkSpecializationInfo{
-            .mapEntryCount = static_cast<std::uint32_t>(entries.size()),
+            .mapEntryCount = static_cast<uint32_t>(entries.size()),
             .pMapEntries = entries.data(),
             .dataSize = data.size(),
             .pData = data.data()};
     }
+    VkSpecializationInfo build() const && = delete;
 
-     bool empty() const noexcept
-    {
-        return entries.empty();
-    }
-
+    bool empty() const noexcept { return entries.empty(); }
     void clear() noexcept
     {
         entries.clear();
         data.clear();
     }
+
+    const std::vector<VkSpecializationMapEntry> &getEntries() const noexcept { return entries; }
+    const std::vector<std::uint8_t> &getData() const noexcept { return data; }
+
+    void setEntries(const std::vector<VkSpecializationMapEntry> &_entries) { entries = _entries; }
+    void setData(const std::vector<std::uint8_t> &_data) { data = _data; }
 };
 
 class Shader_Generator
 {
 private:
-    std::uint32_t group_x;
-    std::uint32_t group_y;
-    std::uint32_t group_z;
-    std::uint32_t current_binding = 0;
-    std::uint32_t var_counter = 0;
+    uint32_t group_x;
+    uint32_t group_y;
+    uint32_t group_z;
+    uint32_t current_binding = 0;
+    uint32_t var_counter = 0;
+    size_t total_shared_memory_bytes = 0;
     std::string default_data_type = "float";
 
-    std::ostringstream header_stream;
-    std::ostringstream specialization_stream;
     std::ostringstream bindings_stream;
     std::ostringstream shared_memory_stream;
     std::ostringstream body_stream;
 
     bool is_subgroup_enabled = false;
     bool is_control_flow_enabled = false;
+    bool is_float16_enabled = false;
+    bool is_cooperative_matrix_enabled = false;
+    bool has_push_constants = false;
+    std::bitset<32> used_bindings;
     std::vector<Specialization_Constant_Entry> spec_constants;
 
 public:
-    Shader_Generator(std::uint32_t _group_x, std::uint32_t _group_y = 1, std::uint32_t _group_z = 1, const std::string &_default_data_type = "float")
-        : group_x(_group_x), group_y(_group_y), group_z(_group_z), default_data_type(_default_data_type)
-    {
-        Logger::logMessage(std::format("Shader_Generator::Shader_Generator: Initializing generator with local_size ({}, {}, {}) and default type '{}'", _group_x, _group_y, _group_z, _default_data_type),
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::SHADER_GENERATION);
-    }
+    Shader_Generator(uint32_t _group_x, uint32_t _group_y = 1, uint32_t _group_z = 1, const std::string &_default_data_type = "float");
 
-    void setDefaultDataType(const std::string &_type_name) noexcept
+    void enableFloat16() noexcept { is_float16_enabled = true; }
+    void enableCooperativeMatrix() noexcept
     {
-        default_data_type = _type_name;
+        is_cooperative_matrix_enabled = true;
+        is_float16_enabled = true;
     }
+    void enableSubgroupOperations();
+    void enableControlFlowAttributes();
 
-     const std::string &getDefaultDataType() const noexcept
-    {
-        return default_data_type;
-    }
-
-    void enableSubgroupOperations()
-    {
-        Logger::logMessage("Shader_Generator::enableSubgroupOperations: Enabling subgroup operations",
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::SHADER_GENERATION);
-        is_subgroup_enabled = true;
-    }
-
-    void enableControlFlowAttributes()
-    {
-        Logger::logMessage("Shader_Generator::enableControlFlowAttributes: Enabling control flow attributes",
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::SHADER_GENERATION);
-        is_control_flow_enabled = true;
-    }
-
-    void addSpecializationConstant(std::uint32_t _constant_id,
+    void addSpecializationConstant(uint32_t _constant_id,
                                    const std::string &_name,
                                    const std::string &_type_name = "uint",
-                                   const std::string &_default_value = "0")
-    {
-        Logger::logMessage(std::format("Shader_Generator::addSpecializationConstant: Added constant_id {} with name '{}' type '{}' default '{}'",
-                                       _constant_id, _name, _type_name, _default_value),
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::SHADER_GENERATION);
-        spec_constants.push_back(Specialization_Constant_Entry{
-            .constant_id = _constant_id,
-            .name = _name,
-            .type_name = _type_name,
-            .default_val = _default_value});
+                                   const std::string &_default_value = "0");
 
-        specialization_stream << std::format("layout(constant_id = {}) const {} {} = {};\n",
-                                             _constant_id, _type_name, _name, _default_value);
-    }
-
-     const std::vector<Specialization_Constant_Entry> &getSpecializationConstants() const noexcept
-    {
-        return spec_constants;
-    }
-
-    std::string addBuffer(std::uint32_t _binding_index,
+    std::string addBuffer(uint32_t _binding_index,
                           const std::string &_buffer_name = "",
                           const std::string &_type_name = "",
-                          Buffer_Access _access = Buffer_Access::READ_WRITE)
+                          Buffer_Access _access = Buffer_Access::READ_WRITE);
+
+    void setPushConstants(const std::string &_struct_definition);
+
+    std::string addSharedMemory(uint32_t _size, const std::string &_prefix = "shared_mem", const std::string &_type_name = "");
+    void addSharedMemoryRaw(const std::string &_declaration);
+
+    std::string getUniqueVar(const std::string &_prefix = "val");
+    void addLogicSnippet(const std::string &_snippet);
+
+    std::string build() const;
+
+    const std::string &getDefaultDataType() const noexcept { return default_data_type; }
+    void setDefaultDataType(const std::string &_type_name) noexcept { default_data_type = _type_name; }
+    const std::vector<Specialization_Constant_Entry> &getSpecializationConstants() const noexcept { return spec_constants; }
+    void setSpecializationConstants(const std::vector<Specialization_Constant_Entry> &_constants)
     {
-        if (current_binding >= 32)
+        spec_constants = _constants;
+        for (const auto &entry : spec_constants)
         {
-            throw std::runtime_error("Shader_Generator: Exceeded maximum of 32 bindings.");
+            if (entry.type_name == "float16_t")
+            {
+                is_float16_enabled = true;
+            }
         }
-        current_binding++;
-
-        std::string qualifier;
-        switch (_access)
-        {
-        case Buffer_Access::READ_ONLY:
-            qualifier = "readonly";
-            break;
-        case Buffer_Access::WRITE_ONLY:
-            qualifier = "writeonly";
-            break;
-        case Buffer_Access::READ_WRITE:
-            qualifier = "coherent";
-            break;
-        }
-
-        std::string resolved_type = _type_name.empty() ? default_data_type : _type_name;
-        std::string name = _buffer_name.empty() ? std::format("buf_{}", _binding_index) : _buffer_name;
-        Logger::logMessage(std::format("Shader_Generator::addBuffer: Added buffer binding {} with name '{}' of type '{}' and access '{}'",
-                                       _binding_index, name, resolved_type, qualifier),
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::SHADER_GENERATION);
-
-        bindings_stream << std::format("layout(std430, binding = {}) {} buffer Buffer_{} {{ {} {}[]; }};\n",
-                                       _binding_index, qualifier, _binding_index, resolved_type, name);
-        return name;
     }
-
-    void setPushConstants(const std::string &_struct_definition)
-    {
-        bindings_stream << "layout(push_constant) uniform PushConstants {\n";
-        bindings_stream << _struct_definition << "\n";
-        bindings_stream << "} pc;\n\n";
-    }
-
-    std::string addSharedMemory(std::uint32_t _size, const std::string &_prefix = "shared_mem", const std::string &_type_name = "")
-    {
-        std::string resolved_type = _type_name.empty() ? default_data_type : _type_name;
-        std::string name = std::format("{}_{}", _prefix, var_counter++);
-        Logger::logMessage(std::format("Shader_Generator::addSharedMemory: Added shared memory array '{}' of size {} of type '{}'", name, _size, resolved_type),
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::SHADER_GENERATION);
-        shared_memory_stream << std::format("shared {} {}[{}];\n", resolved_type, name, _size);
-        return name;
-    }
-
-    void addSharedMemoryRaw(const std::string &_declaration)
-    {
-        shared_memory_stream << _declaration << "\n";
-    }
-
-    std::string getUniqueVar(const std::string &_prefix = "val")
-    {
-        return std::format("{}_{}", _prefix, var_counter++);
-    }
-
-    void addLogicSnippet(const std::string &_snippet)
-    {
-        body_stream << _snippet << "\n";
-    }
-
-    std::string build() const
-    {
-        Logger::logMessage("Shader_Generator::build: Building GLSL shader code",
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::SHADER_GENERATION);
-        std::ostringstream final_shader;
-        final_shader << "#version 450\n";
-
-        if (is_coop)
-        {
-            final_shader << "#extension GL_KHR_cooperative_matrix : enable\n";
-            final_shader << "#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable\n";
-            final_shader << "#extension GL_KHR_memory_scope_semantics : enable\n";
-        }
-
-        if (is_subgroup_enabled)
-        {
-            final_shader << "#extension GL_KHR_shader_subgroup_arithmetic : enable\n";
-            final_shader << "#extension GL_KHR_shader_subgroup_basic : enable\n";
-        }
-
-        if (is_control_flow_enabled)
-        {
-            final_shader << "#extension GL_EXT_control_flow_attributes : enable\n";
-        }
-
-        final_shader << "\n";
-        final_shader << std::format("layout(local_size_x = {}, local_size_y = {}, local_size_z = {}) in;\n\n", group_x, group_y, group_z);
-        final_shader << specialization_stream.str();
-        if (!spec_constants.empty())
-        {
-            final_shader << "\n";
-        }
-        final_shader << bindings_stream.str();
-        final_shader << shared_memory_stream.str();
-
-        final_shader << "void main() {\n";
-        final_shader << "    uint global_id = gl_GlobalInvocationID.x;\n";
-        final_shader << "    uint local_id = gl_LocalInvocationID.x;\n";
-
-        if (is_subgroup_enabled)
-        {
-            final_shader << "    uint subgroup_id = gl_SubgroupID;\n";
-            final_shader << "    uint subgroup_local_id = gl_SubgroupInvocationID;\n";
-        }
-
-        final_shader << body_stream.str();
-        final_shader << "}\n";
-
-        return final_shader.str();
-    }
+    uint32_t getCurrentBinding() const noexcept { return current_binding; }
+    uint32_t getVarCounter() const noexcept { return var_counter; }
+    uint32_t getGroupX() const noexcept { return group_x; }
+    uint32_t getGroupY() const noexcept { return group_y; }
+    uint32_t getGroupZ() const noexcept { return group_z; }
+    void setCurrentBinding(uint32_t _binding) noexcept { current_binding = _binding; }
+    void setVarCounter(uint32_t _counter) noexcept { var_counter = _counter; }
+    void setGroupX(uint32_t _group_x) noexcept { group_x = std::max<uint32_t>(1u, _group_x); }
+    void setGroupY(uint32_t _group_y) noexcept { group_y = std::max<uint32_t>(1u, _group_y); }
+    void setGroupZ(uint32_t _group_z) noexcept { group_z = std::max<uint32_t>(1u, _group_z); }
+    bool isControlFlowEnabled() const noexcept { return is_control_flow_enabled; }
+    bool isSubgroupEnabled() const noexcept { return is_subgroup_enabled; }
+    bool isFloat16Enabled() const noexcept { return is_float16_enabled; }
+    bool isCooperativeMatrixEnabled() const noexcept { return is_cooperative_matrix_enabled; }
+    void setControlFlowEnabled(bool _enabled) noexcept { is_control_flow_enabled = _enabled; }
+    void setSubgroupEnabled(bool _enabled) noexcept { is_subgroup_enabled = _enabled; }
+    void setFloat16Enabled(bool _enabled) noexcept { is_float16_enabled = _enabled; }
+    void setCooperativeMatrixEnabled(bool _enabled) noexcept { is_cooperative_matrix_enabled = _enabled; }
 };

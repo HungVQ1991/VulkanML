@@ -1,0 +1,119 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_KHR_cooperative_matrix : require
+
+#define TILE_M 16
+#define TILE_N 16
+#define TILE_K 16
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly restrict buffer Grad_Output_Buffer {
+    float16_t grad_output[];
+};
+
+layout(std430, set = 0, binding = 1) writeonly restrict buffer Grad_Input_Buffer {
+    float16_t grad_input[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint batch_size;
+    uint in_h;
+    uint in_w;
+    uint channels;
+    uint out_h;
+    uint out_w;
+    uint scale_factor;
+} pc;
+
+shared float16_t smem_eye[TILE_M * TILE_K];
+shared float16_t smem_grad[TILE_K * TILE_N];
+shared float16_t smem_out[TILE_M * TILE_N];
+
+void main() {
+    uint tile_c = gl_WorkGroupID.x * TILE_N;
+    uint tile_p = gl_WorkGroupID.y * TILE_M;
+    uint batch_idx = gl_WorkGroupID.z;
+
+    uint total_in_pixels = pc.in_h * pc.in_w;
+    if (tile_c >= pc.channels || tile_p >= total_in_pixels || batch_idx >= pc.batch_size) return;
+
+    uint lane_id = gl_LocalInvocationID.x;
+
+    for (uint i = 0; i < 8; ++i) {
+        uint idx = lane_id * 8 + i;
+        uint r = idx / TILE_K;
+        uint c = idx % TILE_K;
+        smem_eye[idx] = (r == c) ? float16_t(1.0) : float16_t(0.0);
+    }
+    barrier();
+
+    coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> matA;
+    coopMatLoad(matA, smem_eye, 0, TILE_K, gl_CooperativeMatrixLayoutRowMajor);
+
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc;
+    acc = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+
+    for (uint sy = 0; sy < pc.scale_factor; ++sy) {
+        for (uint sx = 0; sx < pc.scale_factor; ++sx) {
+            for (uint i = 0; i < 8; ++i) {
+                uint idx = lane_id * 8 + i;
+                uint r = idx / TILE_N;
+                uint c = idx % TILE_N;
+                uint p_idx = tile_p + r;
+                uint gc = tile_c + c;
+
+                if (p_idx < total_in_pixels && gc < pc.channels) {
+                    uint ih = p_idx / pc.in_w;
+                    uint iw = p_idx % pc.in_w;
+                    uint oh = ih * pc.scale_factor + sy;
+                    uint ow = iw * pc.scale_factor + sx;
+
+                    if (oh < pc.out_h && ow < pc.out_w) {
+                        uint out_addr = batch_idx * (pc.out_h * pc.out_w * pc.channels) +
+                                       oh * (pc.out_w * pc.channels) +
+                                       ow * pc.channels + gc;
+                        float16_t g = grad_output[out_addr];
+                        if (isnan(float(g)) || isinf(float(g))) g = float16_t(0.0);
+                        smem_grad[idx] = g;
+                    } else {
+                        smem_grad[idx] = float16_t(0.0);
+                    }
+                } else {
+                    smem_grad[idx] = float16_t(0.0);
+                }
+            }
+            barrier();
+
+            coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> matB;
+            coopMatLoad(matB, smem_grad, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+            acc = coopMatMulAdd(matA, matB, acc);
+            barrier();
+        }
+    }
+
+    coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> res;
+    res = coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(acc);
+
+    coopMatStore(res, smem_out, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+    barrier();
+    for (uint i = 0; i < 8; ++i) {
+        uint idx = lane_id * 8 + i;
+        uint r = idx / TILE_N;
+        uint c = idx % TILE_N;
+        uint p_idx = tile_p + r;
+        uint gc = tile_c + c;
+        if (p_idx < total_in_pixels && gc < pc.channels) {
+            float val = float(smem_out[idx]);
+            if (isnan(val) || isinf(val)) {
+                val = 0.0f;
+            } else {
+                val = clamp(val, -65504.0f, 65504.0f);
+            }
+            uint in_addr = batch_idx * (total_in_pixels * pc.channels) + p_idx * pc.channels + gc;
+            grad_input[in_addr] = float16_t(val);
+        }
+    }
+}

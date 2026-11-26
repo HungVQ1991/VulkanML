@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <format>
 #include <fstream>
+#include <memory>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -16,229 +17,167 @@
 #include "ilayer.h"
 #include "math/tensor.h"
 
+namespace gpu
+{
+class vector;
+}
+
 class Conv2d_Layer : public ILayer
 {
+public:
+    static constexpr uint32_t TERNARY_INFERENCE_MAGIC = 0x5445524E;
+    static constexpr uint32_t TERNARY_CHECKPOINT_MAGIC = 0x54455243;
+
 private:
-    std::uint32_t input_height = 0;
-    std::uint32_t input_width = 0;
-    std::uint32_t input_channels = 0;
-    std::uint32_t output_channels = 0;
-    std::uint32_t kernel_size = 0;
-    std::uint32_t stride = 1;
-    std::uint32_t padding = 0;
-    std::uint32_t output_height = 0;
-    std::uint32_t output_width = 0;
+    uint32_t input_height = 0;
+    uint32_t input_width = 0;
+    uint32_t input_channels = 0;
+    uint32_t output_channels = 0;
+    uint32_t kernel_size = 0;
+    uint32_t stride = 1;
+    uint32_t padding = 0;
+    uint32_t output_height = 0;
+    uint32_t output_width = 0;
 
-    Matrix weights;
-    Matrix biases;
-    Matrix weights_gradient;
-    Matrix biases_gradient;
-    Matrix input_matrix;
-    Matrix output_matrix;
-    Matrix input_gradient;
-
-    bool is_forward_completed = false;
     Execution_Target execution_target = Execution_Target::CPU;
+    Data_Type data_type = Data_Type::FLOAT32;
+    bool is_forward_completed = false;
 
-    void initializeWeights()
-    {
-        std::size_t weight_count = kernel_size * kernel_size * input_channels * output_channels;
-        std::vector<float> host_weights(weight_count);
-        std::vector<float> host_biases(output_channels, 0.0f);
+    Tensor weights;
+    Tensor biases;
+    Tensor weights_gradient_tensor;
+    Tensor biases_gradient_tensor;
+    Tensor step_weights_grad_scratch;
+    Tensor step_biases_grad_scratch;
+    Tensor input_tensor;
+    Tensor output_tensor;
+    Tensor input_gradient_tensor;
 
-        float fan_in = static_cast<float>(kernel_size * kernel_size * input_channels);
-        float standard_deviation = std::sqrt(2.0f / fan_in);
+    Tensor input_tensor_fp16;
+    Tensor output_tensor_fp16;
+    Tensor input_gradient_tensor_fp16;
+    Tensor output_gradient_tensor_fp16;
+    Tensor im2col_scratch;
+    Tensor im2col_scratch_fp16;
 
-        std::mt19937 generator(std::random_device{}());
-        std::normal_distribution<float> normal_distribution(0.0f, standard_deviation);
+    Tensor master_weights;
+    Tensor master_weights_gradient_tensor;
+    Tensor effective_weights;
+    Tensor effective_weights_fp16;
+    Tensor packed_weights;
+    Tensor gamma_tensor;
+    bool has_packed_inference = false;
+    bool has_master_weights = true;
+    bool has_valid_forward_im2col_fp16 = false;
 
-        for (std::size_t i = 0; i < weight_count; ++i)
-        {
-            host_weights[i] = normal_distribution(generator);
-        }
+    std::shared_ptr<gpu::vector> gpu_partial_sums;
+    std::shared_ptr<gpu::vector> gpu_gamma_buffer;
 
-        weights = Matrix(1, weight_count, host_weights, execution_target);
-        biases = Matrix(1, output_channels, host_biases, execution_target);
-        weights_gradient = Matrix(1, weight_count, execution_target);
-        biases_gradient = Matrix(1, output_channels, execution_target);
-    }
+    static std::pair<uint32_t, uint32_t> validateAndComputeOutput(
+        uint32_t _height, uint32_t _width,
+        uint32_t _input_channels, uint32_t _output_channels,
+        uint32_t _kernel_size, uint32_t _stride, uint32_t _padding);
+    void ensureTernaryGpuBuffers(size_t weight_count);
+    void initializeWeights();
+    void packWeightsCpu();
+    void packWeightsGpu();
 
 public:
-    Conv2d_Layer(std::uint32_t _height,
-                 std::uint32_t _width,
-                 std::uint32_t _input_channels,
-                 std::uint32_t _output_channels,
-                 std::uint32_t _kernel_size,
-                 std::uint32_t _stride,
-                 std::uint32_t _padding,
-                 Execution_Target _execution_target = Execution_Target::CPU)
-        : input_height(_height),
-          input_width(_width),
-          input_channels(_input_channels),
-          output_channels(_output_channels),
-          kernel_size(_kernel_size),
-          stride(_stride),
-          padding(_padding),
-          execution_target(_execution_target),
-          weights(0, 0, _execution_target),
-          biases(0, 0, _execution_target),
-          weights_gradient(0, 0, _execution_target),
-          biases_gradient(0, 0, _execution_target),
-          input_matrix(0, 0, _execution_target),
-          output_matrix(0, 0, _execution_target),
-          input_gradient(0, 0, _execution_target),
-          is_forward_completed(false)
+    using ILayer::forward;
+
+    Conv2d_Layer(uint32_t _height,
+                 uint32_t _width,
+                 uint32_t _input_channels,
+                 uint32_t _output_channels,
+                 uint32_t _kernel_size,
+                 uint32_t _stride,
+                 uint32_t _padding,
+                 Execution_Target _execution_target = Execution_Target::CPU,
+                 Data_Type _data_type = Data_Type::FLOAT32);
+
+    ~Conv2d_Layer() noexcept override;
+
+    Tensor forward(const Tensor &_input_tensor) override;
+    Tensor forward(const Tensor& _batched_input, const std::vector<Tensor>& _batched_params) const override;
+    Tensor backward(const Tensor &_output_gradient) override;
+    Tensor backward(const Tensor &_output_gradient, bool _compute_input_gradient) override;
+    void resetGradient() override;
+    void resetGradients() override;
+    std::unique_ptr<ILayer> clone() const override;
+    void invalidateWeightCache() noexcept override;
+    void setMixedPrecision(bool _enable) noexcept override;
+    void setTrainingMode(bool _is_training) override;
+    void prepareInference() override;
+    void quantizeToTernary() override;
+    void dequantizeFromTernary() override;
+
+    void saveConfiguration(std::ofstream &_output_file_stream) const override;
+    void saveInference(std::ofstream &_output_file_stream) const override;
+    void loadInference(std::ifstream &_input_file_stream) override;
+    void saveCheckpoint(std::ofstream &_output_file_stream) const override;
+    void loadCheckpoint(std::ifstream &_input_file_stream) override;
+
+    std::function<float(std::mt19937&)> getPopulationParameterInitializer(size_t param_index) const override;
+    std::vector<float> getPopulationParameter(size_t param_index) const override;
+
+    std::vector<Shape> getPopulationParameterDims() const override { return { Shape{ kernel_size, kernel_size, input_channels, output_channels }, Shape{ 1, output_channels } }; }
+    std::vector<bool> getPopulationParameterIsEvolvable() const override { return { true, true }; }
+    std::vector<std::pair<Tensor *, Tensor *>> getParametersAndGradients() override;
+    std::vector<const Tensor *> getNoDecayParameters() const override { return { &biases }; }
+
+    const Tensor &getWeightsGradient() const override { return isTernary() ? master_weights_gradient_tensor : weights_gradient_tensor; }
+    const Tensor &getBiasesGradient() const noexcept { return biases_gradient_tensor; }
+    const Tensor &getInputGradient() const noexcept { return input_gradient_tensor; }
+    const Tensor &getWeights() const override
     {
-        output_height = (input_height + 2 * padding - kernel_size) / stride + 1;
-        output_width = (input_width + 2 * padding - kernel_size) / stride + 1;
-        initializeWeights();
-    }
-
-    ~Conv2d_Layer() noexcept override = default;
-
-    Matrix forward(const Matrix &_input_matrix) override
-    {
-        Logger::logMessage(Input_Format{"Conv2d_Layer::forward: input_height={}, input_width={}, input_channels={}, output_channels={}",
-                                        input_height, input_width, input_channels, output_channels},
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           1,
-                           Log_Feature::CONV2D_COMPUTE | Log_Feature::FORWARD_EVALUATION);
-
-        input_matrix = _input_matrix;
-        input_matrix.conv2d(weights, biases, output_matrix, input_height, input_width, input_channels, output_channels, kernel_size, stride, padding);
-        is_forward_completed = true;
-        return output_matrix;
-    }
-
-    Matrix backward(const Matrix &_output_gradient) override
-    {
-        if (!is_forward_completed)
+        if (isTernary())
         {
-            Logger::logMessage(Input_Format{"Conv2d_Layer::backward: Backward called before forward"},
-                               Log_Level::LOG_ERROR,
-                               true,
-                               0,
-                               Log_Feature::CONV2D_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
-            throw std::logic_error("Backward called before forward");
+            return has_master_weights ? master_weights : packed_weights;
         }
-
-        Logger::logMessage(Input_Format{"Conv2d_Layer::backward: output_gradient rows={}, columns={}",
-                                        _output_gradient.getRows(),
-                                        _output_gradient.getColumns()},
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           1,
-                           Log_Feature::CONV2D_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
-
-        input_matrix.conv2dBackwardWeight(_output_gradient, weights_gradient, biases_gradient, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding);
-        logBufferAddress(&input_matrix, "input_matrix (Backward)");
-        _output_gradient.conv2dBackwardInput(weights, input_gradient, input_height, input_width, input_channels, output_height, output_width, output_channels, kernel_size, stride, padding);
-        return input_gradient;
-    }
-
-    void resetGradient() override
-    {
-        is_forward_completed = false;
-    }
-
-    Matrix getWeights() const override
-    {
         return weights;
     }
+    const Tensor &getBiases() const override { return biases; }
+    const Tensor &getInput() const override { return input_tensor; }
+    const Tensor &getOutput() const override { return output_tensor; }
 
-    Matrix getBiases() const override
-    {
-        return biases;
-    }
+    bool isTernary() const noexcept override { return data_type == Data_Type::TERNARY_INT2; }
+    bool hasPackedInference() const noexcept { return has_packed_inference; }
+    bool hasMasterWeights() const noexcept { return has_master_weights; }
+    Data_Type getDataType() const noexcept { return data_type; }
 
-    Matrix getWeightsGradient() override
-    {
-        return weights_gradient;
-    }
+    Tensor &getMasterWeights() noexcept { return master_weights; }
+    const Tensor &getMasterWeights() const noexcept { return master_weights; }
+    const Tensor &getEffectiveWeights() const noexcept { return effective_weights; }
+    const Tensor &getPackedWeights() const noexcept { return packed_weights; }
+    const Tensor &getGammaTensor() const noexcept { return gamma_tensor; }
 
-    Matrix getInput() override
-    {
-        return input_matrix;
-    }
-
-    Matrix getOutput() override
-    {
-        return output_matrix;
-    }
-
+    uint32_t getOutputChannels() const noexcept { return output_channels; }
+    uint32_t getInputChannels() const noexcept { return input_channels; }
+    uint32_t getOutputHeight() const noexcept { return output_height; }
+    uint32_t getOutputWidth() const noexcept { return output_width; }
+    uint32_t getInputHeight() const noexcept { return input_height; }
+    uint32_t getInputWidth() const noexcept { return input_width; }
+    uint32_t getKernelSize() const noexcept { return kernel_size; }
     Execution_Target getExecutionTarget() const override { return execution_target; }
+    uint32_t getPadding() const noexcept { return padding; }
+    Layer_Type getLayerType() const noexcept override { return Layer_Type::CONV2D; }
+    uint32_t getStride() const noexcept { return stride; }
+    bool supportsPopulationBatch() const noexcept override { return false; }
+    bool isForwardCompleted() const noexcept { return is_forward_completed; }
+    bool hasParameters() const noexcept override { return true; }
 
-    bool hasParameters() const noexcept override
-    {
-        return true;
-    }
-
-    Layer_Type getLayerType() const noexcept override
-    {
-        return Layer_Type::CONV2D;
-    }
-
-    void saveConfiguration(std::ofstream &_output_file_stream) const override
-    {
-        _output_file_stream.write(reinterpret_cast<const char *>(&input_height), sizeof(input_height));
-        _output_file_stream.write(reinterpret_cast<const char *>(&input_width), sizeof(input_width));
-        _output_file_stream.write(reinterpret_cast<const char *>(&input_channels), sizeof(input_channels));
-        _output_file_stream.write(reinterpret_cast<const char *>(&output_channels), sizeof(output_channels));
-        _output_file_stream.write(reinterpret_cast<const char *>(&kernel_size), sizeof(kernel_size));
-        _output_file_stream.write(reinterpret_cast<const char *>(&stride), sizeof(stride));
-        _output_file_stream.write(reinterpret_cast<const char *>(&padding), sizeof(padding));
-    }
-
-    void saveInference(std::ofstream &_output_file_stream) const override
-    {
-        weights.saveMatrix(_output_file_stream);
-        biases.saveMatrix(_output_file_stream);
-    }
-
-    void loadInference(std::ifstream &_input_file_stream) override
-    {
-        weights = Matrix::loadMatrix(_input_file_stream, execution_target);
-        biases = Matrix::loadMatrix(_input_file_stream, execution_target);
-    }
-
-    void saveCheckpoint(std::ofstream &_output_file_stream) const override
-    {
-        weights.saveMatrix(_output_file_stream);
-        biases.saveMatrix(_output_file_stream);
-        weights_gradient.saveMatrix(_output_file_stream);
-        biases_gradient.saveMatrix(_output_file_stream);
-    }
-
-    void loadCheckpoint(std::ifstream &_input_file_stream) override
-    {
-        weights = Matrix::loadMatrix(_input_file_stream, execution_target);
-        biases = Matrix::loadMatrix(_input_file_stream, execution_target);
-        weights_gradient = Matrix::loadMatrix(_input_file_stream, execution_target);
-        biases_gradient = Matrix::loadMatrix(_input_file_stream, execution_target);
-    }
-
-    std::vector<std::pair<Matrix *, Matrix *>> getParametersAndGradients() override
-    {
-        return {{&weights, &weights_gradient}, {&biases, &biases_gradient}};
-    }
-
-    void setExecutionTarget(Execution_Target _new_execution_target) override
-    {
-        if (execution_target == _new_execution_target)
-        {
-            return;
-        }
-
-        logChangeExecutionTarget(_new_execution_target);
-
-        execution_target = _new_execution_target;
-        weights.setExecutionTarget(_new_execution_target);
-        biases.setExecutionTarget(_new_execution_target);
-        weights_gradient.setExecutionTarget(_new_execution_target);
-        biases_gradient.setExecutionTarget(_new_execution_target);
-        input_matrix.setExecutionTarget(_new_execution_target);
-        output_matrix.setExecutionTarget(_new_execution_target);
-        input_gradient.setExecutionTarget(_new_execution_target);
-    }
+    void setPopulationParameter(size_t param_index, std::vector<float> flat_data) override;
+    void setWeightsGradient(const Tensor &_tensor);
+    void setBiasesGradient(const Tensor &_tensor);
+    void setInputGradient(const Tensor &_tensor) { input_gradient_tensor = _tensor; }
+    void setWeights(const Tensor &_new_weights);
+    void setBiases(const Tensor &_new_biases);
+    void setInput(const Tensor &_tensor) { input_tensor = _tensor; }
+    void setOutput(const Tensor &_tensor) { output_tensor = _tensor; }
+    void setExecutionTarget(Execution_Target _new_execution_target) override;
+    void setInputHeight(uint32_t _height);
+    void setInputWidth(uint32_t _width);
+    void setPadding(uint32_t _padding);
+    void setStride(uint32_t _stride);
+    void setIsForwardCompleted(bool _is_completed) noexcept;
 };

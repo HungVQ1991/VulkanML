@@ -1,30 +1,33 @@
 #pragma once
 
-#include <algorithm>
 #include <atomic>
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <mutex>
 #include <source_location>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <tuple>
 #include <unordered_map>
-#include <utility>
 #include <vector>
 
 #ifndef ENABLE_LOGGING
-#define ENABLE_LOGGING 0
+#define ENABLE_LOGGING 1
 #endif
 
-bool is_coop = false;
+#if defined(ENABLE_LOGGING) && ((ENABLE_LOGGING + 0) != 0)
+#define VULKANML_LOGGING_ENABLED 1
+#else
+#define VULKANML_LOGGING_ENABLED 0
+#endif
+
+struct Logging_Preferences;
 
 enum class Log_Level : std::uint8_t
 {
@@ -35,7 +38,14 @@ enum class Log_Level : std::uint8_t
     LOG_LEVEL_END
 };
 
-enum class Log_Feature : std::uint64_t
+enum class Log_Color_Mode : std::uint8_t
+{
+    AUTO = 0,
+    ALWAYS,
+    NEVER
+};
+
+enum class Log_Feature : uint64_t
 {
     NONE = 0,
 
@@ -65,28 +75,55 @@ enum class Log_Feature : std::uint64_t
     MODEL_SERIALIZATION = 1ULL << 19,
     TENSOR_INSPECTION = 1ULL << 20,
     LAYER_INSPECTION = 1ULL << 21,
+    FP16_METRICS = 1ULL << 22,
+    TERNARY_METRICS = 1ULL << 23,
+
+    STATIC_GRAPH = 1ULL << 24,
+    PIPELINE_CACHE = 1ULL << 25,
+    LLM_INFERENCE = 1ULL << 26,
+    TOKENIZER = 1ULL << 27,
+    TRANSFORMER = 1ULL << 28,
+    PROFILER = 1ULL << 29,
+    RL_AGENT = 1ULL << 30,
+    CHECKPOINT_IO = 1ULL << 31,
+    GRADIENT_HEALTH = 1ULL << 32,
+    DATASET_IO = 1ULL << 33,
 
     HARDWARE = DEVICE_MANAGEMENT | MEMORY_ALLOCATION | MEMORY_TRANSFER | SYNCHRONIZATION,
-    GRAPH = GRAPH_RECORDING | OPERATOR_FUSION | SHADER_GENERATION | DISPATCH_EXECUTION,
-    OPERATIONS = DENSE_COMPUTE | CONV2D_COMPUTE | POOLING_COMPUTE | NORMALIZATION_COMPUTE | ACTIVATION_COMPUTE | LOSS_COMPUTE,
-    TRAINING = FORWARD_EVALUATION | BACKWARD_PROPAGATION | OPTIMIZER_STEP | LR_SCHEDULER | LOSS_COMPUTE | DATA_PIPELINE | LAYER_INSPECTION,
+    GRAPH = GRAPH_RECORDING | OPERATOR_FUSION | SHADER_GENERATION | DISPATCH_EXECUTION | STATIC_GRAPH | PIPELINE_CACHE,
+    OPERATIONS = DENSE_COMPUTE | CONV2D_COMPUTE | POOLING_COMPUTE | NORMALIZATION_COMPUTE | ACTIVATION_COMPUTE | LOSS_COMPUTE | FP16_METRICS | TERNARY_METRICS,
+    TRAINING = FORWARD_EVALUATION | BACKWARD_PROPAGATION | OPTIMIZER_STEP | LR_SCHEDULER | LOSS_COMPUTE | DATA_PIPELINE | LAYER_INSPECTION | FP16_METRICS | TERNARY_METRICS | GRADIENT_HEALTH | PROFILER,
+    LLM = TRANSFORMER | LLM_INFERENCE | TOKENIZER | STATIC_GRAPH,
+    IO = MODEL_SERIALIZATION | CHECKPOINT_IO | DATASET_IO,
 
     ALL = 0xFFFFFFFFFFFFFFFFULL
 };
 
 constexpr Log_Feature operator|(Log_Feature lhs, Log_Feature rhs) noexcept
 {
-    return static_cast<Log_Feature>(static_cast<std::uint64_t>(lhs) | static_cast<std::uint64_t>(rhs));
+    return static_cast<Log_Feature>(static_cast<uint64_t>(lhs) | static_cast<uint64_t>(rhs));
 }
 
 constexpr Log_Feature operator&(Log_Feature lhs, Log_Feature rhs) noexcept
 {
-    return static_cast<Log_Feature>(static_cast<std::uint64_t>(lhs) & static_cast<std::uint64_t>(rhs));
+    return static_cast<Log_Feature>(static_cast<uint64_t>(lhs) & static_cast<uint64_t>(rhs));
 }
 
 constexpr Log_Feature operator~(Log_Feature feature) noexcept
 {
-    return static_cast<Log_Feature>(~static_cast<std::uint64_t>(feature));
+    return static_cast<Log_Feature>(~static_cast<uint64_t>(feature));
+}
+
+constexpr Log_Feature &operator|=(Log_Feature &lhs, Log_Feature rhs) noexcept
+{
+    lhs = lhs | rhs;
+    return lhs;
+}
+
+constexpr Log_Feature &operator&=(Log_Feature &lhs, Log_Feature rhs) noexcept
+{
+    lhs = lhs & rhs;
+    return lhs;
 }
 
 template <typename... Args>
@@ -104,7 +141,7 @@ struct Input_Format
     {
         if constexpr (sizeof...(Args) == 0)
         {
-            return std::string(format_string);
+            return std::vformat(format_string, std::make_format_args());
         }
         else
         {
@@ -130,59 +167,119 @@ struct Log_Record
     std::string message;
     std::string file;
     std::uint_least32_t line;
+
+    const std::string &getMessage() const noexcept { return message; }
+    const std::string &getTimestamp() const noexcept { return timestamp; }
+    const std::string &getFile() const noexcept { return file; }
+    Log_Feature getFeature() const noexcept { return feature; }
+    std::uint_least32_t getLine() const noexcept { return line; }
+    Log_Level getLevel() const noexcept { return level; }
+
+    void setMessage(const std::string &_message) { message = _message; }
+    void setTimestamp(const std::string &_timestamp) { timestamp = _timestamp; }
+    void setFile(const std::string &_file) { file = _file; }
+    void setFeature(Log_Feature _feature) noexcept { feature = _feature; }
+    void setLine(std::uint_least32_t _line) noexcept { line = _line; }
+    void setLevel(Log_Level _level) noexcept { level = _level; }
+};
+
+struct Logger_Config
+{
+    bool enable_logging = true;
+    Log_Level min_level = Log_Level::LOG_DEBUG;
+    Log_Level console_min_level = Log_Level::LOG_DEBUG;
+    Log_Level file_min_level = Log_Level::LOG_DEBUG;
+    Log_Feature active_features = Log_Feature::ALL;
+    bool filter_info_by_feature = false;
+    bool console_enabled = true;
+    bool file_enabled = false;
+    bool force_all_console = false;
+    bool quiet_mode = false;
+    bool errors_to_stderr = false;
+    bool include_timestamp_ms = false;
+    bool include_thread_id = false;
+    bool include_source_location = false;
+    Log_Color_Mode color_mode = Log_Color_Mode::AUTO;
+    std::string log_directory = "logs";
 };
 
 class Logger
 {
 private:
-    static constexpr std::size_t MAX_RING_BUFFER_ENTRIES = 2048;
-    static constexpr std::size_t MAX_LOG_FILES = 15;
+    static constexpr size_t MAX_RING_BUFFER_ENTRIES = 2048;
+    static constexpr size_t MAX_LOG_FILES = 15;
 
-    std::atomic<std::uint64_t> active_features{static_cast<std::uint64_t>(Log_Feature::ALL)};
+    struct Transparent_String_Hash
+    {
+        using is_transparent = void;
+        size_t operator()(std::string_view sv) const noexcept
+        {
+            return std::hash<std::string_view>{}(sv);
+        }
+        size_t operator()(const std::string &s) const noexcept
+        {
+            return std::hash<std::string_view>{}(s);
+        }
+        size_t operator()(const char *s) const noexcept
+        {
+            return std::hash<std::string_view>{}(s ? std::string_view(s) : std::string_view{});
+        }
+    };
+
+    struct Transparent_String_Equal
+    {
+        using is_transparent = void;
+        bool operator()(std::string_view lhs, std::string_view rhs) const noexcept
+        {
+            return lhs == rhs;
+        }
+    };
+
+    std::atomic<uint64_t> active_features{static_cast<uint64_t>(Log_Feature::ALL)};
+    std::atomic<Log_Level> min_log_level{Log_Level::LOG_DEBUG};
+    std::atomic<Log_Level> min_console_level{Log_Level::LOG_DEBUG};
+    std::atomic<Log_Level> min_file_level{Log_Level::LOG_DEBUG};
+    std::atomic<bool> is_filter_info_by_feature_enabled{false};
     std::atomic<bool> is_console_enabled{true};
     std::atomic<bool> is_file_logging_enabled{false};
     std::atomic<bool> is_force_all_console_enabled{false};
+    std::atomic<bool> is_quiet_mode_enabled{false};
+    std::atomic<bool> is_errors_to_stderr_enabled{false};
+    std::atomic<bool> is_timestamp_ms_enabled{false};
+    std::atomic<bool> is_thread_id_enabled{false};
+    std::atomic<bool> is_source_location_enabled{false};
+    std::atomic<Log_Color_Mode> color_mode{Log_Color_Mode::AUTO};
 
     std::filesystem::path log_directory{"logs"};
     std::filesystem::path current_log_file;
     std::ofstream log_file_stream;
+    size_t lines_since_flush{0};
 
     std::deque<Log_Record> ring_buffer;
-    std::unordered_map<std::string, std::unordered_map<std::uint_least32_t, std::size_t>> call_site_counters;
+    std::unordered_map<std::string, std::unordered_map<std::uint_least32_t, size_t>, Transparent_String_Hash, Transparent_String_Equal> call_site_counters;
     std::mutex logger_mutex;
 
-    Logger() = default;
-
-    ~Logger()
-    {
-        if (log_file_stream.is_open())
-        {
-            try
-            {
-                log_file_stream << std::format("[{}] [{:<5}] [{:<18}] END OF LOG INSTANCE\n", timestamp(), "INFO", "General");
-                log_file_stream.flush();
-            }
-            catch (...)
-            {
-            }
-        }
-    }
+    Logger();
+    ~Logger();
 
     Logger(const Logger &) = delete;
     Logger &operator=(const Logger &) = delete;
 
-    static Logger &getInstance()
-    {
-        static Logger instance;
-        return instance;
-    }
+    static Logger &getInstance();
+    static void shutdownFlushAtExit() noexcept;
+    static std::string timestamp();
+    static std::string timestampFormatted(bool _include_ms);
+    bool openNewLogFile() noexcept;
+    static bool logMessageImpl(
+        const std::string &_message,
+        Log_Level _level,
+        bool _print_to_console,
+        size_t _repetition_count,
+        Log_Feature _feature,
+        const std::source_location _location);
 
-    static std::string timestamp()
-    {
-        const auto now = std::chrono::floor<std::chrono::milliseconds>(std::chrono::system_clock::now());
-        const std::chrono::zoned_time zt{std::chrono::current_zone(), now};
-        return std::format("{:%Y-%m-%d %H:%M:%S}", zt);
-    }
+public:
+    static std::string featureToString(Log_Feature _feature);
 
     static constexpr std::string_view levelToString(Log_Level _level) noexcept
     {
@@ -218,216 +315,27 @@ private:
         }
     }
 
-    static std::string featureToString(Log_Feature _feature)
+    static void initialize(const std::string &_directory);
+
+    static inline bool logMessage(
+        const std::string &_message,
+        Log_Level _level = Log_Level::LOG_INFO,
+        bool _print_to_console = false,
+        size_t _repetition_count = 0,
+        Log_Feature _feature = Log_Feature::NONE,
+        const std::source_location _location = std::source_location::current())
     {
-        std::string result;
-        auto append_tag = [&result](std::string_view _tag)
-        {
-            if (!result.empty())
-            {
-                result += "|";
-            }
-            result += _tag;
-        };
-
-        if ((_feature & Log_Feature::DEVICE_MANAGEMENT) != Log_Feature::NONE)
-            append_tag("Device");
-        if ((_feature & Log_Feature::MEMORY_ALLOCATION) != Log_Feature::NONE)
-            append_tag("MemAlloc");
-        if ((_feature & Log_Feature::MEMORY_TRANSFER) != Log_Feature::NONE)
-            append_tag("MemTransfer");
-        if ((_feature & Log_Feature::SYNCHRONIZATION) != Log_Feature::NONE)
-            append_tag("Sync");
-
-        if ((_feature & Log_Feature::GRAPH_RECORDING) != Log_Feature::NONE)
-            append_tag("GraphRecord");
-        if ((_feature & Log_Feature::OPERATOR_FUSION) != Log_Feature::NONE)
-            append_tag("Fusion");
-        if ((_feature & Log_Feature::SHADER_GENERATION) != Log_Feature::NONE)
-            append_tag("ShaderGen");
-        if ((_feature & Log_Feature::DISPATCH_EXECUTION) != Log_Feature::NONE)
-            append_tag("Dispatch");
-
-        if ((_feature & Log_Feature::FORWARD_EVALUATION) != Log_Feature::NONE)
-            append_tag("Forward");
-        if ((_feature & Log_Feature::BACKWARD_PROPAGATION) != Log_Feature::NONE)
-            append_tag("Backward");
-
-        if ((_feature & Log_Feature::DENSE_COMPUTE) != Log_Feature::NONE)
-            append_tag("Dense");
-        if ((_feature & Log_Feature::CONV2D_COMPUTE) != Log_Feature::NONE)
-            append_tag("Conv2D");
-        if ((_feature & Log_Feature::POOLING_COMPUTE) != Log_Feature::NONE)
-            append_tag("Pooling");
-        if ((_feature & Log_Feature::NORMALIZATION_COMPUTE) != Log_Feature::NONE)
-            append_tag("Norm");
-        if ((_feature & Log_Feature::ACTIVATION_COMPUTE) != Log_Feature::NONE)
-            append_tag("Activation");
-        if ((_feature & Log_Feature::LOSS_COMPUTE) != Log_Feature::NONE)
-            append_tag("Loss");
-
-        if ((_feature & Log_Feature::OPTIMIZER_STEP) != Log_Feature::NONE)
-            append_tag("Optimizer");
-        if ((_feature & Log_Feature::LR_SCHEDULER) != Log_Feature::NONE)
-            append_tag("LRScheduler");
-        if ((_feature & Log_Feature::DATA_PIPELINE) != Log_Feature::NONE)
-            append_tag("DataPipeline");
-        if ((_feature & Log_Feature::MODEL_SERIALIZATION) != Log_Feature::NONE)
-            append_tag("Serialize");
-        if ((_feature & Log_Feature::TENSOR_INSPECTION) != Log_Feature::NONE)
-            append_tag("TensorDump");
-        if ((_feature & Log_Feature::LAYER_INSPECTION) != Log_Feature::NONE)
-            append_tag("LayerInspect");
-
-        if (result.empty())
-        {
-            return "General";
-        }
-        return result;
-    }
-
-    void openNewLogFile()
-    {
-        std::error_code error_code;
-        std::filesystem::create_directories(log_directory, error_code);
-
-        std::vector<std::filesystem::path> log_files;
-        if (std::filesystem::exists(log_directory))
-        {
-            for (const auto &entry : std::filesystem::directory_iterator(log_directory))
-            {
-                if (entry.is_regular_file() && entry.path().extension() == ".log" &&
-                    entry.path().filename().string().starts_with("log_"))
-                {
-                    log_files.push_back(entry.path());
-                }
-            }
-        }
-
-        std::ranges::sort(log_files, [](const auto &_a, const auto &_b)
-                          { return std::filesystem::last_write_time(_a) < std::filesystem::last_write_time(_b); });
-
-        while (log_files.size() >= MAX_LOG_FILES)
-        {
-            std::error_code remove_error;
-            std::filesystem::remove(log_files.front(), remove_error);
-            log_files.erase(log_files.begin());
-        }
-
-        const auto now = std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now());
-        const std::chrono::zoned_time zt{std::chrono::current_zone(), now};
-        const std::string base_name = std::format("log_{:%Y%m%d_%H%M%S}", zt);
-
-        current_log_file = log_directory / (base_name + ".log");
-        std::size_t suffix_index = 1;
-
-        while (std::filesystem::exists(current_log_file))
-        {
-            current_log_file = log_directory / std::format("{}_{}.log", base_name, suffix_index++);
-        }
-
-        log_file_stream.open(current_log_file, std::ios::out | std::ios::app);
-        if (!log_file_stream.is_open())
-        {
-            throw std::runtime_error("Failed to open log file: " + current_log_file.string());
-        }
-
-        log_file_stream << std::format("[{}] [{:<5}] [{:<18}] START OF LOG INSTANCE\n", timestamp(), "INFO", "General");
-        log_file_stream.flush();
-    }
-
-public:
-    static void initialize(const std::string &_directory)
-    {
-        Logger &instance = getInstance();
-        std::lock_guard<std::mutex> lock(instance.logger_mutex);
-        if (instance.log_file_stream.is_open())
-        {
-            instance.log_file_stream << std::format("[{}] [{:<5}] [{:<18}] REDIRECTING LOG INSTANCE\n", timestamp(), "INFO", "General");
-            instance.log_file_stream.close();
-        }
-        instance.log_directory = _directory;
-        if (instance.is_file_logging_enabled.load(std::memory_order_relaxed))
-        {
-            instance.openNewLogFile();
-        }
-    }
-
-    static void init(const std::string &_directory)
-    {
-        initialize(_directory);
-    }
-
-    static void setFileLogging(bool _enable) noexcept
-    {
-        Logger &instance = getInstance();
-        std::lock_guard<std::mutex> lock(instance.logger_mutex);
-        instance.is_file_logging_enabled.store(_enable, std::memory_order_relaxed);
-        if (_enable && !instance.log_file_stream.is_open())
-        {
-            instance.openNewLogFile();
-        }
-        else if (!_enable && instance.log_file_stream.is_open())
-        {
-            instance.log_file_stream << std::format("[{}] [{:<5}] [{:<18}] PAUSING LOG INSTANCE\n", timestamp(), "INFO", "General");
-            instance.log_file_stream.close();
-        }
-    }
-
-    static void enableFileLogging(bool _enable = true) noexcept
-    {
-        setFileLogging(_enable);
-    }
-
-     static bool isFileLoggingEnabled() noexcept
-    {
-        return getInstance().is_file_logging_enabled.load(std::memory_order_relaxed);
-    }
-
-    static void setForceAllConsoleOutput(bool _enable = true) noexcept
-    {
-        getInstance().is_force_all_console_enabled.store(_enable, std::memory_order_relaxed);
-    }
-
-    static void forceAllConsoleOutput(bool _enable = true) noexcept
-    {
-        setForceAllConsoleOutput(_enable);
-    }
-
-     static bool isForceAllConsoleOutputEnabled() noexcept
-    {
-        return getInstance().is_force_all_console_enabled.load(std::memory_order_relaxed);
-    }
-
-    static std::string getCurrentLogFilepath()
-    {
-        Logger &instance = getInstance();
-        std::lock_guard<std::mutex> lock(instance.logger_mutex);
-        return instance.current_log_file.string();
-    }
-
-    static void enableFeature(Log_Feature _feature, bool _enable = true) noexcept
-    {
-        Logger &instance = getInstance();
-        std::uint64_t feature_mask = static_cast<std::uint64_t>(_feature);
-        if (_enable)
-        {
-            instance.active_features.fetch_or(feature_mask, std::memory_order_relaxed);
-        }
-        else
-        {
-            instance.active_features.fetch_and(~feature_mask, std::memory_order_relaxed);
-        }
-    }
-
-    static void setOnlyActiveFeatures(Log_Feature _feature_mask) noexcept
-    {
-        getInstance().active_features.store(static_cast<std::uint64_t>(_feature_mask), std::memory_order_relaxed);
-    }
-
-    static void setConsoleOutput(bool _enable) noexcept
-    {
-        getInstance().is_console_enabled.store(_enable, std::memory_order_relaxed);
+#if !VULKANML_LOGGING_ENABLED
+        (void)_message;
+        (void)_level;
+        (void)_print_to_console;
+        (void)_repetition_count;
+        (void)_feature;
+        (void)_location;
+        return false;
+#else
+        return logMessageImpl(_message, _level, _print_to_console, _repetition_count, _feature, _location);
+#endif
     }
 
     template <typename... Args>
@@ -435,188 +343,221 @@ public:
         const Input_Format<Args...> &_format,
         Log_Level _level = Log_Level::LOG_INFO,
         bool _print_to_console = false,
-        std::size_t _repetition_count = 0,
+        size_t _repetition_count = 0,
         Log_Feature _feature = Log_Feature::NONE,
         const std::source_location _location = std::source_location::current())
     {
-#if !ENABLE_LOGGING
+#if !VULKANML_LOGGING_ENABLED
+        (void)_format;
+        (void)_level;
+        (void)_print_to_console;
+        (void)_repetition_count;
+        (void)_feature;
+        (void)_location;
         return false;
+#else
+        if (!shouldLog(_level, _feature))
+        {
+            return false;
+        }
+        return logMessageImpl(_format.toString(), _level, _print_to_console, _repetition_count, _feature, _location);
 #endif
-
-        Logger &instance = getInstance();
-
-        if (_level == Log_Level::LOG_DEBUG)
-        {
-            std::uint64_t current_features = instance.active_features.load(std::memory_order_relaxed);
-            if (_feature != Log_Feature::NONE && ((current_features & static_cast<std::uint64_t>(_feature)) == 0))
-            {
-                return false;
-            }
-        }
-
-        std::lock_guard<std::mutex> lock(instance.logger_mutex);
-
-        if (_repetition_count > 0)
-        {
-            auto &line_map = instance.call_site_counters[_location.file_name()];
-            std::size_t &current_count = line_map[_location.line()];
-            if (current_count >= _repetition_count)
-            {
-                return false;
-            }
-            current_count++;
-        }
-
-        std::string message = _format.toString();
-
-        Log_Record record{
-            .timestamp = timestamp(),
-            .level = _level,
-            .feature = _feature,
-            .message = message,
-            .file = _location.file_name(),
-            .line = _location.line()};
-
-        if (instance.ring_buffer.size() >= MAX_RING_BUFFER_ENTRIES)
-        {
-            instance.ring_buffer.pop_front();
-        }
-        instance.ring_buffer.push_back(record);
-
-        std::string feat_str = featureToString(_feature);
-
-        if (instance.is_file_logging_enabled.load(std::memory_order_relaxed) && instance.log_file_stream.is_open())
-        {
-            instance.log_file_stream << std::format("[{}] [{:<5}] [{:<18}] {}\n",
-                                                    record.timestamp,
-                                                    levelToString(_level),
-                                                    feat_str,
-                                                    message);
-            instance.log_file_stream.flush();
-        }
-
-        bool force_console = instance.is_force_all_console_enabled.load(std::memory_order_relaxed);
-        bool console_enabled = instance.is_console_enabled.load(std::memory_order_relaxed);
-        bool should_print_to_console = force_console || _print_to_console || _level == Log_Level::LOG_ERROR;
-
-        if (should_print_to_console && (console_enabled || _level == Log_Level::LOG_ERROR || force_console))
-        {
-            std::cout << std::format("{}[{}] [{:<5}] [{:<18}] {}\033[0m\n",
-                                     levelToAnsiColor(_level),
-                                     record.timestamp,
-                                     levelToString(_level),
-                                     feat_str,
-                                     message);
-        }
-        return true;
     }
 
-    static bool logMessage(
+    static inline bool debug(
         const std::string &_message,
-        Log_Level _level = Log_Level::LOG_INFO,
-        bool _print_to_console = false,
-        std::size_t _repetition_count = 0,
         Log_Feature _feature = Log_Feature::NONE,
+        bool _print_to_console = true,
+        size_t _repetition_count = 0,
         const std::source_location _location = std::source_location::current())
     {
-#if !ENABLE_LOGGING
-        return false;
-#endif
-
-        Logger &instance = getInstance();
-
-        if (_level == Log_Level::LOG_DEBUG)
-        {
-            std::uint64_t current_features = instance.active_features.load(std::memory_order_relaxed);
-            if (_feature != Log_Feature::NONE && ((current_features & static_cast<std::uint64_t>(_feature)) == 0))
-            {
-                return false;
-            }
-        }
-
-        std::lock_guard<std::mutex> lock(instance.logger_mutex);
-
-        if (_repetition_count > 0)
-        {
-            auto &line_map = instance.call_site_counters[_location.file_name()];
-            std::size_t &current_count = line_map[_location.line()];
-            if (current_count >= _repetition_count)
-            {
-                return false;
-            }
-            current_count++;
-        }
-
-        Log_Record record{
-            .timestamp = timestamp(),
-            .level = _level,
-            .feature = _feature,
-            .message = _message,
-            .file = _location.file_name(),
-            .line = _location.line()};
-
-        if (instance.ring_buffer.size() >= MAX_RING_BUFFER_ENTRIES)
-        {
-            instance.ring_buffer.pop_front();
-        }
-        instance.ring_buffer.push_back(record);
-
-        std::string feat_str = featureToString(_feature);
-
-        if (instance.is_file_logging_enabled.load(std::memory_order_relaxed) && instance.log_file_stream.is_open())
-        {
-            instance.log_file_stream << std::format("[{}] [{:<5}] [{:<18}] {}\n",
-                                                    record.timestamp,
-                                                    levelToString(_level),
-                                                    feat_str,
-                                                    _message);
-            instance.log_file_stream.flush();
-        }
-
-        bool force_console = instance.is_force_all_console_enabled.load(std::memory_order_relaxed);
-        bool console_enabled = instance.is_console_enabled.load(std::memory_order_relaxed);
-        bool should_print_to_console = force_console || _print_to_console || _level == Log_Level::LOG_ERROR;
-
-        if (should_print_to_console && (console_enabled || _level == Log_Level::LOG_ERROR || force_console))
-        {
-            std::cout << std::format("{}[{}] [{:<5}] [{:<18}] {}\033[0m\n",
-                                     levelToAnsiColor(_level),
-                                     record.timestamp,
-                                     levelToString(_level),
-                                     feat_str,
-                                     _message);
-        }
-        return true;
+        return logMessage(_message, Log_Level::LOG_DEBUG, _print_to_console, _repetition_count, _feature, _location);
     }
 
-    static void dumpRecentLogs(std::ostream &_output_stream = std::cerr)
+    template <typename... Args>
+    static bool debug(
+        const Input_Format<Args...> &_format,
+        Log_Feature _feature = Log_Feature::NONE,
+        bool _print_to_console = true,
+        size_t _repetition_count = 0,
+        const std::source_location _location = std::source_location::current())
     {
-        Logger &instance = getInstance();
-        std::lock_guard<std::mutex> lock(instance.logger_mutex);
-
-        _output_stream << "\n=== IN-MEMORY LOG DUMP (" << instance.ring_buffer.size() << " ENTRIES) ===\n";
-        for (const auto &rec : instance.ring_buffer)
-        {
-            _output_stream << std::format("[{}] [{:<5}] [{:<18}] ({}:{}) {}\n",
-                                          rec.timestamp,
-                                          levelToString(rec.level),
-                                          featureToString(rec.feature),
-                                          rec.file,
-                                          rec.line,
-                                          rec.message);
-        }
-        _output_stream << "=== END OF DUMP ===\n\n";
+        return logMessage(_format, Log_Level::LOG_DEBUG, _print_to_console, _repetition_count, _feature, _location);
     }
 
-    static void resetLogCounters()
+    static inline bool info(
+        const std::string &_message,
+        Log_Feature _feature = Log_Feature::NONE,
+        bool _print_to_console = true,
+        size_t _repetition_count = 0,
+        const std::source_location _location = std::source_location::current())
     {
-        Logger &instance = getInstance();
-        std::lock_guard<std::mutex> lock(instance.logger_mutex);
-        instance.call_site_counters.clear();
+        return logMessage(_message, Log_Level::LOG_INFO, _print_to_console, _repetition_count, _feature, _location);
     }
 
-    static void resetSpecificLog( )
+    template <typename... Args>
+    static bool info(
+        const Input_Format<Args...> &_format,
+        Log_Feature _feature = Log_Feature::NONE,
+        bool _print_to_console = true,
+        size_t _repetition_count = 0,
+        const std::source_location _location = std::source_location::current())
     {
-
+        return logMessage(_format, Log_Level::LOG_INFO, _print_to_console, _repetition_count, _feature, _location);
     }
+
+    static inline bool warn(
+        const std::string &_message,
+        Log_Feature _feature = Log_Feature::NONE,
+        bool _print_to_console = true,
+        size_t _repetition_count = 0,
+        const std::source_location _location = std::source_location::current())
+    {
+        return logMessage(_message, Log_Level::LOG_WARNING, _print_to_console, _repetition_count, _feature, _location);
+    }
+
+    template <typename... Args>
+    static bool warn(
+        const Input_Format<Args...> &_format,
+        Log_Feature _feature = Log_Feature::NONE,
+        bool _print_to_console = true,
+        size_t _repetition_count = 0,
+        const std::source_location _location = std::source_location::current())
+    {
+        return logMessage(_format, Log_Level::LOG_WARNING, _print_to_console, _repetition_count, _feature, _location);
+    }
+
+    static inline bool error(
+        const std::string &_message,
+        Log_Feature _feature = Log_Feature::NONE,
+        bool _print_to_console = true,
+        size_t _repetition_count = 0,
+        const std::source_location _location = std::source_location::current())
+    {
+        return logMessage(_message, Log_Level::LOG_ERROR, _print_to_console, _repetition_count, _feature, _location);
+    }
+
+    template <typename... Args>
+    static bool error(
+        const Input_Format<Args...> &_format,
+        Log_Feature _feature = Log_Feature::NONE,
+        bool _print_to_console = true,
+        size_t _repetition_count = 0,
+        const std::source_location _location = std::source_location::current())
+    {
+        return logMessage(_format, Log_Level::LOG_ERROR, _print_to_console, _repetition_count, _feature, _location);
+    }
+
+    static bool shouldLog(Log_Level _level, Log_Feature _feature) noexcept;
+
+    static void logFp16TensorStats(
+        std::string_view tensor_name,
+        const std::vector<float> &data,
+        size_t element_count,
+        std::string_view data_type_name = "FLOAT16",
+        Log_Level level = Log_Level::LOG_DEBUG,
+        const std::source_location location = std::source_location::current());
+
+    static void logTernaryTensorStats(
+        std::string_view tensor_name,
+        const std::vector<float> &data,
+        size_t element_count,
+        float gamma = 1.0f,
+        Log_Level level = Log_Level::LOG_DEBUG,
+        const std::source_location location = std::source_location::current());
+
+    static void dumpRecentLogs(std::ostream &_output_stream = std::cerr);
+    static void resetLogCounters();
+    static void resetSpecificLog(const std::string &_file, std::uint_least32_t _line);
+    static std::string getCurrentLogFilepath();
+    static std::string getLogDirectory();
+    static size_t getMaxRingBufferEntries() noexcept;
+    static size_t getMaxLogFiles() noexcept;
+    static Log_Feature getActiveFeatures() noexcept;
+    static Log_Level getMinLogLevel() noexcept;
+    static Log_Level getConsoleMinLevel() noexcept;
+    static Log_Level getFileMinLevel() noexcept;
+    static bool isFilterInfoByFeatureEnabled() noexcept;
+    static bool isForceAllConsoleOutputEnabled() noexcept;
+    static bool isFileLoggingEnabled() noexcept;
+    static bool isConsoleEnabled() noexcept;
+    static bool isQuietModeEnabled() noexcept;
+    static bool isErrorsToStderrEnabled() noexcept;
+    static bool isIncludeTimestampMsEnabled() noexcept;
+    static bool isIncludeThreadIdEnabled() noexcept;
+    static bool isIncludeSourceLocationEnabled() noexcept;
+    static Log_Color_Mode getColorMode() noexcept;
+
+    static void enableFileLogging(bool _enable = true) noexcept;
+    static void flush() noexcept;
+    static void enableFeature(Log_Feature _feature, bool _enable = true) noexcept;
+    static void setMinLogLevel(Log_Level _level) noexcept;
+    static void setConsoleMinLevel(Log_Level _level) noexcept;
+    static void setFileMinLevel(Log_Level _level) noexcept;
+    static void setFilterInfoByFeature(bool _enable) noexcept;
+    static void setLogDirectory(const std::string &_directory);
+    static void setOnlyActiveFeatures(Log_Feature _feature_mask) noexcept;
+    static void setForceAllConsoleOutput(bool _enable = true) noexcept;
+    static void setConsoleOutput(bool _enable) noexcept;
+    static void setQuietMode(bool _enable) noexcept;
+    static void setErrorsToStderr(bool _enable) noexcept;
+    static void setColorMode(Log_Color_Mode _mode) noexcept;
+    static void setIncludeTimestampMs(bool _enable) noexcept;
+    static void setIncludeThreadId(bool _enable) noexcept;
+    static void setIncludeSourceLocation(bool _enable) noexcept;
+
+    static void configure(const Logger_Config &_config);
+    static Logger_Config getConfig();
+    static void applyPreferences(const Logging_Preferences &_prefs);
+    static void configureFromEnvironment();
+    static void applyCliArgs(int argc, char *argv[]);
+    static int loggerCliFlagArity(std::string_view _arg) noexcept;
+    static bool isLoggerCliFlag(std::string_view _arg) noexcept;
+    static std::string loggerCliHelpText();
+    static bool parseLevel(std::string_view _text, Log_Level &_out_level) noexcept;
+    static bool parseColorMode(std::string_view _text, Log_Color_Mode &_out_mode) noexcept;
+    static Log_Feature parseFeatureMask(std::string_view _csv, Log_Feature _base = Log_Feature::NONE) noexcept;
 };
+
+#if VULKANML_LOGGING_ENABLED
+#define VML_LOG_DEBUG(feat, fmt, ...) \
+    do { \
+        if (Logger::shouldLog(Log_Level::LOG_DEBUG, (feat))) { \
+            Logger::logMessage(Input_Format{(fmt) __VA_OPT__(,) __VA_ARGS__}, Log_Level::LOG_DEBUG, true, 0, (feat)); \
+        } \
+    } while (0)
+
+#define VML_LOG_INFO(feat, fmt, ...) \
+    do { \
+        if (Logger::shouldLog(Log_Level::LOG_INFO, (feat))) { \
+            Logger::logMessage(Input_Format{(fmt) __VA_OPT__(,) __VA_ARGS__}, Log_Level::LOG_INFO, true, 0, (feat)); \
+        } \
+    } while (0)
+
+#define VML_LOG_WARN(feat, fmt, ...) \
+    do { \
+        if (Logger::shouldLog(Log_Level::LOG_WARNING, (feat))) { \
+            Logger::logMessage(Input_Format{(fmt) __VA_OPT__(,) __VA_ARGS__}, Log_Level::LOG_WARNING, true, 0, (feat)); \
+        } \
+    } while (0)
+
+#define VML_LOG_ERROR(feat, fmt, ...) \
+    do { \
+        if (Logger::shouldLog(Log_Level::LOG_ERROR, (feat))) { \
+            Logger::logMessage(Input_Format{(fmt) __VA_OPT__(,) __VA_ARGS__}, Log_Level::LOG_ERROR, true, 0, (feat)); \
+        } \
+    } while (0)
+
+#define VML_LOG_ONCE(lvl, feat, fmt, ...) \
+    do { \
+        if (Logger::shouldLog((lvl), (feat))) { \
+            Logger::logMessage(Input_Format{(fmt) __VA_OPT__(,) __VA_ARGS__}, (lvl), true, 1, (feat)); \
+        } \
+    } while (0)
+#else
+#define VML_LOG_DEBUG(feat, fmt, ...) ((void)0)
+#define VML_LOG_INFO(feat, fmt, ...) ((void)0)
+#define VML_LOG_WARN(feat, fmt, ...) ((void)0)
+#define VML_LOG_ERROR(feat, fmt, ...) ((void)0)
+#define VML_LOG_ONCE(lvl, feat, fmt, ...) ((void)0)
+#endif

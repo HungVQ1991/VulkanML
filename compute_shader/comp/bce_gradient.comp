@@ -1,0 +1,68 @@
+#version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#endif
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer Pred_Buffer {
+#ifdef USE_FP16
+    float16_t pred_data[];
+#else
+    float pred_data[];
+#endif
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer Target_Buffer {
+#ifdef USE_FP16
+    float16_t target_data[];
+#else
+    float target_data[];
+#endif
+};
+
+layout(std430, set = 0, binding = 2) writeonly buffer Grad_Buffer {
+#ifdef USE_FP16
+    float16_t grad_data[];
+#else
+    float grad_data[];
+#endif
+};
+
+layout(push_constant) uniform Push_Constants {
+    uint total_elements;
+    float epsilon_val;
+    float inv_total_elements;
+} pc;
+
+void main() {
+    uint wg_id = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
+    uint global_idx = wg_id * 256u + gl_LocalInvocationID.x;
+    if (global_idx >= pc.total_elements) return;
+
+#ifdef USE_FP16
+    float raw_p = float(pred_data[global_idx]);
+    float y = float(target_data[global_idx]);
+#else
+    float raw_p = pred_data[global_idx];
+    float y = target_data[global_idx];
+#endif
+    if (isnan(raw_p) || isnan(y)) {
+#ifdef USE_FP16
+        grad_data[global_idx] = float16_t(raw_p + y);
+#else
+        grad_data[global_idx] = raw_p + y;
+#endif
+        return;
+    }
+#ifdef USE_FP16
+    float eff_eps = max(pc.epsilon_val, 1e-4f);
+    float p = clamp(raw_p, eff_eps, 1.0f - eff_eps);
+    float g = ((p - y) / (p * (1.0f - p))) * pc.inv_total_elements;
+    grad_data[global_idx] = float16_t(clamp(g, -65504.0f, 65504.0f));
+#else
+    float p = clamp(raw_p, pc.epsilon_val, 1.0f - pc.epsilon_val);
+    grad_data[global_idx] = ((p - y) / (p * (1.0f - p))) * pc.inv_total_elements;
+#endif
+}

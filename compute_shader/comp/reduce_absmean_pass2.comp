@@ -1,0 +1,44 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer PartialSumsBuffer {
+    float partial_sums[];
+};
+
+layout(std430, binding = 1) writeonly buffer GammaBuffer {
+    float gamma;
+    float inv_gamma;
+};
+
+layout(push_constant) uniform PushConstants {
+    uint num_partials;
+    uint total_elements;
+} pcs;
+
+shared float s_data[256];
+
+void main() {
+    uint lid = gl_LocalInvocationID.x;
+
+    float sum = 0.0;
+    for (uint i = lid; i < pcs.num_partials; i += 256) {
+        sum += partial_sums[i];
+    }
+    s_data[lid] = sum;
+    barrier();
+
+    for (uint s = 128; s > 0; s >>= 1) {
+        if (lid < s) {
+            s_data[lid] += s_data[lid + s];
+        }
+        barrier();
+    }
+
+    if (lid == 0) {
+        float mean_abs = s_data[0] / float(pcs.total_elements);
+        float g = max(mean_abs, 1e-5);
+        gamma = g;
+        inv_gamma = 1.0 / g;
+    }
+}

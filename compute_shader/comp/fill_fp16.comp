@@ -1,0 +1,21 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) writeonly buffer Output_Buffer {
+    float16_t out_data[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint total_elements;
+    float fill_value;
+} pc;
+
+void main() {
+    uint idx = (gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * gl_WorkGroupSize.x + gl_LocalInvocationID.x;
+    if (idx >= pc.total_elements) return;
+    float v = clamp(pc.fill_value, -65504.0, 65504.0);
+    out_data[idx] = float16_t(v);
+}

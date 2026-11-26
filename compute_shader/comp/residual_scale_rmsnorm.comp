@@ -1,0 +1,60 @@
+#version 450
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer ResInBuffer    { float res_in[]; };
+layout(std430, binding = 1) readonly buffer BranchBuffer   { float br_in[]; };
+layout(std430, binding = 2) readonly buffer GammaBuffer    { float gamma_data[]; };
+layout(std430, binding = 3) buffer ResOutBuffer  { float res_out[]; };
+layout(std430, binding = 4) writeonly buffer NormOutBuffer { float norm_out[]; };
+layout(std430, binding = 5) writeonly buffer InvRmsBuffer  { float inv_rms_data[]; };
+
+layout(push_constant) uniform Constants {
+    uint batch_size;
+    uint dim;
+    float scale;
+    float epsilon;
+} pcs;
+
+shared float s_wave_sums[16];
+
+float blockReduceSum(float val) {
+    val = subgroupAdd(val);
+    if (gl_SubgroupInvocationID == 0u) {
+        s_wave_sums[gl_SubgroupID] = val;
+    }
+    barrier();
+    float total = 0.0;
+    for (uint i = 0u; i < gl_NumSubgroups; ++i) {
+        total += s_wave_sums[i];
+    }
+    return total;
+}
+
+void main() {
+    uint dim = pcs.dim;
+    if (dim == 0u || pcs.batch_size == 0u) return;
+    uint row = gl_WorkGroupID.x;
+    if (row >= pcs.batch_size) return;
+
+    uint lid = gl_LocalInvocationID.x;
+    uint row_offset = row * dim;
+
+    float sum_sq = 0.0;
+    for (uint c = lid; c < dim; c += 64u) {
+        float h = fma(pcs.scale, br_in[row_offset + c], res_in[row_offset + c]);
+        res_out[row_offset + c] = h;
+        sum_sq = fma(h, h, sum_sq);
+    }
+
+    float mean_sq = blockReduceSum(sum_sq) / float(dim);
+    float inv_rms = inversesqrt(mean_sq + pcs.epsilon);
+    if (lid == 0u) {
+        inv_rms_data[row] = inv_rms;
+    }
+
+    for (uint c = lid; c < dim; c += 64u) {
+        norm_out[row_offset + c] = res_out[row_offset + c] * inv_rms * gamma_data[c];
+    }
+}

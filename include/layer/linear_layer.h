@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <format>
 #include <fstream>
+#include <memory>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -17,280 +18,171 @@
 #include "ilayer.h"
 #include "math/tensor.h"
 
+namespace gpu
+{
+class vector;
+}
+
 class Linear_Layer : public ILayer
 {
+public:
+    static constexpr uint32_t TERNARY_INFERENCE_MAGIC = 0x5445524E;
+    static constexpr uint32_t TERNARY_INFERENCE_MAGIC_V2 = 0x54455232;
+    static constexpr uint32_t TERNARY_CHECKPOINT_MAGIC = 0x54455243;
+
 private:
-    Matrix weights;
-    Matrix biases;
-    Matrix input_matrix;
-    Matrix output_matrix;
-    Matrix input_gradient;
+    Tensor weights;
+    Tensor biases;
+    Tensor input_tensor;
+    Tensor output_tensor;
+    Tensor input_gradient_tensor;
 
-    Matrix weights_gradient;
-    Matrix biases_gradient;
+    Tensor weights_gradient_tensor;
+    Tensor biases_gradient_tensor;
 
-    std::size_t input_dimension = 0;
-    std::size_t output_dimension = 0;
+    Tensor input_tensor_fp16;
+    Tensor output_gradient_fp16;
+    Tensor input_gradient_tensor_fp16;
+
+    Data_Type data_type = Data_Type::FLOAT32;
+    Tensor master_weights;
+    Tensor effective_weights;
+    Tensor packed_weights;
+    Tensor gamma_tensor;
+    bool has_packed_inference = false;
+    bool has_master_weights = true;
+    bool use_bias = true;
+
+    Tensor *tied_weight = nullptr;
+    Tensor *tied_weight_grad = nullptr;
+    bool tied_weight_transposed = false;
+    Tensor tied_weight_t_scratch;
+    Tensor tied_grad_fp32_scratch;
+    Tensor unused_bias_grad_scratch;
+    Tensor indexed_hidden_scratch;
+    Tensor indexed_grad_scratch;
+
+    std::shared_ptr<gpu::vector> gpu_partial_sums;
+    std::shared_ptr<gpu::vector> gpu_gamma_buffer;
+
+    size_t input_dimension = 0;
+    size_t output_dimension = 0;
+    float initialization_gain = 2.0f;
+    bool is_forward_completed = false;
     Execution_Target execution_target = Execution_Target::CPU;
+    bool cache_is_nd = false;
+    Shape cache_orig_shape;
 
 public:
-    Linear_Layer()
-        : weights(0, 0),
-          biases(0, 0),
-          input_matrix(0, 0),
-          output_matrix(0, 0),
-          input_gradient(0, 0),
-          weights_gradient(0, 0),
-          biases_gradient(0, 0)
-    {
-    }
+    using ILayer::forward;
 
-    Linear_Layer(std::size_t _input_dimension,
-                 std::size_t _output_dimension,
+    Linear_Layer();
+    Linear_Layer(size_t _input_dimension,
+                 size_t _output_dimension,
                  Execution_Target _execution_target = Execution_Target::CPU,
-                 float _initialization_gain = 2.0f)
-        : weights(0, 0, _execution_target),
-          biases(0, 0, _execution_target),
-          input_matrix(0, 0, _execution_target),
-          output_matrix(0, 0, _execution_target),
-          input_gradient(0, 0, _execution_target),
-          weights_gradient(_input_dimension, _output_dimension, _execution_target),
-          biases_gradient(1, _output_dimension, _execution_target),
-          input_dimension(_input_dimension),
-          output_dimension(_output_dimension),
-          execution_target(_execution_target)
+                 float _initialization_gain = 2.0f,
+                 Data_Type _data_type = Data_Type::FLOAT32,
+                 bool _use_bias = true);
+
+    ~Linear_Layer() noexcept override;
+
+    Tensor forward(const Tensor &_input_tensor) override;
+    Tensor forward(const Tensor &_batched_input, const std::vector<Tensor> &_batched_params) const override;
+    Tensor backward(const Tensor &_output_gradient) override;
+
+    std::unique_ptr<ILayer> clone() const override;
+    void invalidateWeightCache() noexcept override;
+    void setMixedPrecision(bool _enable) noexcept override;
+    void setTrainingMode(bool _is_training) override;
+    void resetGradient() override;
+    void resetGradients() override;
+
+    void prepareInference() override;
+    void quantizeToTernary() override;
+    void dequantizeFromTernary() override;
+
+    void saveConfiguration(std::ofstream &_output_file_stream) const override;
+    void saveInference(std::ofstream &_output_file_stream) const override;
+    void loadInference(std::ifstream &_input_file_stream) override;
+    void saveCheckpoint(std::ofstream &_output_file_stream) const override;
+    void loadCheckpoint(std::ifstream &_input_file_stream) override;
+
+    std::function<float(std::mt19937 &)> getPopulationParameterInitializer(size_t param_index) const override;
+    std::vector<float> getPopulationParameter(size_t param_index) const override;
+    void setPopulationParameter(size_t param_index, std::vector<float> flat_data) override;
+
+    std::vector<Shape> getPopulationParameterDims() const override
     {
-        std::vector<float> weight_data(_input_dimension * _output_dimension);
-        std::vector<float> bias_data(_output_dimension, 0.0f);
-
-        float standard_deviation = std::sqrt(_initialization_gain / static_cast<float>(_input_dimension));
-        std::random_device random_device;
-        std::mt19937 generator(random_device());
-        std::normal_distribution<float> normal_distribution(0.0f, standard_deviation);
-
-        float weight_sum = 0.0f;
-        for (float &weight_value : weight_data)
-        {
-            weight_value = normal_distribution(generator);
-            weight_sum += std::abs(weight_value);
-        }
-
-        float mean_absolute_weight = weight_data.empty() ? 0.0f : weight_sum / static_cast<float>(weight_data.size());
-        Logger::logMessage(Input_Format{"Linear_Layer::Linear_Layer: Layer weights mean_abs = {:.8f}", mean_absolute_weight},
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           1,
-                           Log_Feature::DENSE_COMPUTE);
-
-        weights = Matrix(_input_dimension, _output_dimension, std::move(weight_data), execution_target);
-        biases = Matrix(1, _output_dimension, std::move(bias_data), execution_target);
+        return { { input_dimension, output_dimension }, { 1, output_dimension } };
     }
 
-    ~Linear_Layer() noexcept override = default;
-
-    Matrix forward(const Matrix &_input_matrix) override
+    std::vector<std::pair<Tensor *, Tensor *>> getParametersAndGradients() override;
+    std::vector<const Tensor *> getNoDecayParameters() const override
     {
-        if (_input_matrix.getColumns() != input_dimension)
-        {
-            Logger::logMessage(Input_Format{"Linear_Layer::forward: Input dimension mismatch"},
-                               Log_Level::LOG_ERROR,
-                               true,
-                               0,
-                               Log_Feature::DENSE_COMPUTE | Log_Feature::FORWARD_EVALUATION);
-            throw std::invalid_argument("Input dimension mismatch");
-        }
-
-        Logger::logMessage(Input_Format{"Linear_Layer::forward: batch_size={}, input_dimension={}, output_dimension={}",
-                                        _input_matrix.getRows(),
-                                        input_dimension,
-                                        output_dimension},
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           1,
-                           Log_Feature::DENSE_COMPUTE | Log_Feature::FORWARD_EVALUATION);
-
-        input_matrix = _input_matrix;
-        input_matrix.linearForward(weights, biases, output_matrix);
-
-        logBufferAddress(&weights, "weights (Forward)");
-        logBufferAddress(&biases, "biases (Forward)");
-
-        return output_matrix;
+        return (use_bias && is_trainable) ? std::vector<const Tensor *>{ &biases } : std::vector<const Tensor *>{};
     }
 
-    Matrix backward(const Matrix &_output_gradient) override
-    {
-        if (_output_gradient.getColumns() != output_dimension || _output_gradient.getRows() != input_matrix.getRows())
-        {
-            Logger::logMessage(Input_Format{"Linear_Layer::backward: Gradient output dimension mismatch"},
-                               Log_Level::LOG_ERROR,
-                               true,
-                               0,
-                               Log_Feature::DENSE_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
-            throw std::invalid_argument("Gradient output dimension mismatch");
-        }
+    Tensor forwardIndexed(const Tensor &hidden, const Tensor &target_indices);
+    Tensor backwardIndexed(const Tensor &d_logits, const Tensor &target_indices, const Shape &full_hidden_shape);
 
-        Logger::logMessage(Input_Format{"Linear_Layer::backward: output_gradient rows={}, columns={}",
-                                        _output_gradient.getRows(),
-                                        _output_gradient.getColumns()},
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           1,
-                           Log_Feature::DENSE_COMPUTE | Log_Feature::BACKWARD_PROPAGATION);
+    void tieWeights(Tensor *shared_weight, Tensor *shared_grad = nullptr, bool transposed = true);
+    void untieWeights() noexcept;
+    bool isWeightTied() const noexcept { return tied_weight != nullptr; }
 
-        input_matrix.linearBackwardWeightBias(_output_gradient, weights_gradient, biases_gradient);
-        _output_gradient.linearBackwardInput(weights, input_gradient);
+    bool hasBias() const noexcept { return use_bias; }
+    void setUseBias(bool _use_bias) noexcept { use_bias = _use_bias; }
 
-        logBufferAddress(&input_matrix, "input_matrix (Backward)");
-        logBufferAddress(&output_matrix, "output_matrix (Backward)");
-        logBufferAddress(const_cast<Matrix *>(&_output_gradient), "output_gradient (Backward)");
+    const Tensor &getWeightsGradient() const override { return weights_gradient_tensor; }
+    const Tensor &getBiasesGradient() const noexcept { return biases_gradient_tensor; }
+    const Tensor &getInputGradient() const noexcept { return input_gradient_tensor; }
+    const Tensor &getWeights() const override;
+    const Tensor &getBiases() const override { return biases; }
+    const Tensor &getInput() const override { return input_tensor; }
+    const Tensor &getOutput() const override { return output_tensor; }
 
-        return input_gradient;
-    }
+    const Tensor &getMasterWeights() const noexcept { return master_weights; }
+    const Tensor &getEffectiveWeights() const noexcept { return effective_weights; }
+    const Tensor &getPackedWeights() const noexcept { return packed_weights; }
+    const Tensor &getGammaTensor() const noexcept { return gamma_tensor; }
 
-    Matrix getWeights() const override
-    {
-        return weights;
-    }
+    bool isTernary() const noexcept override { return data_type == Data_Type::TERNARY_INT2; }
+    bool hasPackedInference() const noexcept { return has_packed_inference; }
+    bool hasMasterWeights() const noexcept { return has_master_weights; }
+    Data_Type getDataType() const noexcept { return data_type; }
 
-    Matrix getBiases() const override
-    {
-        return biases;
-    }
-
-    Matrix getWeightsGradient() override
-    {
-        return weights_gradient;
-    }
-
-    Matrix getBiasesGradient()
-    {
-        return biases_gradient;
-    }
-
-    Matrix getInput() override
-    {
-        return input_matrix;
-    }
-
-    Matrix getOutput() override
-    {
-        return output_matrix;
-    }
-
-    std::size_t getInputDimension() const noexcept
-    {
-        return input_dimension;
-    }
-
-    std::size_t getOutputDimension() const noexcept
-    {
-        return output_dimension;
-    }
-
+    size_t getOutputDimension() const noexcept { return output_dimension; }
+    size_t getInputDimension() const noexcept { return input_dimension; }
     Execution_Target getExecutionTarget() const override { return execution_target; }
+    float getInitializationGain() const noexcept { return initialization_gain; }
 
-    void setWeights(const Matrix &_new_weights)
+    Layer_Type getLayerType() const noexcept override { return isTernary() ? Layer_Type::TERNARY_LINEAR : Layer_Type::LINEAR; }
+    bool supportsPopulationBatch() const noexcept override { return !isTernary(); }
+    bool isForwardCompleted() const noexcept { return is_forward_completed; }
+    bool hasParameters() const noexcept override { return true; }
+
+    void setWeights(const Tensor &_new_weights);
+    void setMasterWeights(const Tensor &_new_weights);
+    void setBiases(const Tensor &_new_biases);
+    void setWeightsGradient(const Tensor &_tensor) { weights_gradient_tensor = _tensor; }
+    void setBiasesGradient(const Tensor &_tensor) { biases_gradient_tensor = _tensor; }
+
+    void setInputGradient(const Tensor &_tensor) { input_gradient_tensor = _tensor; }
+    void setInput(const Tensor &_tensor) { input_tensor = _tensor; }
+    void setOutput(const Tensor &_tensor) { output_tensor = _tensor; }
+    void setExecutionTarget(Execution_Target _new_execution_target) override;
+    void setInitializationGain(float _initialization_gain) noexcept { initialization_gain = _initialization_gain; }
+    void setIsForwardCompleted(bool _is_completed) noexcept { is_forward_completed = _is_completed; }
+    void configureDimensionsForLoad(size_t _input_dim, size_t _output_dim) noexcept
     {
-        if (_new_weights.getRows() != input_dimension || _new_weights.getColumns() != output_dimension)
-        {
-            Logger::logMessage(Input_Format{"Linear_Layer::setWeights: Dimension size of weight must match"},
-                               Log_Level::LOG_ERROR,
-                               true,
-                               0,
-                               Log_Feature::TENSOR_INSPECTION);
-            throw std::invalid_argument("Dimension size of weight must match");
-        }
-        weights = _new_weights;
+        input_dimension = _input_dim;
+        output_dimension = _output_dim;
     }
+    void copyStateTo(Linear_Layer &dst) const;
 
-    void setBiases(const Matrix &_new_biases)
-    {
-        if (_new_biases.getRows() != 1 || _new_biases.getColumns() != output_dimension)
-        {
-            Logger::logMessage(Input_Format{"Linear_Layer::setBiases: Dimension size of bias must match"},
-                               Log_Level::LOG_ERROR,
-                               true,
-                               0,
-                               Log_Feature::TENSOR_INSPECTION);
-            throw std::invalid_argument("Dimension size of bias must match");
-        }
-        biases = _new_biases;
-    }
-
-    void resetGradient() override
-    {
-    }
-
-    bool hasParameters() const noexcept override
-    {
-        return true;
-    }
-
-    Layer_Type getLayerType() const noexcept override
-    {
-        return Layer_Type::LINEAR;
-    }
-
-    void saveConfiguration(std::ofstream &_output_file_stream) const override
-    {
-        std::uint32_t input_dimension_value = static_cast<std::uint32_t>(input_dimension);
-        std::uint32_t output_dimension_value = static_cast<std::uint32_t>(output_dimension);
-        _output_file_stream.write(reinterpret_cast<const char *>(&input_dimension_value), sizeof(input_dimension_value));
-        _output_file_stream.write(reinterpret_cast<const char *>(&output_dimension_value), sizeof(output_dimension_value));
-    }
-
-    void saveInference(std::ofstream &_output_file_stream) const override
-    {
-        weights.saveMatrix(_output_file_stream);
-        biases.saveMatrix(_output_file_stream);
-    }
-
-    void loadInference(std::ifstream &_input_file_stream) override
-    {
-        weights = Matrix::loadMatrix(_input_file_stream, execution_target);
-        biases = Matrix::loadMatrix(_input_file_stream, execution_target);
-        input_dimension = weights.getRows();
-        output_dimension = weights.getColumns();
-    }
-
-    void saveCheckpoint(std::ofstream &_output_file_stream) const override
-    {
-        weights.saveMatrix(_output_file_stream);
-        biases.saveMatrix(_output_file_stream);
-        weights_gradient.saveMatrix(_output_file_stream);
-        biases_gradient.saveMatrix(_output_file_stream);
-    }
-
-    void loadCheckpoint(std::ifstream &_input_file_stream) override
-    {
-        weights = Matrix::loadMatrix(_input_file_stream, execution_target);
-        biases = Matrix::loadMatrix(_input_file_stream, execution_target);
-        weights_gradient = Matrix::loadMatrix(_input_file_stream, execution_target);
-        biases_gradient = Matrix::loadMatrix(_input_file_stream, execution_target);
-    }
-
-    std::vector<std::pair<Matrix *, Matrix *>> getParametersAndGradients() override
-    {
-        return {{&weights, &weights_gradient}, {&biases, &biases_gradient}};
-    }
-
-    void setExecutionTarget(Execution_Target _new_execution_target) override
-    {
-        if (execution_target == _new_execution_target)
-        {
-            return;
-        }
-
-        logChangeExecutionTarget(_new_execution_target);
-
-        execution_target = _new_execution_target;
-        weights.setExecutionTarget(_new_execution_target);
-        biases.setExecutionTarget(_new_execution_target);
-        weights_gradient.setExecutionTarget(_new_execution_target);
-        biases_gradient.setExecutionTarget(_new_execution_target);
-        input_matrix.setExecutionTarget(_new_execution_target);
-        output_matrix.setExecutionTarget(_new_execution_target);
-        input_gradient.setExecutionTarget(_new_execution_target);
-    }
+private:
+    void ensureTernaryGpuBuffers();
+    void quantizeEffectiveWeightsGpu();
+    void quantizeEffectiveWeightsCpu();
+    void packWeightsGpu();
+    void packWeightsCpu();
 };

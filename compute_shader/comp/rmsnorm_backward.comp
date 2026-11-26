@@ -1,0 +1,105 @@
+#version 450
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer GradOutBuffer { float grad_out[]; };
+layout(std430, binding = 1) readonly buffer InBuffer { float in_data[]; };
+layout(std430, binding = 2) readonly buffer GammaBuffer { float gamma_data[]; };
+layout(std430, binding = 3) readonly buffer InvRmsBuffer { float inv_rms_data[]; };
+layout(std430, binding = 4) writeonly buffer GradInBuffer { float grad_in[]; };
+
+layout(push_constant) uniform Constants {
+    uint batch_size;
+    uint dim;
+    uint accumulate;
+} pcs;
+
+shared float s_wave_sums[16];
+
+float blockReduceSum(float val) {
+    val = subgroupAdd(val);
+    if (gl_SubgroupInvocationID == 0u) {
+        s_wave_sums[gl_SubgroupID] = val;
+    }
+    barrier();
+    float total = 0.0;
+    for (uint i = 0u; i < gl_NumSubgroups; ++i) {
+        total += s_wave_sums[i];
+    }
+    return total;
+}
+
+void main() {
+    if (pcs.dim == 0u || pcs.batch_size == 0u) return;
+    uint row = gl_WorkGroupID.x;
+    if (row >= pcs.batch_size) return;
+
+    uint lid = gl_LocalInvocationID.x;
+    uint dim = pcs.dim;
+    uint row_offset = row * dim;
+    float inv_rms = inv_rms_data[row];
+    float inv_dim = 1.0 / float(dim);
+
+    if (dim <= 256u) {
+        float dy_g0 = 0.0, dy_g1 = 0.0, dy_g2 = 0.0, dy_g3 = 0.0;
+        float xh0 = 0.0, xh1 = 0.0, xh2 = 0.0, xh3 = 0.0;
+        float local_sum = 0.0;
+
+        uint c0 = lid;
+        uint c1 = lid + 64u;
+        uint c2 = lid + 128u;
+        uint c3 = lid + 192u;
+
+        if (c0 < dim) {
+            dy_g0 = grad_out[row_offset + c0] * gamma_data[c0];
+            xh0 = in_data[row_offset + c0] * inv_rms;
+            local_sum = fma(dy_g0, xh0, local_sum);
+        }
+        if (c1 < dim) {
+            dy_g1 = grad_out[row_offset + c1] * gamma_data[c1];
+            xh1 = in_data[row_offset + c1] * inv_rms;
+            local_sum = fma(dy_g1, xh1, local_sum);
+        }
+        if (c2 < dim) {
+            dy_g2 = grad_out[row_offset + c2] * gamma_data[c2];
+            xh2 = in_data[row_offset + c2] * inv_rms;
+            local_sum = fma(dy_g2, xh2, local_sum);
+        }
+        if (c3 < dim) {
+            dy_g3 = grad_out[row_offset + c3] * gamma_data[c3];
+            xh3 = in_data[row_offset + c3] * inv_rms;
+            local_sum = fma(dy_g3, xh3, local_sum);
+        }
+
+        float coeff = blockReduceSum(local_sum) * inv_dim;
+
+        if (c0 < dim) {
+            grad_in[row_offset + c0] = inv_rms * fma(-xh0, coeff, dy_g0);
+        }
+        if (c1 < dim) {
+            grad_in[row_offset + c1] = inv_rms * fma(-xh1, coeff, dy_g1);
+        }
+        if (c2 < dim) {
+            grad_in[row_offset + c2] = inv_rms * fma(-xh2, coeff, dy_g2);
+        }
+        if (c3 < dim) {
+            grad_in[row_offset + c3] = inv_rms * fma(-xh3, coeff, dy_g3);
+        }
+    } else {
+        float local_sum = 0.0;
+        for (uint c = lid; c < dim; c += 64u) {
+            float dy_g = grad_out[row_offset + c] * gamma_data[c];
+            float xh = in_data[row_offset + c] * inv_rms;
+            local_sum = fma(dy_g, xh, local_sum);
+        }
+
+        float coeff = blockReduceSum(local_sum) * inv_dim;
+
+        for (uint c = lid; c < dim; c += 64u) {
+            float dy_g = grad_out[row_offset + c] * gamma_data[c];
+            float xh = in_data[row_offset + c] * inv_rms;
+            grad_in[row_offset + c] = inv_rms * fma(-xh, coeff, dy_g);
+        }
+    }
+}

@@ -1,29 +1,105 @@
-output/
+# ====================================================================
+# VulkanML - Git Ignore Configuration
+# Chỉ giữ lại thư viện core (include/, src/, compute_shader/)
+# Bỏ qua các file bên ngoài (builds, applications, datasets, temp, IDE)
+# ====================================================================
+
+# --------------------------------------------------------------------
+# 1. Build & Compilation Artifacts
+# --------------------------------------------------------------------
 build/
-archive/
-__pycache__/
-.vscode/
-data/
-logs/
-compute_shader/*.spv
-CMakeLists.txt
-*.exe
-*.py
-cifar_train.cpp
-reload_model.cpp
-compile.bat
-convert.cpp
-.VSCodeCounter/
+bin/
+obj/
+out/
+output/
 temp/
-include/c_api.cpp
-include/rl/
-*.bin
-train_emnist.cpp
-MUJOCO_LOG.TXT
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+*.pdb
+*.ilk
+*.exp
+vulkanml_sdk/
+vulkanml_core.dll
 mujoco.dll
-mujoco/
-train_humanoid.cpp
-verify_humanoid.cpp
+
+# Build system & scripts
+CMakeLists.txt.bak
+compile.bat
+*.bat
+
+# --------------------------------------------------------------------
+# 2. Datasets, Model Weights & Checkpoints
+# --------------------------------------------------------------------
+data/
 assets/
-train_mujoco.cpp
+archive/
+*.bin
+*.nnck
+*.weights
+*.pt
+*.pth
+*.onnx
+
+# --------------------------------------------------------------------
+# 3. Logs, Backups & Temporary Scratch Files
+# --------------------------------------------------------------------
+logs/
+backup/
+*.log
+*.bak
+*.tmp
+*.cache
+MUJOCO_LOG.TXT
+
+/*.spv
+/*.comp
+
+compute_shader/*.spv
+compute_shader/spv/*.spv
+include/chexlocalize/
+src/chexlocalize/
+apps/chexpert/
+chexpert_thresholds.json
+pack_chest_segmentation.py
+
 include/environment/
+mujoco/
+/tokenizer/
+token.cpp
+build_syllable_tokenizer.cpp
+apps/*.cpp
+!apps/example.cpp
+reload_model.cpp
+convert.cpp
+include/c_api.cpp
+
+# Python scripts & caches
+__pycache__/
+*.py
+*.py[cod]
+.pytest_cache/
+
+.vscode/
+.vs/
+.idea/
+.VSCodeCounter/
+.sourcedive/
+.editorconfig
+.prettierrc
+user_preferences.json
+VULKANML_PROJECT_REVIEW.md
+corelib_review.md
+corelib_fix_report.md
+Thumbs.db
+.DS_Store
+build_release/
+cmake/
+
+
+
+AGENTS.md
+PROJECT_REVIEW.md

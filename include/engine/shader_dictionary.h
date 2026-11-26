@@ -3,15 +3,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <format>
-#include <fstream>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
-#include "helper/json.hpp"
-#include "helper/logger.h"
-#include "helper/magic_enum.hpp"
 #include "vulkan_network.h"
 
 enum class Operation_Class
@@ -25,14 +19,16 @@ enum class Operation_Class
 
 struct Snippet_Metadata
 {
-    std::uint32_t input_count = 0;
-    std::uint32_t output_count = 0;
-    std::uint32_t shared_memory_size = 0;
-    std::uint32_t cooperative_shared_memory_size = 0;
+    uint32_t input_count = 0;
+    uint32_t output_count = 0;
+    uint32_t shared_memory_size = 0;
+    uint32_t cooperative_shared_memory_size = 0;
     bool is_writing_multiple_elements = false;
     bool is_cooperative_matrix_support = false;
-    std::vector<std::uint32_t> accumulator_output_indices;
-    std::vector<std::uint32_t> persistent_output_indices;
+    std::vector<uint32_t> accumulator_output_indices;
+    std::vector<uint32_t> persistent_output_indices;
+    std::vector<uint32_t> read_indices;
+    std::vector<uint32_t> write_indices;
     std::string glsl_template;
     std::string cooperative_glsl_template;
     std::string index_expression;
@@ -42,20 +38,16 @@ struct Snippet_Metadata
 class Shader_Dictionary
 {
 private:
-    using json = nlohmann::json;
-    std::array<Snippet_Metadata, static_cast<std::size_t>(Compute_Pipeline::COMPUTE_PIPELINE_END)> metadata_table;
+    std::array<Snippet_Metadata, static_cast<size_t>(Compute_Pipeline::COMPUTE_PIPELINE_END)> metadata_table;
 
-public:
-    explicit Shader_Dictionary(const std::string &_file_path = "compute_shader/shader_dictionary.json")
+    static const Snippet_Metadata &emptyMetadata() noexcept
     {
-        Logger::logMessage("Shader_Dictionary::Shader_Dictionary: Initializing shader dictionary",
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::SHADER_GENERATION);
-        loadFromFile(_file_path);
+        static const Snippet_Metadata empty{};
+        return empty;
     }
 
+public:
+    explicit Shader_Dictionary(const std::string &_file_path = "compute_shader/shader_dictionary.json");
     ~Shader_Dictionary() = default;
 
     Shader_Dictionary(const Shader_Dictionary &) = delete;
@@ -64,118 +56,60 @@ public:
     Shader_Dictionary(Shader_Dictionary &&_other) noexcept = default;
     Shader_Dictionary &operator=(Shader_Dictionary &&_other) noexcept = default;
 
-    static const Shader_Dictionary &getInstance(const std::string &_file_path = "compute_shader/shader_dictionary.json")
-    {
-        static Shader_Dictionary instance(_file_path);
-        return instance;
-    }
+    static const Shader_Dictionary &getInstance();
 
-    void loadFromFile(const std::string &_file_path)
-    {
-        Logger::logMessage(std::format("Shader_Dictionary::loadFromFile: Loading shader metadata from {}", _file_path),
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::SHADER_GENERATION);
+    void loadFromFile(const std::string &_file_path);
 
-        std::ifstream file_stream(_file_path);
-        if (!file_stream.is_open())
-        {
-            Logger::logMessage(std::format("Shader_Dictionary::loadFromFile: Failed to open {}", _file_path),
-                               Log_Level::LOG_ERROR,
-                               true,
-                               0,
-                               Log_Feature::SHADER_GENERATION);
-            throw std::runtime_error("Failed to open shader dictionary file");
-        }
-
-        json root_json;
-        file_stream >> root_json;
-
-        for (std::size_t pipeline_index = 0; pipeline_index < static_cast<std::size_t>(Compute_Pipeline::COMPUTE_PIPELINE_END); ++pipeline_index)
-        {
-            auto pipeline_enum = static_cast<Compute_Pipeline>(pipeline_index);
-            std::string pipeline_name = std::string(magic_enum::enum_name(pipeline_enum));
-
-            if (root_json.contains(pipeline_name))
-            {
-                const auto &json_entry = root_json[pipeline_name];
-
-                Operation_Class parsed_operation_class = Operation_Class::STANDALONE;
-                std::string operation_class_string = json_entry.value("op_class", "STANDALONE");
-
-                if (operation_class_string == "MATRIX_2D")
-                {
-                    parsed_operation_class = Operation_Class::MATRIX_2D;
-                }
-                else if (operation_class_string == "ELEMENTWISE")
-                {
-                    parsed_operation_class = Operation_Class::ELEMENTWISE;
-                }
-                else if (operation_class_string == "TENSOR_3D")
-                {
-                    parsed_operation_class = Operation_Class::TENSOR_3D;
-                }
-                else if (operation_class_string == "STANDALONE" || operation_class_string == "REDUCTION")
-                {
-                    parsed_operation_class = Operation_Class::STANDALONE;
-                }
-
-                metadata_table[pipeline_index] = Snippet_Metadata{
-                    .input_count = json_entry.value("input_count", 0u),
-                    .output_count = json_entry.value("output_count", 0u),
-                    .shared_memory_size = json_entry.value("shared_mem_size", 0u),
-                    .cooperative_shared_memory_size = json_entry.value("cooperative_shared_mem_size", 0u),
-                    .is_writing_multiple_elements = json_entry.value("writes_multiple_elements", false),
-                    .is_cooperative_matrix_support = json_entry.value("supports_cooperative_matrix", false),
-                    .accumulator_output_indices = json_entry.value("accumulator_output_indices", std::vector<std::uint32_t>{}),
-                    .persistent_output_indices = json_entry.value("persistent_outputs", std::vector<std::uint32_t>{}),
-                    .glsl_template = json_entry.value("code", ""),
-                    .cooperative_glsl_template = json_entry.value("cooperative_matrix_code", ""),
-                    .index_expression = json_entry.value("index_expr", ""),
-                    .operation_class = parsed_operation_class};
-            }
-        }
-    }
-
-    const Snippet_Metadata &getMetadata(Compute_Pipeline _pipeline) const noexcept
-    {
-        return metadata_table[static_cast<std::size_t>(_pipeline)];
-    }
-
+    const std::array<Snippet_Metadata, static_cast<size_t>(Compute_Pipeline::COMPUTE_PIPELINE_END)> &getMetadataTable() const noexcept { return metadata_table; }
     const Snippet_Metadata &getSnippetMetadata(Compute_Pipeline _pipeline) const noexcept
     {
-        return metadata_table[static_cast<std::size_t>(_pipeline)];
+        size_t pipeline_index = static_cast<size_t>(_pipeline);
+        if (pipeline_index >= metadata_table.size())
+        {
+            return emptyMetadata();
+        }
+        return metadata_table[pipeline_index];
     }
-
+    const Snippet_Metadata &getMetadata(Compute_Pipeline _pipeline) const noexcept { return getSnippetMetadata(_pipeline); }
     const std::string &getGlslTemplate(Compute_Pipeline _pipeline, bool _use_cooperative_matrix) const noexcept
     {
-        const auto &meta = metadata_table[static_cast<std::size_t>(_pipeline)];
+        const auto &meta = getSnippetMetadata(_pipeline);
         if (_use_cooperative_matrix && meta.is_cooperative_matrix_support && !meta.cooperative_glsl_template.empty())
         {
             return meta.cooperative_glsl_template;
         }
         return meta.glsl_template;
     }
-
-    std::uint32_t getSharedMemorySize(Compute_Pipeline _pipeline, bool _use_cooperative_matrix) const noexcept
+    uint32_t getSharedMemorySize(Compute_Pipeline _pipeline, bool _use_cooperative_matrix) const noexcept
     {
-        const auto &meta = metadata_table[static_cast<std::size_t>(_pipeline)];
+        const auto &meta = getSnippetMetadata(_pipeline);
         if (_use_cooperative_matrix && meta.is_cooperative_matrix_support)
         {
             return meta.cooperative_shared_memory_size;
         }
         return meta.shared_memory_size;
     }
-
-    const std::array<Snippet_Metadata, static_cast<std::size_t>(Compute_Pipeline::COMPUTE_PIPELINE_END)> &getMetadataTable() const noexcept
-    {
-        return metadata_table;
-    }
-
     bool hasMetadata(Compute_Pipeline _pipeline) const noexcept
     {
-        std::size_t pipeline_index = static_cast<std::size_t>(_pipeline);
+        size_t pipeline_index = static_cast<size_t>(_pipeline);
         return pipeline_index < metadata_table.size() && !metadata_table[pipeline_index].glsl_template.empty();
+    }
+
+    void setMetadataTable(const std::array<Snippet_Metadata, static_cast<size_t>(Compute_Pipeline::COMPUTE_PIPELINE_END)> &_table) { metadata_table = _table; }
+    void setMetadata(Compute_Pipeline _pipeline, const Snippet_Metadata &_metadata)
+    {
+        size_t pipeline_index = static_cast<size_t>(_pipeline);
+        if (pipeline_index < metadata_table.size())
+        {
+            metadata_table[pipeline_index] = _metadata;
+        }
+    }
+    void setMetadata(Compute_Pipeline _pipeline, Snippet_Metadata &&_metadata) noexcept
+    {
+        size_t pipeline_index = static_cast<size_t>(_pipeline);
+        if (pipeline_index < metadata_table.size())
+        {
+            metadata_table[pipeline_index] = std::move(_metadata);
+        }
     }
 };

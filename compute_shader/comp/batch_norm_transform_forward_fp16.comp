@@ -1,0 +1,49 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer InData { float16_t data[]; };
+layout(std430, binding = 1) readonly buffer Mean { float mean_data[]; };
+layout(std430, binding = 2) readonly buffer Var { float var_data[]; };
+layout(std430, binding = 3) readonly buffer Gamma { float gamma_data[]; };
+layout(std430, binding = 4) readonly buffer Beta { float beta_data[]; };
+layout(std430, binding = 5) writeonly buffer OutData { float16_t out_data[]; };
+layout(std430, binding = 6) writeonly buffer XHat { float x_hat[]; };
+
+layout(push_constant) uniform Constants {
+    uint total_elements;
+    uint dim;
+    float epsilon;
+} pcs;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pcs.total_elements) return;
+
+    uint j = idx % pcs.dim;
+
+    float m = mean_data[j];
+    float v = var_data[j];
+    float g = gamma_data[j];
+    float b = beta_data[j];
+
+    if (isnan(m) || isinf(m)) m = 0.0;
+    if (isnan(v) || isinf(v) || v < 0.0) v = 1.0;
+    if (isnan(g) || isinf(g)) g = 1.0;
+    if (isnan(b) || isinf(b)) b = 0.0;
+
+    float x_val = float(data[idx]);
+    if (isnan(x_val) || isinf(x_val)) x_val = m;
+
+    float norm_val = (x_val - m) / sqrt(v + pcs.epsilon);
+    if (isnan(norm_val) || isinf(norm_val)) norm_val = 0.0;
+    norm_val = clamp(norm_val, -100.0, 100.0);
+    x_hat[idx] = norm_val;
+
+    float y_val = g * norm_val + b;
+    if (isnan(y_val) || isinf(y_val)) y_val = b;
+    y_val = clamp(y_val, -65504.0, 65504.0);
+    out_data[idx] = float16_t(y_val);
+}
