@@ -2,11 +2,10 @@
 
 #include <cstdint>
 #include <fstream>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
-#include "engine/execution_engine.h"
-#include "helper/logger.h"
 #include "learning_rate/ilearning_rate.h"
 #include "math/tensor.h"
 
@@ -23,11 +22,7 @@ public:
     virtual ~IOptimizer() noexcept = default;
 
     virtual void step(const std::vector<std::pair<Tensor *, Tensor *>> &_parameter_gradient_pairs) = 0;
-    virtual void step(const std::vector<std::pair<Tensor *, Tensor *>> &_parameter_gradient_pairs, float _grad_scale)
-    {
-        (void)_grad_scale;
-        step(_parameter_gradient_pairs);
-    }
+    virtual void step(const std::vector<std::pair<Tensor *, Tensor *>> &_parameter_gradient_pairs, float _grad_scale) = 0;
     virtual void stepDynamicParams(float _grad_scale = 1.0f)
     {
         (void)_grad_scale;
@@ -40,7 +35,17 @@ public:
     virtual Optimizer_Type getType() const noexcept = 0;
 
     virtual void setLearningRate(float _learning_rate) = 0;
+    virtual void setLearningRateScheduler(ILearning_Rate *_scheduler) noexcept { (void)_scheduler; }
+    virtual void detachLearningRateScheduler() noexcept {}
+    virtual ILearning_Rate *getLearningRateScheduler() const noexcept { return nullptr; }
+    virtual void setExecutionTarget(Execution_Target _target) { (void)_target; }
 
-    virtual void setMaxGradient(float _max_gradient) noexcept { (void)_max_gradient; }
+    virtual void setMaxGradient(float _max_gradient) { (void)_max_gradient; }
     virtual float getMaxGradient() const noexcept { return 0.0f; }
+
+    virtual void setWeightDecay(float ) {}
+    virtual float getWeightDecay() const noexcept { return 0.0f; }
+    virtual void setNoDecayParameters(std::unordered_set<const Tensor *> ) {}
+    virtual uint64_t getConfigGeneration() const noexcept { return 0; }
+    virtual bool consumeGpuOverflowDetected() noexcept { return false; }
 };

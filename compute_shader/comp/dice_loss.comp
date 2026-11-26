@@ -1,13 +1,25 @@
 #version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#endif
 
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
 layout(std430, set = 0, binding = 0) readonly buffer Pred_Buffer {
+#ifdef USE_FP16
+    float16_t pred_data[];
+#else
     float pred_data[];
+#endif
 };
 
 layout(std430, set = 0, binding = 1) readonly buffer Target_Buffer {
+#ifdef USE_FP16
+    float16_t target_data[];
+#else
     float target_data[];
+#endif
 };
 
 layout(std430, set = 0, binding = 2) writeonly buffer Loss_Buffer {
@@ -17,6 +29,7 @@ layout(std430, set = 0, binding = 2) writeonly buffer Loss_Buffer {
 layout(push_constant) uniform Push_Constants {
     uint total_elements;
     float epsilon_val;
+    uint write_stats;
 } push_constants;
 
 shared float shared_inter[256];
@@ -32,8 +45,13 @@ void main() {
     float target_val = 0.0f;
 
     for (uint idx = global_idx; idx < push_constants.total_elements; idx += gl_WorkGroupSize.x * gl_NumWorkGroups.x) {
+#ifdef USE_FP16
+        float p = clamp(float(pred_data[idx]), 0.0f, 1.0f);
+        float y = float(target_data[idx]);
+#else
         float p = clamp(pred_data[idx], 0.0f, 1.0f);
         float y = target_data[idx];
+#endif
         inter_val += p * y;
         pred_val += p;
         target_val += y;
@@ -60,6 +78,11 @@ void main() {
             float total_target = shared_target[0];
             float dice = (2.0f * total_inter + push_constants.epsilon_val) / (total_pred + total_target + push_constants.epsilon_val);
             loss_data[0] = 1.0f - dice;
+            if (push_constants.write_stats != 0u) {
+                loss_data[1] = total_inter;
+                loss_data[2] = total_pred;
+                loss_data[3] = total_target;
+            }
         } else {
             loss_data[gl_WorkGroupID.x * 3 + 0] = shared_inter[0];
             loss_data[gl_WorkGroupID.x * 3 + 1] = shared_pred[0];

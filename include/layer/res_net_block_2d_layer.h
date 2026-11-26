@@ -30,12 +30,14 @@ private:
     Tensor main_gradient;
     Tensor shortcut_gradient;
     Tensor input_gradient_tensor;
+    Tensor fwd_cast_scratch;
+    Tensor bwd_cast_scratch;
 
     bool is_forward_completed = false;
     Execution_Target execution_target = Execution_Target::CPU;
 
 public:
-    using ILayer::forward;    
+    using ILayer::forward;
     explicit Res_Net_Block_2d_Layer(Execution_Target _execution_target = Execution_Target::CPU);
     Res_Net_Block_2d_Layer(
         uint32_t _height,
@@ -44,8 +46,16 @@ public:
         uint32_t _out_channels,
         uint32_t _stride = 1,
         Execution_Target _execution_target = Execution_Target::CPU,
-        bool _use_resnet_d = true);
+        bool _use_resnet_d = true,
+        Data_Type _data_type = Data_Type::FLOAT32);
 
+    void prepareInference() override;
+    void quantizeToTernary() override;
+    void dequantizeFromTernary() override;
+    bool isTernary() const noexcept override;
+    Data_Type getDataType() const noexcept;
+    void snapshotNonTrainableState(std::vector<std::vector<float>> &_out) const override;
+    void restoreNonTrainableState(const std::vector<std::vector<float>> &_in, size_t &_cursor) override;
 
     ~Res_Net_Block_2d_Layer() noexcept override = default;
 
@@ -53,6 +63,9 @@ public:
     Layer_Type_T &addMainLayer(Args &&...args)
     {
         auto new_layer = std::make_unique<Layer_Type_T>(std::forward<Args>(args)...);
+        new_layer->setExecutionTarget(execution_target);
+        new_layer->setMixedPrecision(is_mixed_precision_enabled);
+        new_layer->setAccumulated(is_accumulated);
         Layer_Type_T &layer_reference = *new_layer;
         main_branch.push_back(std::move(new_layer));
         return layer_reference;
@@ -62,6 +75,9 @@ public:
     Layer_Type_T &addShortcutLayer(Args &&...args)
     {
         auto new_layer = std::make_unique<Layer_Type_T>(std::forward<Args>(args)...);
+        new_layer->setExecutionTarget(execution_target);
+        new_layer->setMixedPrecision(is_mixed_precision_enabled);
+        new_layer->setAccumulated(is_accumulated);
         Layer_Type_T &layer_reference = *new_layer;
         shortcut_branch.push_back(std::move(new_layer));
         return layer_reference;
@@ -71,10 +87,14 @@ public:
     Layer_Type_T &setPostActivation(Args &&...args)
     {
         auto new_layer = std::make_unique<Layer_Type_T>(std::forward<Args>(args)...);
+        new_layer->setExecutionTarget(execution_target);
+        new_layer->setMixedPrecision(is_mixed_precision_enabled);
+        new_layer->setAccumulated(is_accumulated);
         Layer_Type_T &layer_reference = *new_layer;
         post_activation = std::move(new_layer);
         return layer_reference;
-    }    void addMainLayer(std::unique_ptr<ILayer> _layer);
+    }
+    void addMainLayer(std::unique_ptr<ILayer> _layer);
     void addShortcutLayer(std::unique_ptr<ILayer> _layer);
     void setPostActivation(std::unique_ptr<ILayer> _layer);
     std::unique_ptr<ILayer> clone() const override;
@@ -82,6 +102,19 @@ public:
     Tensor backward(const Tensor &_output_gradient) override;
     void resetGradient() override;
     void resetGradients() override;
+    bool supportsStaticGraph() const noexcept override
+    {
+        for (const auto &layer : main_branch)
+        {
+            if (layer && !layer->supportsStaticGraph()) return false;
+        }
+        for (const auto &layer : shortcut_branch)
+        {
+            if (layer && !layer->supportsStaticGraph()) return false;
+        }
+        if (post_activation && !post_activation->supportsStaticGraph()) return false;
+        return true;
+    }
     void saveConfiguration(std::ofstream &_output_file_stream) const override;
     void saveInference(std::ofstream &_output_file_stream) const override;
     void loadInference(std::ifstream &_input_file_stream) override;
@@ -132,48 +165,32 @@ public:
             total_evolvable.insert(total_evolvable.end(), evolvable.begin(), evolvable.end());
         }
         return total_evolvable;
-    }    const std::vector<std::unique_ptr<ILayer>> &getShortcutBranch() const noexcept;
+    }
+    const std::vector<std::unique_ptr<ILayer>> &getShortcutBranch() const noexcept;
     const std::vector<std::unique_ptr<ILayer>> &getMainBranch() const noexcept;
     const Tensor &getShortcutOutput() const noexcept;
 
-    const Tensor &getInputGradient() const noexcept { return input_gradient_tensor; }    const Tensor &getShortcutGradient() const noexcept;
+    const Tensor &getInputGradient() const noexcept { return input_gradient_tensor; }
+    const Tensor &getShortcutGradient() const noexcept;
     const Tensor &getMainOutput() const noexcept;
     const Tensor &getMainGradient() const noexcept;
     const Tensor &getFinalOutput() const noexcept;
     const Tensor &getSumTensor() const noexcept;
 
     const Tensor &getInput() const override { return input_tensor; }
-    const Tensor &getOutput() const override { return final_output; }    const ILayer *getPostActivation() const noexcept;
+    const Tensor &getOutput() const override { return final_output; }
+    const ILayer *getPostActivation() const noexcept;
 
     Execution_Target getExecutionTarget() const override { return execution_target; }
     Layer_Type getLayerType() const noexcept override { return Layer_Type::RES_NET_BLOCK_2D; }
-    bool supportsPopulationBatch() const noexcept override
-    {
-        for (const auto& layer : main_branch)
-        {
-            if (!layer->supportsPopulationBatch())
-            {
-                return false;
-            }
-        }
-        for (const auto& layer : shortcut_branch)
-        {
-            if (!layer->supportsPopulationBatch())
-            {
-                return false;
-            }
-        }
-        if (post_activation && !post_activation->supportsPopulationBatch())
-        {
-            return false;
-        }
-        return true;
-    }
+    bool supportsPopulationBatch() const noexcept override { return false; }
     bool isForwardCompleted() const noexcept { return is_forward_completed; }
-    bool hasParameters() const noexcept override { return true; }    void setPopulationParameter(size_t param_index, std::vector<float> flat_data) override;
+    bool hasParameters() const noexcept override { return true; }
+    void setPopulationParameter(size_t param_index, std::vector<float> flat_data) override;
     void setShortcutOutput(const Tensor &_tensor);
 
-    void setInputGradient(const Tensor &_tensor) { input_gradient_tensor = _tensor; }    void setShortcutGradient(const Tensor &_tensor);
+    void setInputGradient(const Tensor &_tensor) { input_gradient_tensor = _tensor; }
+    void setShortcutGradient(const Tensor &_tensor);
     void setMainOutput(const Tensor &_tensor);
     void setMainGradient(const Tensor &_tensor);
     void setFinalOutput(const Tensor &_tensor);

@@ -1,10 +1,26 @@
 #version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#endif
 
+#ifdef USE_FP16
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+#else
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+#endif
 
+#ifdef USE_FP16
+layout(set = 0, binding = 0) readonly buffer Grad_Output_Buffer    { float16_t grad_output[]; };
+layout(set = 0, binding = 0) readonly buffer Grad_Output_Buffer_V4 { uvec4     grad_output4[]; };
+layout(set = 0, binding = 1) readonly buffer Weight_Buffer         { float16_t weight_data[]; };
+layout(set = 0, binding = 1) readonly buffer Weight_Buffer_V4      { uvec4     weight_data4[]; };
+layout(set = 0, binding = 2) writeonly buffer Grad_Input_Buffer    { float16_t grad_input[]; };
+#else
 layout(set = 0, binding = 0) readonly buffer Grad_Output_Buffer { float grad_output[]; };
 layout(set = 0, binding = 1) readonly buffer Weight_Buffer { float weight_data[]; };
 layout(set = 0, binding = 2) writeonly buffer Grad_Input_Buffer { float grad_input[]; };
+#endif
 
 layout(push_constant) uniform Push_Constants {
     uint batch_size;
@@ -20,6 +36,19 @@ layout(push_constant) uniform Push_Constants {
 } params;
 
 void main() {
+#ifdef USE_FP16
+    uint total_in = params.batch_size * params.in_h * params.in_w * params.in_c;
+    uint in_idx = (gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 256u + gl_LocalInvocationID.x;
+    if (in_idx >= total_in) {
+        return;
+    }
+    uint in_c_idx = in_idx % params.in_c;
+    uint tmp = in_idx / params.in_c;
+    uint in_w_idx = tmp % params.in_w;
+    tmp /= params.in_w;
+    uint in_h_idx = tmp % params.in_h;
+    uint n_idx = tmp / params.in_h;
+#else
     uint in_c_idx = gl_GlobalInvocationID.x;
     uint in_w_idx = gl_GlobalInvocationID.y;
     uint n_in_h_idx = gl_GlobalInvocationID.z;
@@ -30,6 +59,13 @@ void main() {
 
     uint n_idx = n_in_h_idx / params.in_h;
     uint in_h_idx = n_in_h_idx % params.in_h;
+    uint in_row_stride = params.in_w * params.in_c;
+    uint in_batch_stride = params.in_h * in_row_stride;
+    uint in_idx = n_idx * in_batch_stride +
+                  in_h_idx * in_row_stride +
+                  in_w_idx * params.in_c +
+                  in_c_idx;
+#endif
 
     float sum = 0.0;
 
@@ -37,54 +73,167 @@ void main() {
     uint out_batch_stride = params.out_h * out_row_stride;
     uint n_out_base = n_idx * out_batch_stride;
     uint w_kc_stride = params.in_c * params.out_c;
+    uint oc_vec = params.out_c & ~3u;
+#ifdef USE_FP16
+    bool use_vec8 = ((params.out_c & 7u) == 0u);
+    uint oc4_count = params.out_c >> 3u;
+#endif
 
-    for (uint ky = 0; ky < params.kernel_size; ky++) {
-        int out_y_calc = int(in_h_idx + params.padding - ky);
-        if (out_y_calc < 0 || out_y_calc % int(params.stride) != 0) {
-            continue;
-        }
-        uint out_y = uint(out_y_calc) / params.stride;
-        if (out_y >= params.out_h) {
-            continue;
-        }
+    if (params.stride == 1u) {
+        uint h_plus_pad = in_h_idx + params.padding;
+        uint w_plus_pad = in_w_idx + params.padding;
+        uint ky_min = (h_plus_pad >= params.out_h) ? (h_plus_pad - params.out_h + 1u) : 0u;
+        uint ky_max = min(params.kernel_size, h_plus_pad + 1u);
+        uint kx_min = (w_plus_pad >= params.out_w) ? (w_plus_pad - params.out_w + 1u) : 0u;
+        uint kx_max = min(params.kernel_size, w_plus_pad + 1u);
 
-        uint out_y_base = n_out_base + out_y * out_row_stride;
-        uint ky_w_base = ky * params.kernel_size * w_kc_stride + in_c_idx * params.out_c;
+        for (uint ky = ky_min; ky < ky_max; ++ky) {
+            uint out_y = h_plus_pad - ky;
+            uint out_y_base = n_out_base + out_y * out_row_stride;
+            uint ky_w_base = ky * params.kernel_size * w_kc_stride + in_c_idx * params.out_c;
 
-        for (uint kx = 0; kx < params.kernel_size; kx++) {
-            int out_x_calc = int(in_w_idx + params.padding - kx);
-            if (out_x_calc < 0 || out_x_calc % int(params.stride) != 0) {
-                continue;
-            }
-            uint out_x = uint(out_x_calc) / params.stride;
-            if (out_x >= params.out_w) {
-                continue;
-            }
+            for (uint kx = kx_min; kx < kx_max; ++kx) {
+                uint out_x = w_plus_pad - kx;
+                uint grad_out_idx = out_y_base + out_x * params.out_c;
+                uint w_idx = ky_w_base + kx * w_kc_stride;
 
-            uint grad_out_idx = out_y_base + out_x * params.out_c;
-            uint w_idx = ky_w_base + kx * w_kc_stride;
-
-            for (uint out_c_idx = 0; out_c_idx < params.out_c; out_c_idx++) {
-                float go = grad_output[grad_out_idx + out_c_idx];
-                float w = weight_data[w_idx + out_c_idx];
-                if (!isnan(go) && !isinf(go) && !isnan(w) && !isinf(w)) {
-                    sum += go * w;
+#ifdef USE_FP16
+                if (use_vec8) {
+                    uint go4_base = grad_out_idx >> 3u;
+                    uint w4_base = w_idx >> 3u;
+                    for (uint oc4 = 0u; oc4 < oc4_count; ++oc4) {
+                        uvec4 g = grad_output4[go4_base + oc4];
+                        uvec4 w = weight_data4[w4_base + oc4];
+                        sum += dot(unpackHalf2x16(g.x), unpackHalf2x16(w.x))
+                             + dot(unpackHalf2x16(g.y), unpackHalf2x16(w.y))
+                             + dot(unpackHalf2x16(g.z), unpackHalf2x16(w.z))
+                             + dot(unpackHalf2x16(g.w), unpackHalf2x16(w.w));
+                    }
+                } else {
+                    uint oc = 0u;
+                    for (; oc < oc_vec; oc += 4u) {
+                        float go0 = float(grad_output[grad_out_idx + oc]);
+                        float go1 = float(grad_output[grad_out_idx + oc + 1u]);
+                        float go2 = float(grad_output[grad_out_idx + oc + 2u]);
+                        float go3 = float(grad_output[grad_out_idx + oc + 3u]);
+                        float w0 = float(weight_data[w_idx + oc]);
+                        float w1 = float(weight_data[w_idx + oc + 1u]);
+                        float w2 = float(weight_data[w_idx + oc + 2u]);
+                        float w3 = float(weight_data[w_idx + oc + 3u]);
+                        sum += go0 * w0 + go1 * w1 + go2 * w2 + go3 * w3;
+                    }
+                    for (; oc < params.out_c; ++oc) {
+                        sum += float(grad_output[grad_out_idx + oc]) * float(weight_data[w_idx + oc]);
+                    }
                 }
+#else
+                uint oc = 0u;
+                for (; oc < oc_vec; oc += 4u) {
+                    float go0 = grad_output[grad_out_idx + oc];
+                    float go1 = grad_output[grad_out_idx + oc + 1u];
+                    float go2 = grad_output[grad_out_idx + oc + 2u];
+                    float go3 = grad_output[grad_out_idx + oc + 3u];
+                    float w0 = weight_data[w_idx + oc];
+                    float w1 = weight_data[w_idx + oc + 1u];
+                    float w2 = weight_data[w_idx + oc + 2u];
+                    float w3 = weight_data[w_idx + oc + 3u];
+                    sum += go0 * w0 + go1 * w1 + go2 * w2 + go3 * w3;
+                }
+                for (; oc < params.out_c; ++oc) {
+                    sum += grad_output[grad_out_idx + oc] * weight_data[w_idx + oc];
+                }
+#endif
+            }
+        }
+    } else {
+        for (uint ky = 0u; ky < params.kernel_size; ++ky) {
+            int out_y_calc = int(in_h_idx + params.padding) - int(ky);
+            if (out_y_calc < 0 || out_y_calc % int(params.stride) != 0) {
+                continue;
+            }
+            uint out_y = uint(out_y_calc) / params.stride;
+            if (out_y >= params.out_h) {
+                continue;
+            }
+
+            uint out_y_base = n_out_base + out_y * out_row_stride;
+            uint ky_w_base = ky * params.kernel_size * w_kc_stride + in_c_idx * params.out_c;
+
+            for (uint kx = 0u; kx < params.kernel_size; ++kx) {
+                int out_x_calc = int(in_w_idx + params.padding) - int(kx);
+                if (out_x_calc < 0 || out_x_calc % int(params.stride) != 0) {
+                    continue;
+                }
+                uint out_x = uint(out_x_calc) / params.stride;
+                if (out_x >= params.out_w) {
+                    continue;
+                }
+
+                uint grad_out_idx = out_y_base + out_x * params.out_c;
+                uint w_idx = ky_w_base + kx * w_kc_stride;
+
+#ifdef USE_FP16
+                if (use_vec8) {
+                    uint go4_base = grad_out_idx >> 3u;
+                    uint w4_base = w_idx >> 3u;
+                    for (uint oc4 = 0u; oc4 < oc4_count; ++oc4) {
+                        uvec4 g = grad_output4[go4_base + oc4];
+                        uvec4 w = weight_data4[w4_base + oc4];
+                        sum += dot(unpackHalf2x16(g.x), unpackHalf2x16(w.x))
+                             + dot(unpackHalf2x16(g.y), unpackHalf2x16(w.y))
+                             + dot(unpackHalf2x16(g.z), unpackHalf2x16(w.z))
+                             + dot(unpackHalf2x16(g.w), unpackHalf2x16(w.w));
+                    }
+                } else {
+                    uint oc = 0u;
+                    for (; oc < oc_vec; oc += 4u) {
+                        float go0 = float(grad_output[grad_out_idx + oc]);
+                        float go1 = float(grad_output[grad_out_idx + oc + 1u]);
+                        float go2 = float(grad_output[grad_out_idx + oc + 2u]);
+                        float go3 = float(grad_output[grad_out_idx + oc + 3u]);
+                        float w0 = float(weight_data[w_idx + oc]);
+                        float w1 = float(weight_data[w_idx + oc + 1u]);
+                        float w2 = float(weight_data[w_idx + oc + 2u]);
+                        float w3 = float(weight_data[w_idx + oc + 3u]);
+                        sum += go0 * w0 + go1 * w1 + go2 * w2 + go3 * w3;
+                    }
+                    for (; oc < params.out_c; ++oc) {
+                        sum += float(grad_output[grad_out_idx + oc]) * float(weight_data[w_idx + oc]);
+                    }
+                }
+#else
+                uint oc = 0u;
+                for (; oc < oc_vec; oc += 4u) {
+                    float go0 = grad_output[grad_out_idx + oc];
+                    float go1 = grad_output[grad_out_idx + oc + 1u];
+                    float go2 = grad_output[grad_out_idx + oc + 2u];
+                    float go3 = grad_output[grad_out_idx + oc + 3u];
+                    float w0 = weight_data[w_idx + oc];
+                    float w1 = weight_data[w_idx + oc + 1u];
+                    float w2 = weight_data[w_idx + oc + 2u];
+                    float w3 = weight_data[w_idx + oc + 3u];
+                    sum += go0 * w0 + go1 * w1 + go2 * w2 + go3 * w3;
+                }
+                for (; oc < params.out_c; ++oc) {
+                    sum += grad_output[grad_out_idx + oc] * weight_data[w_idx + oc];
+                }
+#endif
             }
         }
     }
-
-    uint in_row_stride = params.in_w * params.in_c;
-    uint in_batch_stride = params.in_h * in_row_stride;
-    uint in_idx = n_idx * in_batch_stride +
-                  in_h_idx * in_row_stride +
-                  in_w_idx * params.in_c +
-                  in_c_idx;
 
     if (isnan(sum) || isinf(sum)) {
         sum = 0.0f;
     } else {
+#ifdef USE_FP16
+        sum = clamp(sum, -65504.0f, 65504.0f);
+#else
         sum = clamp(sum, -1e6f, 1e6f);
+#endif
     }
+#ifdef USE_FP16
+    grad_input[in_idx] = float16_t(sum);
+#else
     grad_input[in_idx] = sum;
+#endif
 }

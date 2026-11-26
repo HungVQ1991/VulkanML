@@ -1,0 +1,68 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(local_size_x = 1, local_size_y = 16, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer QBuffer { float16_t q_data[]; };
+layout(std430, binding = 1) readonly buffer KBuffer { float16_t k_data[]; };
+layout(std430, binding = 2) writeonly buffer LBuffer { float l_data[]; };
+
+layout(push_constant) uniform Constants {
+    uint batch_size;
+    uint seq_len;
+    uint head_dim;
+    uint is_causal;
+    float scale;
+    uint gqa_group_size;
+    uint num_heads;
+    uint is_bshd;
+} pcs;
+
+void main() {
+    uint b = gl_WorkGroupID.z;
+    uint i = gl_GlobalInvocationID.y;
+    if (b >= pcs.batch_size || i >= pcs.seq_len) return;
+
+    uint S = pcs.seq_len;
+    uint D = pcs.head_dim;
+    uint group = max(pcs.gqa_group_size, 1u);
+    uint H = max(pcs.num_heads, 1u);
+    uint H_kv = max(H / group, 1u);
+    uint q_head_base;
+    uint q_row_stride;
+    uint kv_head_base;
+    uint kv_row_stride;
+    if (pcs.is_bshd != 0u) {
+        uint batch_idx = b / H;
+        uint head_idx = b % H;
+        uint kv_head_idx = head_idx / group;
+        q_head_base = (batch_idx * S * H + head_idx) * D;
+        q_row_stride = H * D;
+        kv_head_base = (batch_idx * S * H_kv + kv_head_idx) * D;
+        kv_row_stride = H_kv * D;
+    } else {
+        q_head_base = b * S * D;
+        q_row_stride = D;
+        kv_head_base = (b / group) * S * D;
+        kv_row_stride = D;
+    }
+    uint q_base = q_head_base + i * q_row_stride;
+    uint max_j = (pcs.is_causal != 0) ? (i + 1) : S;
+
+    float m = -1e20;
+    float l = 0.0;
+    for (uint j = 0; j < max_j; ++j) {
+        uint k_base = kv_head_base + j * kv_row_stride;
+        float dot_val = 0.0;
+        for (uint d = 0; d < D; ++d) {
+            dot_val += float(q_data[q_base + d]) * float(k_data[k_base + d]);
+        }
+        float s_val = dot_val * pcs.scale;
+        float m_new = max(m, s_val);
+        l = l * exp(m - m_new) + exp(s_val - m_new);
+        m = m_new;
+    }
+
+    l_data[b * S + i] = (l > 0.0) ? (m + log(l)) : -1e20;
+}

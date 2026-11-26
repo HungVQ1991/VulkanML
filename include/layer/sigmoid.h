@@ -37,7 +37,7 @@ public:
     void saveCheckpoint(std::ofstream &_output_file_stream) const override;
     void loadCheckpoint(std::ifstream &_input_file_stream) override;
 
-    std::function<float(std::mt19937&)> getPopulationParameterInitializer(size_t param_index) const override { return [](std::mt19937&) { return 0.0f; }; }
+    std::function<float(std::mt19937&)> getPopulationParameterInitializer(size_t) const override { return [](std::mt19937&) { return 0.0f; }; }
     std::vector<Shape> getPopulationParameterDims() const override { return {}; }
     std::vector<bool> getPopulationParameterIsEvolvable() const override { return {}; }
     const Tensor &getInputGradient() const noexcept { return input_gradient_tensor; }

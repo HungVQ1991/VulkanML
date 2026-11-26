@@ -1,0 +1,38 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer TargetsBuffer { float targets_data[]; };
+layout(std430, binding = 1) writeonly buffer ValidCountBuffer { uint valid_count_data[]; };
+
+layout(push_constant) uniform Constants {
+    uint seq_len;
+    uint vocab_size;
+    int ignore_index;
+} pc;
+
+shared uint s_counts[256];
+
+void main() {
+    uint tid = gl_LocalInvocationID.x;
+    uint count = 0;
+    for (uint s = tid; s < pc.seq_len; s += 256) {
+        int t = int(round(targets_data[s]));
+        if (t >= 0 && t != pc.ignore_index && uint(t) < pc.vocab_size) {
+            count += 1;
+        }
+    }
+    s_counts[tid] = count;
+    barrier();
+
+    for (uint stride = 128; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            s_counts[tid] += s_counts[tid + stride];
+        }
+        barrier();
+    }
+
+    if (tid == 0) {
+        valid_count_data[0] = s_counts[0];
+    }
+}

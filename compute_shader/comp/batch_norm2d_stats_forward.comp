@@ -1,8 +1,16 @@
 #version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#endif
 
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
+#ifdef USE_FP16
+layout(std430, binding = 0) readonly buffer InputX { float16_t X[]; };
+#else
 layout(std430, binding = 0) readonly buffer InputX { float X[]; };
+#endif
 layout(std430, binding = 1) writeonly buffer BatchMean { float batch_mean[]; };
 layout(std430, binding = 2) writeonly buffer BatchVar { float batch_var[]; };
 layout(std430, binding = 3) buffer RunningMean { float running_mean[]; };
@@ -15,125 +23,79 @@ layout(push_constant) uniform PushConstants {
     float momentum;
 } pc;
 
-shared float shared_sum[256];
-shared float shared_mean[256];
+shared float shared_buf[256];
+shared float shared_mean;
 
 void main() {
+    uint c = gl_WorkGroupID.x;
     uint tid = gl_LocalInvocationID.x;
     uint C = pc.channels;
     uint M = pc.spatial_count;
-    uint total_elements = pc.total_elements;
+    if (c >= C || M == 0u || pc.total_elements == 0u) return;
 
-    if (C > 256) {
-        for (uint c_base = 0; c_base < C; c_base += 256) {
-            uint c = c_base + tid;
-            if (c < C) {
-                float sum = 0.0;
-                for (uint m = 0; m < M; ++m) {
-                    sum += X[m * C + c];
-                }
-                float mean = sum / float(M);
-                batch_mean[c] = mean;
+    float sum = 0.0;
+    for (uint m = tid; m < M; m += 256u) {
+#ifdef USE_FP16
+        sum += float(X[m * C + c]);
+#else
+        sum += X[m * C + c];
+#endif
+    }
+    shared_buf[tid] = sum;
+    barrier();
 
-                float sq = 0.0;
-                for (uint m = 0; m < M; ++m) {
-                    float diff = X[m * C + c] - mean;
-                    sq += diff * diff;
-                }
-                float var = sq / float(M);
-
-                bool valid_stats = !isnan(mean) && !isinf(mean) && !isnan(var) && !isinf(var) && (var >= 0.0);
-                if (valid_stats) {
-                    var = min(var, 1e5);
-                    float cur_rm = running_mean[c];
-                    float cur_rv = running_var[c];
-                    if (isnan(cur_rm) || isinf(cur_rm)) cur_rm = 0.0;
-                    if (isnan(cur_rv) || isinf(cur_rv) || cur_rv <= 0.0) cur_rv = 1.0;
-                    running_mean[c] = (1.0 - pc.momentum) * cur_rm + pc.momentum * mean;
-                    running_var[c]  = (1.0 - pc.momentum) * cur_rv  + pc.momentum * var;
-                    batch_mean[c] = mean;
-                    batch_var[c] = var;
-                } else {
-                    float rm = running_mean[c];
-                    float rv = running_var[c];
-                    if (isnan(rm) || isinf(rm)) rm = 0.0;
-                    if (isnan(rv) || isinf(rv) || rv <= 0.0) rv = 1.0;
-                    batch_mean[c] = rm;
-                    batch_var[c] = rv;
-                }
-            }
+    for (uint s = 128u; s > 0u; s >>= 1u) {
+        if (tid < s) {
+            shared_buf[tid] += shared_buf[tid + s];
         }
-        return;
+        barrier();
     }
 
-    uint P_STEP = 256 / C;
-    if (P_STEP == 0) P_STEP = 1;
-    uint BLOCK = P_STEP * C;
-
-    // Pass 1: compute mean with 100% coalesced memory access
-    if (tid < BLOCK) {
-        float sum = 0.0;
-        for (uint base = 0; base < total_elements; base += BLOCK) {
-            uint idx = base + tid;
-            if (idx < total_elements) {
-                sum += X[idx];
-            }
-        }
-        shared_sum[tid] = sum;
+    if (tid == 0u) {
+        shared_mean = shared_buf[0] / float(M);
     }
     barrier();
 
-    if (tid < C) {
-        float tot_sum = 0.0;
-        for (uint p = 0; p < P_STEP; ++p) {
-            tot_sum += shared_sum[tid + p * C];
-        }
-        shared_mean[tid] = tot_sum / float(M);
+    float mean_val = shared_mean;
+    float sq = 0.0;
+    for (uint m = tid; m < M; m += 256u) {
+#ifdef USE_FP16
+        float diff = float(X[m * C + c]) - mean_val;
+#else
+        float diff = X[m * C + c] - mean_val;
+#endif
+        sq += diff * diff;
     }
+    shared_buf[tid] = sq;
     barrier();
 
-    float mean_c = shared_mean[tid % C];
-
-    // Pass 2: compute variance (hits L2 cache, mathematically stable diff*diff)
-    if (tid < BLOCK) {
-        float sq = 0.0;
-        for (uint base = 0; base < total_elements; base += BLOCK) {
-            uint idx = base + tid;
-            if (idx < total_elements) {
-                float diff = X[idx] - mean_c;
-                sq += diff * diff;
-            }
+    for (uint s = 128u; s > 0u; s >>= 1u) {
+        if (tid < s) {
+            shared_buf[tid] += shared_buf[tid + s];
         }
-        shared_sum[tid] = sq;
+        barrier();
     }
-    barrier();
 
-    if (tid < C) {
-        float tot_sq = 0.0;
-        for (uint p = 0; p < P_STEP; ++p) {
-            tot_sq += shared_sum[tid + p * C];
-        }
-        float mean_val = shared_mean[tid];
-        float var_val = tot_sq / float(M);
-
+    if (tid == 0u) {
+        float var_val = shared_buf[0] / float(M);
         bool valid_stats = !isnan(mean_val) && !isinf(mean_val) && !isnan(var_val) && !isinf(var_val) && (var_val >= 0.0);
         if (valid_stats) {
             var_val = min(var_val, 1e5);
-            float cur_rm = running_mean[tid];
-            float cur_rv = running_var[tid];
+            float cur_rm = running_mean[c];
+            float cur_rv = running_var[c];
             if (isnan(cur_rm) || isinf(cur_rm)) cur_rm = 0.0;
-            if (isnan(cur_rv) || isinf(cur_rv) || cur_rv <= 0.0) cur_rv = 1.0;
-            running_mean[tid] = (1.0 - pc.momentum) * cur_rm + pc.momentum * mean_val;
-            running_var[tid]  = (1.0 - pc.momentum) * cur_rv  + pc.momentum * var_val;
-            batch_mean[tid] = mean_val;
-            batch_var[tid] = var_val;
+            if (isnan(cur_rv) || isinf(cur_rv) || cur_rv < 0.0) cur_rv = 1.0;
+            running_mean[c] = (1.0 - pc.momentum) * cur_rm + pc.momentum * mean_val;
+            running_var[c]  = (1.0 - pc.momentum) * cur_rv  + pc.momentum * var_val;
+            batch_mean[c] = mean_val;
+            batch_var[c] = var_val;
         } else {
-            float rm = running_mean[tid];
-            float rv = running_var[tid];
+            float rm = running_mean[c];
+            float rv = running_var[c];
             if (isnan(rm) || isinf(rm)) rm = 0.0;
-            if (isnan(rv) || isinf(rv) || rv <= 0.0) rv = 1.0;
-            batch_mean[tid] = rm;
-            batch_var[tid] = rv;
+            if (isnan(rv) || isinf(rv) || rv < 0.0) rv = 1.0;
+            batch_mean[c] = rm;
+            batch_var[c] = rv;
         }
     }
 }

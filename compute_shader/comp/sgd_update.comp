@@ -10,27 +10,38 @@ layout(std430, set = 0, binding = 1) readonly restrict buffer GradsBuffer {
     float grads[];
 };
 
-layout(std430, set = 0, binding = 2) readonly restrict buffer DynamicParams {
+layout(std430, set = 0, binding = 2) coherent restrict buffer DynamicParams {
     float learning_rate;
     float pad0;
     float pad1;
     float inv_scale;
+    uint overflow_detected;
 } dyn;
 
 layout(push_constant) uniform PushConstants {
     uint total_elements;
     float max_gradient;
+    float weight_decay;
 } params;
 
 void main() {
-    uint idx = gl_GlobalInvocationID.x;
+    uint idx = (gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 256u + gl_LocalInvocationID.x;
     if (idx < params.total_elements) {
         float g = grads[idx] * dyn.inv_scale;
-        if (isnan(g) || isinf(g)) return;
+        if (isnan(g) || isinf(g)) {
+            atomicOr(dyn.overflow_detected, 1u);
+            return;
+        }
 
         if (params.max_gradient > 0.0f) {
             g = clamp(g, -params.max_gradient, params.max_gradient);
         }
-        weights[idx] -= dyn.learning_rate * g;
+        float p = weights[idx];
+        if (params.weight_decay > 0.0f) {
+            p -= dyn.learning_rate * (g + params.weight_decay * p);
+        } else {
+            p -= dyn.learning_rate * g;
+        }
+        weights[idx] = p;
     }
 }

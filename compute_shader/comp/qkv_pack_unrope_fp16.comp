@@ -1,0 +1,82 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer InDQ   { f16vec2 dq_v2[]; };
+layout(std430, binding = 1) readonly buffer InDK   { f16vec2 dk_v2[]; };
+layout(std430, binding = 2) readonly buffer InDV   { f16vec2 dv_v2[]; };
+layout(std430, binding = 3) writeonly buffer OutDQKV { f16vec2 dqkv_v2[]; };
+
+layout(push_constant) uniform Constants {
+    uint total_pairs;
+    uint seq_len;
+    uint head_dim;
+    uint num_heads;
+    uint num_kv_heads;
+    uint mode;
+    uint position_offset;
+    float base;
+} pcs;
+
+f16vec2 applyInverseRopePair(f16vec2 raw, uint token_pos, uint pair_idx) {
+    vec2 xy = vec2(raw);
+    float x0 = (isnan(xy.x) || isinf(xy.x)) ? 0.0 : xy.x;
+    float x1 = (isnan(xy.y) || isinf(xy.y)) ? 0.0 : xy.y;
+
+    float theta = pow(pcs.base, -2.0 * float(pair_idx) / float(pcs.head_dim));
+    float alpha = -float(token_pos + pcs.position_offset) * theta;
+    float cos_a = cos(alpha);
+    float sin_a = sin(alpha);
+
+    float r0 = x0 * cos_a - x1 * sin_a;
+    float r1 = x0 * sin_a + x1 * cos_a;
+    if (isnan(r0) || isinf(r0)) r0 = 0.0;
+    if (isnan(r1) || isinf(r1)) r1 = 0.0;
+    return f16vec2(clamp(vec2(r0, r1), vec2(-65504.0), vec2(65504.0)));
+}
+
+void main() {
+    uint D = pcs.head_dim;
+    if (D == 0u || (D & 1u) != 0u || pcs.seq_len == 0u || pcs.num_heads == 0u || pcs.num_kv_heads == 0u) return;
+
+    uint wg_id = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
+    uint pair_id = wg_id * 256u + gl_LocalInvocationID.x;
+    if (pair_id >= pcs.total_pairs) return;
+
+    uint d_half = D >> 1u;
+    uint q_pairs = pcs.num_heads * d_half;
+    uint kv_pairs = pcs.num_kv_heads * d_half;
+    uint tok_pairs = q_pairs + 2u * kv_pairs;
+
+    uint row = pair_id / tok_pairs;
+    uint lp = pair_id % tok_pairs;
+    uint token_pos = row % pcs.seq_len;
+    uint b = row / pcs.seq_len;
+
+    if (lp < q_pairs) {
+        uint h = lp / d_half;
+        uint pair_idx = lp % d_half;
+        uint in_pair = (pcs.mode == 1u)
+            ? (((b * pcs.num_heads + h) * pcs.seq_len + token_pos) * d_half + pair_idx)
+            : (row * q_pairs + lp);
+        dqkv_v2[pair_id] = applyInverseRopePair(dq_v2[in_pair], token_pos, pair_idx);
+    } else if (lp < q_pairs + kv_pairs) {
+        uint kp = lp - q_pairs;
+        uint h = kp / d_half;
+        uint pair_idx = kp % d_half;
+        uint in_pair = (pcs.mode == 1u)
+            ? (((b * pcs.num_kv_heads + h) * pcs.seq_len + token_pos) * d_half + pair_idx)
+            : (row * kv_pairs + kp);
+        dqkv_v2[pair_id] = applyInverseRopePair(dk_v2[in_pair], token_pos, pair_idx);
+    } else {
+        uint vp = lp - q_pairs - kv_pairs;
+        uint h = vp / d_half;
+        uint pair_idx = vp % d_half;
+        uint in_pair = (pcs.mode == 1u)
+            ? (((b * pcs.num_kv_heads + h) * pcs.seq_len + token_pos) * d_half + pair_idx)
+            : (row * kv_pairs + vp);
+        dqkv_v2[pair_id] = dv_v2[in_pair];
+    }
+}

@@ -1,17 +1,19 @@
 #version 450
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
 #extension GL_EXT_shader_16bit_storage : require
-#extension GL_KHR_shader_subgroup_arithmetic : enable
-#extension GL_KHR_shader_subgroup_basic : enable
+#extension GL_KHR_shader_subgroup_arithmetic : require
 
-layout(local_size_x = 256) in;
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
-layout(std430, binding = 0) readonly buffer GradOutBuffer { float16_t grad_out[]; };
-layout(std430, binding = 1) readonly buffer InBuffer { float16_t in_data[]; };
-layout(std430, binding = 2) readonly buffer GammaBuffer { float16_t gamma_data[]; };
-layout(std430, binding = 3) readonly buffer InvRmsBuffer { float inv_rms_data[]; };
-layout(std430, binding = 4) writeonly buffer GradInBuffer { float16_t grad_in[]; };
-layout(std430, binding = 5) buffer GradGammaBuffer { float grad_gamma[]; };
+layout(std430, binding = 0) readonly buffer GradOutBuffer  { float16_t grad_out[]; };
+layout(std430, binding = 0) readonly buffer GradOutBuffer4 { f16vec4   grad_out4[]; };
+layout(std430, binding = 1) readonly buffer InBuffer       { float16_t in_data[]; };
+layout(std430, binding = 1) readonly buffer InBuffer4      { f16vec4   in_data4[]; };
+layout(std430, binding = 2) readonly buffer GammaBuffer    { float16_t gamma_data[]; };
+layout(std430, binding = 2) readonly buffer GammaBuffer4   { f16vec4   gamma4[]; };
+layout(std430, binding = 3) readonly buffer InvRmsBuffer   { float inv_rms_data[]; };
+layout(std430, binding = 4) writeonly buffer GradInBuffer  { float16_t grad_in[]; };
+layout(std430, binding = 4) writeonly buffer GradInBuffer4 { f16vec4   grad_in4[]; };
 
 layout(push_constant) uniform Constants {
     uint batch_size;
@@ -19,97 +21,88 @@ layout(push_constant) uniform Constants {
     uint accumulate;
 } pcs;
 
-shared float s_subgroup_sums[32];
-shared float s_sum_dy_gamma_x;
+shared float s_wave_sums[16];
+
+float blockReduceSum(float val) {
+    val = subgroupAdd(val);
+    if (gl_SubgroupInvocationID == 0u) {
+        s_wave_sums[gl_SubgroupID] = val;
+    }
+    barrier();
+    float total = 0.0;
+    for (uint i = 0u; i < gl_NumSubgroups; ++i) {
+        total += s_wave_sums[i];
+    }
+    return total;
+}
 
 void main() {
+    uint dim = pcs.dim;
+    if (dim == 0u || pcs.batch_size == 0u) return;
     uint row = gl_WorkGroupID.x;
     if (row >= pcs.batch_size) return;
 
     uint lid = gl_LocalInvocationID.x;
-    uint row_offset = row * pcs.dim;
     float inv_rms = inv_rms_data[row];
+    float inv_dim = 1.0 / float(dim);
 
-    // Step 1: Accumulate local dot product: sum(grad_out * gamma * (x * inv_rms))
-    float local_sum = 0.0;
-    for (uint c = lid; c < pcs.dim; c += 256) {
-        float dy = float(grad_out[row_offset + c]);
-        float g = float(gamma_data[c]);
-        float x = float(in_data[row_offset + c]);
-        if (isnan(dy) || isinf(dy)) dy = 0.0;
-        if (isnan(g) || isinf(g)) g = 1.0;
-        if (isnan(x) || isinf(x)) x = 0.0;
-        float x_hat = (isnan(inv_rms) || isinf(inv_rms)) ? 0.0 : (x * inv_rms);
-        float term = dy * g * x_hat;
-        if (!isnan(term) && !isinf(term)) {
-            local_sum += term;
+    if (dim <= 256u && (dim & 3u) == 0u) {
+        uint vec_count = dim >> 2u;
+        uint rbase4 = row * vec_count;
+        vec4 dy_g = vec4(0.0);
+        vec4 xh   = vec4(0.0);
+        float local_sum = 0.0;
+
+        if (lid < vec_count) {
+            uint vidx = rbase4 + lid;
+            dy_g = vec4(grad_out4[vidx]) * vec4(gamma4[lid]);
+            xh   = vec4(in_data4[vidx]) * inv_rms;
+            local_sum = dot(dy_g, xh);
         }
-    }
 
-    // Step 2: Intra-subgroup reduction
-    #ifdef GL_KHR_shader_subgroup_arithmetic
-    local_sum = subgroupAdd(local_sum);
-    #endif
+        float coeff = blockReduceSum(local_sum) * inv_dim;
 
-    uint sg_id = gl_SubgroupID;
-    uint num_sg = gl_NumSubgroups;
-
-    if (subgroupElect()) {
-        s_subgroup_sums[sg_id] = local_sum;
-    }
-    barrier();
-
-    // Step 3: Inter-subgroup reduction by the first subgroup
-    if (sg_id == 0) {
-        float val = (lid < num_sg) ? s_subgroup_sums[lid] : 0.0;
-        #ifdef GL_KHR_shader_subgroup_arithmetic
-        val = subgroupAdd(val);
-        #endif
-        if (lid == 0) {
-            s_sum_dy_gamma_x = val;
+        if (lid < vec_count) {
+            uint vidx = rbase4 + lid;
+            grad_in4[vidx] = f16vec4(clamp(inv_rms * fma(-xh, vec4(coeff), dy_g), vec4(-65504.0), vec4(65504.0)));
         }
-    }
-    barrier();
+    } else if (dim <= 256u) {
+        uint row_offset = row * dim;
+        float dy_g0 = 0.0, dy_g1 = 0.0, dy_g2 = 0.0, dy_g3 = 0.0;
+        float xh0 = 0.0, xh1 = 0.0, xh2 = 0.0, xh3 = 0.0;
+        float local_sum = 0.0;
 
-    float sum_dy_gamma_x = s_sum_dy_gamma_x;
-    float inv_dim = 1.0 / float(pcs.dim);
+        uint c0 = lid;
+        uint c1 = lid + 64u;
+        uint c2 = lid + 128u;
+        uint c3 = lid + 192u;
 
-    // Step 4: Compute dx_i = inv_rms * (dy_i * gamma_i - x_hat_i * (sum_dy_gamma_x / D))
-    for (uint c = lid; c < pcs.dim; c += 256) {
-        float dy = float(grad_out[row_offset + c]);
-        float g = float(gamma_data[c]);
-        float x = float(in_data[row_offset + c]);
-        if (isnan(dy) || isinf(dy)) dy = 0.0;
-        if (isnan(g) || isinf(g)) g = 1.0;
-        if (isnan(x) || isinf(x)) x = 0.0;
-        float x_hat = (isnan(inv_rms) || isinf(inv_rms)) ? 0.0 : (x * inv_rms);
-        float dx = inv_rms * (dy * g - x_hat * (sum_dy_gamma_x * inv_dim));
-        if (isnan(dx) || isinf(dx)) dx = 0.0;
-        grad_in[row_offset + c] = float16_t(clamp(dx, -65504.0, 65504.0));
-    }
+        if (c0 < dim) { dy_g0 = float(grad_out[row_offset + c0]) * float(gamma_data[c0]); xh0 = float(in_data[row_offset + c0]) * inv_rms; local_sum = fma(dy_g0, xh0, local_sum); }
+        if (c1 < dim) { dy_g1 = float(grad_out[row_offset + c1]) * float(gamma_data[c1]); xh1 = float(in_data[row_offset + c1]) * inv_rms; local_sum = fma(dy_g1, xh1, local_sum); }
+        if (c2 < dim) { dy_g2 = float(grad_out[row_offset + c2]) * float(gamma_data[c2]); xh2 = float(in_data[row_offset + c2]) * inv_rms; local_sum = fma(dy_g2, xh2, local_sum); }
+        if (c3 < dim) { dy_g3 = float(grad_out[row_offset + c3]) * float(gamma_data[c3]); xh3 = float(in_data[row_offset + c3]) * inv_rms; local_sum = fma(dy_g3, xh3, local_sum); }
 
-    // Step 5: Workgroup 0 computes grad_gamma across all rows
-    if (row == 0) {
-        for (uint c = lid; c < pcs.dim; c += 256) {
-            float sum = 0.0;
-            for (uint r = 0; r < pcs.batch_size; ++r) {
-                float dy = float(grad_out[r * pcs.dim + c]);
-                float x = float(in_data[r * pcs.dim + c]);
-                float inv_rms_val = inv_rms_data[r];
-                if (isnan(dy) || isinf(dy)) dy = 0.0;
-                if (isnan(x) || isinf(x)) x = 0.0;
-                if (isnan(inv_rms_val) || isinf(inv_rms_val)) inv_rms_val = 0.0;
-                float term = dy * (x * inv_rms_val);
-                if (!isnan(term) && !isinf(term)) {
-                    sum += term;
-                }
-            }
-            if (isnan(sum) || isinf(sum)) sum = 0.0;
-            if (pcs.accumulate != 0) {
-                grad_gamma[c] += sum;
-            } else {
-                grad_gamma[c] = sum;
-            }
+        float coeff = blockReduceSum(local_sum) * inv_dim;
+
+        if (c0 < dim) grad_in[row_offset + c0] = float16_t(clamp(inv_rms * fma(-xh0, coeff, dy_g0), -65504.0, 65504.0));
+        if (c1 < dim) grad_in[row_offset + c1] = float16_t(clamp(inv_rms * fma(-xh1, coeff, dy_g1), -65504.0, 65504.0));
+        if (c2 < dim) grad_in[row_offset + c2] = float16_t(clamp(inv_rms * fma(-xh2, coeff, dy_g2), -65504.0, 65504.0));
+        if (c3 < dim) grad_in[row_offset + c3] = float16_t(clamp(inv_rms * fma(-xh3, coeff, dy_g3), -65504.0, 65504.0));
+    } else {
+        uint row_offset = row * dim;
+        float local_sum = 0.0;
+        for (uint c = lid; c < dim; c += 64u) {
+            float dy_g = float(grad_out[row_offset + c]) * float(gamma_data[c]);
+            float xh = float(in_data[row_offset + c]) * inv_rms;
+            local_sum = fma(dy_g, xh, local_sum);
+        }
+
+        float coeff = blockReduceSum(local_sum) * inv_dim;
+
+        for (uint c = lid; c < dim; c += 64u) {
+            float dy_g = float(grad_out[row_offset + c]) * float(gamma_data[c]);
+            float xh = float(in_data[row_offset + c]) * inv_rms;
+            grad_in[row_offset + c] = float16_t(clamp(inv_rms * fma(-xh, coeff, dy_g), -65504.0, 65504.0));
         }
     }
 }

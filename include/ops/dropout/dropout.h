@@ -10,4 +10,4 @@ void dropout(const Tensor &input, Tensor &output, Tensor &mask, float dropout_ra
 
 void dropoutBackward(const Tensor &output_gradient, const Tensor &mask, Tensor &input_gradient, float dropout_rate);
 
-} // namespace ops::dropout
+}

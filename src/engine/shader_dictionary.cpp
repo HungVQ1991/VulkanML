@@ -7,6 +7,7 @@
 #include "helper/json.hpp"
 #include "helper/logger.h"
 #include "helper/magic_enum.hpp"
+#include "helper/resource_path.h"
 
 Shader_Dictionary::Shader_Dictionary(const std::string &_file_path)
 {
@@ -20,28 +21,27 @@ Shader_Dictionary::Shader_Dictionary(const std::string &_file_path)
 
 const Shader_Dictionary &Shader_Dictionary::getInstance()
 {
-    static Shader_Dictionary instance("compute_shader/shader_dictionary.json");
-    return instance;
-}
-
-const Shader_Dictionary &Shader_Dictionary::getInstance(const std::string &_file_path)
-{
-    static Shader_Dictionary instance(_file_path);
+    static Shader_Dictionary instance(
+        Resource_Path::resolveFile("compute_shader/shader_dictionary.json",
+                                   "VULKANML_SHADER_DICTIONARY",
+                                   "compute_shader/shader_dictionary.json"));
     return instance;
 }
 
 void Shader_Dictionary::loadFromFile(const std::string &_file_path)
 {
-    Logger::logMessage(Input_Format{"Shader_Dictionary::loadFromFile: Loading shader metadata from {}", _file_path},
+    const std::string resolved_path = Resource_Path::resolveFile(
+        _file_path, "VULKANML_SHADER_DICTIONARY", "compute_shader/shader_dictionary.json");
+    Logger::logMessage(Input_Format{"Shader_Dictionary::loadFromFile: Loading shader metadata from {}", resolved_path},
                        Log_Level::LOG_DEBUG,
                        true,
                        0,
                        Log_Feature::SHADER_GENERATION);
 
-    std::ifstream file_stream(_file_path);
+    std::ifstream file_stream(resolved_path);
     if (!file_stream.is_open())
     {
-        Logger::logMessage(Input_Format{"Shader_Dictionary::loadFromFile: Failed to open {}", _file_path},
+        Logger::logMessage(Input_Format{"Shader_Dictionary::loadFromFile: Failed to open {}", resolved_path},
                            Log_Level::LOG_ERROR,
                            true,
                            0,
@@ -52,6 +52,7 @@ void Shader_Dictionary::loadFromFile(const std::string &_file_path)
     nlohmann::json root_json;
     file_stream >> root_json;
 
+    std::array<Snippet_Metadata, static_cast<size_t>(Compute_Pipeline::COMPUTE_PIPELINE_END)> temp_table{};
     for (size_t pipeline_index = 0; pipeline_index < static_cast<size_t>(Compute_Pipeline::COMPUTE_PIPELINE_END); ++pipeline_index)
     {
         auto pipeline_enum = static_cast<Compute_Pipeline>(pipeline_index);
@@ -80,8 +81,19 @@ void Shader_Dictionary::loadFromFile(const std::string &_file_path)
             {
                 parsed_operation_class = Operation_Class::STANDALONE;
             }
+            else
+            {
+                Logger::logMessage(Input_Format{"Shader_Dictionary::loadFromFile: Unrecognized op_class '{}' for '{}', defaulting to STANDALONE",
+                                                operation_class_string,
+                                                pipeline_name},
+                                   Log_Level::LOG_WARNING,
+                                   true,
+                                   0,
+                                   Log_Feature::SHADER_GENERATION);
+                parsed_operation_class = Operation_Class::STANDALONE;
+            }
 
-            metadata_table[pipeline_index] = Snippet_Metadata{
+            temp_table[pipeline_index] = Snippet_Metadata{
                 .input_count = json_entry.value("input_count", 0u),
                 .output_count = json_entry.value("output_count", 0u),
                 .shared_memory_size = json_entry.value("shared_mem_size", 0u),
@@ -90,10 +102,14 @@ void Shader_Dictionary::loadFromFile(const std::string &_file_path)
                 .is_cooperative_matrix_support = json_entry.value("supports_cooperative_matrix", false),
                 .accumulator_output_indices = json_entry.value("accumulator_output_indices", std::vector<uint32_t>{}),
                 .persistent_output_indices = json_entry.value("persistent_outputs", std::vector<uint32_t>{}),
+                .read_indices = json_entry.value("read_indices", std::vector<uint32_t>{}),
+                .write_indices = json_entry.value("write_indices", std::vector<uint32_t>{}),
                 .glsl_template = json_entry.value("code", ""),
                 .cooperative_glsl_template = json_entry.value("cooperative_matrix_code", ""),
                 .index_expression = json_entry.value("index_expr", ""),
                 .operation_class = parsed_operation_class};
         }
     }
+
+    metadata_table = std::move(temp_table);
 }

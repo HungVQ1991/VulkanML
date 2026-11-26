@@ -15,12 +15,7 @@
 
 inline size_t calculateNumel(const Shape &shape)
 {
-    size_t total = 1;
-    for (size_t dimension : shape.getDimensions())
-    {
-        total *= dimension;
-    }
-    return total;
+    return shape.getTotalElements();
 }
 
 inline Shape prependPopulationDim(size_t population_size, const Shape &shape)
@@ -32,7 +27,7 @@ inline Shape prependPopulationDim(size_t population_size, const Shape &shape)
 
 struct Population_Layer_Adapter
 {
-    const ILayer *template_layer = nullptr;
+    std::shared_ptr<const ILayer> template_layer;
     std::vector<Shape> param_shapes;
     std::vector<bool> param_evolvable;
     std::vector<size_t> param_numel;
@@ -56,6 +51,7 @@ private:
     mutable std::vector<float> batched_input_host;
 
     void initializeWeights();
+    Neural_Network buildCpuIndividual(size_t index) const;
 
 public:
     void syncHostToDevice();
@@ -113,14 +109,7 @@ public:
     size_t getStateDimension() const noexcept { return state_dimension; }
     Execution_Target getExecutionTarget() const noexcept { return execution_target; }
 
-    void setBatchedInputTensor(Tensor _tensor) noexcept { batched_input_tensor = std::move(_tensor); }
-    void setLayerAdapters(std::vector<Population_Layer_Adapter> _adapters) noexcept { layer_adapters = std::move(_adapters); }
-    void setBatchedInputHost(std::vector<float> _host) noexcept { batched_input_host = std::move(_host); }
-    void setActionSpaceSize(size_t _size) noexcept { action_space_size = _size; }
-    void setPopulationSize(size_t _size) noexcept { population_size = _size; }
-    void setStateDimension(size_t _dimension) noexcept { state_dimension = _dimension; }
-    void setExecutionTarget(Execution_Target _target) noexcept { execution_target = _target; }
-    void setMixedPrecision(bool enable) noexcept;
-    void enableMixedPrecision(bool enable = true) noexcept { setMixedPrecision(enable); }
+    void setExecutionTarget(Execution_Target _target);
+    void enableMixedPrecision(bool enable = true);
     bool isMixedPrecisionEnabled() const noexcept { return is_mixed_precision_enabled; }
 };

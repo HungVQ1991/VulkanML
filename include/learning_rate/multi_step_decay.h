@@ -23,15 +23,15 @@ private:
     int current_epoch = 0;
     std::vector<float> decay_epochs;    void validateParameters();
 
-
 public:    Multi_Step_Decay(float _initial_learning_rate = 0.001f,
                      float _minimum_learning_rate = 1e-6f,
                      float _decay_rate = 0.1f,
                      std::vector<float> _decay_epochs = {30.0f, 60.0f, 80.0f});
 
-
-    ~Multi_Step_Decay() noexcept override = default;    float updateRate() override;
+    ~Multi_Step_Decay() noexcept override = default;
+    float updateRate() override;
     void step(float _current_value = 0.0f) override;
+    void reset() override;
     void saveCheckpoint(std::ofstream &_output_file_stream) const override;
     void loadCheckpoint(std::ifstream &_input_file_stream) override;
     const std::vector<float> &getDecayEpochs() const noexcept;
@@ -42,11 +42,12 @@ public:    Multi_Step_Decay(float _initial_learning_rate = 0.001f,
     float getLearningRate() const noexcept override { return learning_rate; }
     Decay_Mode getType() const noexcept override { return Decay_Mode::MULTI_STEP_DECAY; }
     float getDecayRate() const noexcept { return decay_rate; }
-    int getCurrentEpoch() const noexcept { return current_epoch; }    void setDecayEpochs(std::vector<float> _decay_epochs);
-    void setMinimumLearningRate(float _min_lr) noexcept;
-    void setCurrentLearningRate(float _rate) noexcept;
-    void setLearningRate(float _learning_rate) noexcept;
-    void setCurrentEpoch(int _epoch) noexcept;
-    void setDecayRate(float _decay_rate) noexcept;
+    int getCurrentEpoch() const noexcept { return current_epoch; }
+    void setDecayEpochs(std::vector<float> _decay_epochs);
+    void setMinimumLearningRate(float _min_lr);
+    void setCurrentLearningRate(float _rate);
+    void setLearningRate(float _learning_rate);
+    void setCurrentEpoch(int _epoch);
+    void setDecayRate(float _decay_rate);
 
-};;
+};

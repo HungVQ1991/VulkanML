@@ -1,13 +1,25 @@
 #version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#endif
 
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
 layout(std430, set = 0, binding = 0) readonly buffer Pred_Buffer {
+#ifdef USE_FP16
+    float16_t pred_data[];
+#else
     float pred_data[];
+#endif
 };
 
 layout(std430, set = 0, binding = 1) readonly buffer Target_Buffer {
+#ifdef USE_FP16
+    float16_t target_data[];
+#else
     float target_data[];
+#endif
 };
 
 layout(std430, set = 0, binding = 2) writeonly buffer Loss_Buffer {
@@ -30,10 +42,14 @@ void main() {
 
     float element_loss = 0.0f;
     if (global_idx < push_constants.total_elements) {
+#ifdef USE_FP16
+        float p = clamp(float(pred_data[global_idx]), push_constants.epsilon_val, 1.0f - push_constants.epsilon_val);
+        float y = float(target_data[global_idx]);
+#else
         float p = clamp(pred_data[global_idx], push_constants.epsilon_val, 1.0f - push_constants.epsilon_val);
         float y = target_data[global_idx];
+#endif
 
-        // Positive class loss
         float pos_loss = 0.0f;
         if (y > 0.0f) {
             float pt = 1.0f - p;
@@ -41,7 +57,6 @@ void main() {
             pos_loss = -y * mod_factor * log(p);
         }
 
-        // Negative class loss with probability margin shifting
         float neg_loss = 0.0f;
         if (y < 1.0f) {
             float p_m = max(p - push_constants.clip_margin, 0.0f);

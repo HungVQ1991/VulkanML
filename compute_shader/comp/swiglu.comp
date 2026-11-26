@@ -11,13 +11,14 @@ layout(push_constant) uniform Constants {
 } pcs;
 
 void main() {
-    uint idx = gl_GlobalInvocationID.x;
+    uint wg_id = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
+    uint idx = wg_id * 256u + gl_LocalInvocationID.x;
     if (idx >= pcs.total_elements) return;
 
     float a = data_a[idx];
     float b = data_b[idx];
 
-    float sig_a = 1.0 / (1.0 + exp(-a));
+    float sig_a = 1.0 / (1.0 + exp(-clamp(a, -85.0, 85.0)));
     float silu_a = a * sig_a;
 
     data_y[idx] = silu_a * b;

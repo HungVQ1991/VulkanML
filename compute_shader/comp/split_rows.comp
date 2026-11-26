@@ -1,17 +1,24 @@
 #version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#define BUF_T float16_t
+#else
+#define BUF_T float
+#endif
 
 layout(local_size_x = 16, local_size_y = 16) in;
 
 layout(std430, set = 0, binding = 0) readonly buffer MatrixIn {
-    float data_in[];
+    BUF_T data_in[];
 };
 
 layout(std430, set = 0, binding = 1) writeonly buffer MatrixUp {
-    float data_up[];
+    BUF_T data_up[];
 };
 
 layout(std430, set = 0, binding = 2) writeonly buffer MatrixDown {
-    float data_down[];
+    BUF_T data_down[];
 };
 
 layout(push_constant) uniform Uniform_Params {

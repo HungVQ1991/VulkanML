@@ -1,29 +1,46 @@
 #version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable
+#extension GL_EXT_shader_16bit_storage : enable
+#endif
 
 layout(local_size_x = 256) in;
 
 layout(std430, binding = 0) readonly buffer IndicesBuffer { float indices_data[]; };
+#ifdef USE_FP16
+layout(std430, binding = 1) readonly buffer WeightBuffer { float16_t weight_data[]; };
+layout(std430, binding = 2) writeonly buffer OutputBuffer { float16_t output_data[]; };
+#else
 layout(std430, binding = 1) readonly buffer WeightBuffer { float weight_data[]; };
 layout(std430, binding = 2) writeonly buffer OutputBuffer { float output_data[]; };
+#endif
 
 layout(push_constant) uniform Constants {
     uint num_tokens;
     uint embedding_dim;
     uint vocab_size;
+    int padding_idx;
 } pc;
 
 void main() {
-    uint gid = gl_GlobalInvocationID.x;
-    uint total = pc.num_tokens * pc.embedding_dim;
-    if (gid >= total) return;
-
+    if (pc.embedding_dim == 0u || pc.num_tokens == 0u) return;
+    uint wg_id = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
+    uint gid = wg_id * 256u + gl_LocalInvocationID.x;
     uint token_idx = gid / pc.embedding_dim;
+    if (token_idx >= pc.num_tokens) return;
     uint dim_idx = gid % pc.embedding_dim;
 
-    int row = int(round(indices_data[token_idx]));
-    if (row >= 0 && uint(row) < pc.vocab_size) {
-        output_data[gid] = weight_data[uint(row) * pc.embedding_dim + dim_idx];
-    } else {
-        output_data[gid] = 0.0;
+    float raw_idx = indices_data[token_idx];
+    if (!isnan(raw_idx) && !isinf(raw_idx)) {
+        int row = int(round(raw_idx));
+        if (row >= 0 && row != pc.padding_idx && uint(row) < pc.vocab_size) {
+            output_data[gid] = weight_data[uint(row) * pc.embedding_dim + dim_idx];
+            return;
+        }
     }
+#ifdef USE_FP16
+    output_data[gid] = float16_t(0.0);
+#else
+    output_data[gid] = 0.0;
+#endif
 }

@@ -1,13 +1,16 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <format>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -24,7 +27,15 @@ struct Matrix_Dimensions
     uint32_t columns_a = 0;
     uint32_t columns_b = 0;
     uint32_t broadcast_b = 0;
+    uint32_t batch_rank = 0;
+    uint32_t pad0 = 0;
+    uint32_t pad1 = 0;
+    uint32_t batch_dims[4] = {1, 1, 1, 1};
+    uint32_t a_batch_strides[4] = {0, 0, 0, 0};
+    uint32_t b_batch_strides[4] = {0, 0, 0, 0};
 };
+static_assert(offsetof(Matrix_Dimensions, batch_dims) == 32);
+static_assert(sizeof(Matrix_Dimensions) == 80);
 
 struct Elementwise_Dimensions
 {
@@ -64,24 +75,26 @@ private:
     std::shared_ptr<gpu::vector> storage;
     mutable std::vector<float> host_cache;
     mutable std::vector<uint32_t> host_cache_u32;
-    mutable std::shared_ptr<gpu::vector> cached_indices_storage;
-    mutable std::shared_ptr<gpu::vector> cached_fp16_storage;
-    mutable bool is_fp16_cache_dirty = true;
+    mutable std::mutex cache_mutex;
 
-    static inline bool is_graph_logging_enabled = true;
+    static inline std::atomic<bool> is_graph_logging_enabled{true};
 
 public:
-    static inline size_t distinct_operations_count;
+    static inline size_t distinct_operations_count = 0;
 
     void invalidateFp16Cache() noexcept override
     {
-        is_fp16_cache_dirty = true;
+        if (storage)
+        {
+            storage->invalidateFp16ShadowCache();
+        }
     }
 
     void prewarmFp16Cache() override
     {
         getEffectiveFp16Storage();
-    }    std::shared_ptr<gpu::vector> getEffectiveFp16Storage() const;
+    }
+    std::shared_ptr<gpu::vector> getEffectiveFp16Storage() const;
 
 public:
     template <typename Pipeline_Enum, typename Push_Constants_Type>
@@ -90,11 +103,19 @@ public:
                      const Push_Constants_Type &push_constants,
                      uint32_t workgroup_count_x,
                      uint32_t workgroup_count_y = 1,
-                     uint32_t workgroup_count_z = 1) const
+                     uint32_t workgroup_count_z = 1,
+                     Execution_Engine *engine = nullptr,
+                     uint32_t spec_constant_u32 = 0) const
     {
-        if (buffers.size() > 16)
+        static_assert(std::is_trivially_copyable_v<Push_Constants_Type>,
+                      "Gpu_Tensor_Impl::pushToGraph: Push constants must be trivially copyable");
+        static_assert(sizeof(Push_Constants_Type) <= 128,
+                      "Gpu_Tensor_Impl::pushToGraph: Push constants exceed Vulkan 128-byte limit");
+
+        if (buffers.size() > DESCRIPTOR_BINDINGS_COUNT)
         {
-            Logger::logMessage(Input_Format{"Gpu_Tensor_Impl::pushToGraph: Exceeded max buffer count"},
+            Logger::logMessage(Input_Format{"Gpu_Tensor_Impl::pushToGraph: Exceeded max buffer count ({} > {})",
+                                            buffers.size(), DESCRIPTOR_BINDINGS_COUNT},
                                Log_Level::LOG_ERROR, true, 0, Log_Feature::GRAPH_RECORDING);
             throw std::runtime_error("Exceeded maximum supported buffer count");
         }
@@ -109,42 +130,64 @@ public:
         node.workgroup_count_x = workgroup_count_x;
         node.workgroup_count_y = workgroup_count_y;
         node.workgroup_count_z = workgroup_count_z;
+        node.spec_constant_u32 = spec_constant_u32;
 
-        Execution_Engine::getInstance().getCurrentGraph().addNode(std::move(node));
+        (engine ? *engine : Execution_Engine::getInstance()).getCurrentGraph().addNode(std::move(node));
 
-        if (is_graph_logging_enabled)
+        if (is_graph_logging_enabled.load(std::memory_order_relaxed))
         {
-            is_graph_logging_enabled = Logger::logMessage(
+            is_graph_logging_enabled.store(Logger::logMessage(
                 Input_Format{"Gpu_Tensor_Impl::pushToGraph: Op={}, Dispatch=({}, {}, {}), Buffers={}",
                              magic_enum::enum_name(pipeline_id),
                              workgroup_count_x, workgroup_count_y, workgroup_count_z,
                              buffers.size()},
-                Log_Level::LOG_DEBUG, true, distinct_operations_count, Log_Feature::GRAPH_RECORDING);
+                Log_Level::LOG_DEBUG, true, distinct_operations_count, Log_Feature::GRAPH_RECORDING),
+                std::memory_order_relaxed);
         }
     }
 
-    static const Gpu_Tensor_Impl &castToGpu(const Tensor_Impl &other) noexcept
+    static const Gpu_Tensor_Impl &castToGpu(const Tensor_Impl &other)
     {
-        return static_cast<const Gpu_Tensor_Impl &>(other);
+        const auto *ptr = dynamic_cast<const Gpu_Tensor_Impl *>(&other);
+        if (!ptr)
+        {
+            throw std::invalid_argument("Gpu_Tensor_Impl::castToGpu: Expected Gpu_Tensor_Impl (Execution_Target mismatch)");
+        }
+        return *ptr;
     }
 
-    static Gpu_Tensor_Impl &castToGpu(Tensor_Impl &other) noexcept
+    static Gpu_Tensor_Impl &castToGpu(Tensor_Impl &other)
     {
-        return static_cast<Gpu_Tensor_Impl &>(other);
+        auto *ptr = dynamic_cast<Gpu_Tensor_Impl *>(&other);
+        if (!ptr)
+        {
+            throw std::invalid_argument("Gpu_Tensor_Impl::castToGpu: Expected Gpu_Tensor_Impl (Execution_Target mismatch)");
+        }
+        return *ptr;
     }
 
     std::shared_ptr<Gpu_Tensor_Impl> ensureContiguousSelf() const;
 
     const std::shared_ptr<gpu::vector> &getStorageBuffer() const noexcept { return storage; }
     std::shared_ptr<gpu::vector> &getStorageBuffer() noexcept { return storage; }
-    const std::shared_ptr<gpu::vector> &getCachedFp16Storage() const noexcept { return cached_fp16_storage; }
-    std::shared_ptr<gpu::vector> &getCachedFp16Storage() noexcept { return cached_fp16_storage; }
-    void setCachedFp16Storage(std::shared_ptr<gpu::vector> s) const noexcept { cached_fp16_storage = std::move(s); }
-    bool isFp16CacheDirty() const noexcept { return is_fp16_cache_dirty; }
-    void setFp16CacheDirty(bool dirty) const noexcept { is_fp16_cache_dirty = dirty; }
+    std::shared_ptr<gpu::vector> getCachedFp16Storage() const;
+    void setCachedFp16Storage(std::shared_ptr<gpu::vector> s) const;
+    std::shared_ptr<gpu::vector> ensureCachedFp16Storage(size_t elements) const;
+    bool isFp16CacheDirty() const;
+    void setFp16CacheDirty(bool dirty) const;
     const std::vector<float> &getHostCache() const noexcept { return host_cache; }
     std::vector<float> &getHostCache() noexcept { return host_cache; }
-    void clearHostCache() const noexcept { host_cache.clear(); }
+    void clearHostCache() const
+    {
+        std::lock_guard<std::mutex> lock(cache_mutex);
+        host_cache.clear();
+        host_cache_u32.clear();
+    }
+    void markGpuMutated()
+    {
+        invalidateFp16Cache();
+        clearHostCache();
+    }
     std::shared_ptr<gpu::vector> getOrUploadIndicesBuffer(const std::vector<int32_t>& indices) const;
 
     const std::vector<uint32_t> &getPackedData() const override;
@@ -154,6 +197,11 @@ private:
     template <typename Pipeline_Enum>
     void executeElementwise(const Tensor_Impl &other, Tensor_Impl &output, Pipeline_Enum pipeline_id, bool is_broadcast_allowed) const
     {
+        if (data_type == Data_Type::TERNARY_INT2 || other.getDataType() == Data_Type::TERNARY_INT2)
+        {
+            throw std::invalid_argument("Gpu_Tensor_Impl::executeElementwise: TERNARY_INT2 is not supported");
+        }
+
         auto contig_self = ensureContiguousSelf();
         const auto *effective_self = contig_self ? contig_self.get() : this;
 
@@ -163,17 +211,36 @@ private:
 
         auto &output_gpu = castToGpu(output);
 
+        bool same_shape = (shape == effective_other->shape);
         bool is_broadcast = false;
-        if (is_broadcast_allowed)
+        if (is_broadcast_allowed && !same_shape)
         {
-            bool same_shape = (shape == effective_other->shape);
-            is_broadcast = (effective_other->getRows() == 1 && getColumns() == effective_other->getColumns());
-            if (!same_shape && !is_broadcast)
+            size_t other_rank = effective_other->shape.getRank();
+            size_t self_rank = shape.getRank();
+            if (effective_other->getTotalElements() > 0 && other_rank > 0 && self_rank >= other_rank)
+            {
+                size_t first_non_one = 0;
+                while (first_non_one < other_rank && effective_other->shape[first_non_one] == 1)
+                {
+                    ++first_non_one;
+                }
+                size_t suffix_len = other_rank - first_non_one;
+                bool suffix_match = (suffix_len <= self_rank);
+                for (size_t i = 0; suffix_match && i < suffix_len; ++i)
+                {
+                    if (effective_other->shape[first_non_one + i] != shape[self_rank - suffix_len + i])
+                    {
+                        suffix_match = false;
+                    }
+                }
+                is_broadcast = suffix_match;
+            }
+            if (!is_broadcast)
             {
                 validateSameDimensions(*effective_other);
             }
         }
-        else
+        else if (!same_shape)
         {
             validateSameDimensions(*effective_other);
         }
@@ -182,53 +249,73 @@ private:
                              pipeline_id == Compute_Pipeline::SUB_FP16 ||
                              pipeline_id == Compute_Pipeline::HADAMARD_MUL_FP16 ||
                              pipeline_id == Compute_Pipeline::HADAMARD_DIV_FP16);
-        if (is_fp16_pipe)
+
+        const Shape src_shape = shape;
+        const Data_Type out_dtype = is_fp16_pipe ? Data_Type::FLOAT16 : data_type;
+        const size_t src_total = total_elements;
+        const uint32_t eff_cols = is_broadcast
+                                      ? static_cast<uint32_t>(effective_other->getTotalElements())
+                                      : static_cast<uint32_t>(getColumns());
+
+        std::shared_ptr<gpu::vector> buf_self;
+        std::shared_ptr<gpu::vector> buf_other;
+        if (src_total > 0)
         {
-            output_gpu.setDataType(Data_Type::FLOAT16);
+            if (is_fp16_pipe)
+            {
+                buf_self = (effective_self->getDataType() == Data_Type::FLOAT16)
+                               ? effective_self->storage
+                               : effective_self->getEffectiveFp16Storage();
+                buf_other = (effective_other->getDataType() == Data_Type::FLOAT16)
+                                ? effective_other->storage
+                                : effective_other->getEffectiveFp16Storage();
+            }
+            else
+            {
+                buf_self = effective_self->storage;
+                buf_other = effective_other->storage;
+            }
         }
-        else
+
+        output_gpu.setDataType(out_dtype);
+        output_gpu.reshape(src_shape);
+
+        if (src_total == 0)
         {
-            output_gpu.setDataType(data_type);
+            output_gpu.markGpuMutated();
+            return;
         }
-        output_gpu.reshape(shape);
+
+        if ((is_broadcast && output_gpu.storage.get() == buf_other.get()) ||
+            (&output != this && &output != &other &&
+             (output_gpu.storage.get() == buf_self.get() || output_gpu.storage.get() == buf_other.get())))
+        {
+            output_gpu.storage = std::make_shared<gpu::vector>(
+                Execution_Engine::getInstance().getContext(), src_total, out_dtype);
+        }
 
         Elementwise_Dimensions dims{
-            .total_elements = static_cast<uint32_t>(total_elements),
-            .columns = static_cast<uint32_t>(getColumns()),
+            .total_elements = static_cast<uint32_t>(src_total),
+            .columns = eff_cols,
             .is_broadcast = static_cast<uint32_t>(is_broadcast ? 1 : 0)};
 
         Logger::logMessage(Input_Format{"Gpu_Tensor_Impl::executeElementwise: total={}, cols={}, broadcast={}",
                                         dims.total_elements, dims.columns, dims.is_broadcast},
                            Log_Level::LOG_DEBUG, true, 0, Log_Feature::DENSE_COMPUTE);
 
-        std::shared_ptr<gpu::vector> buf_self;
-        std::shared_ptr<gpu::vector> buf_other;
-        if (is_fp16_pipe)
-        {
-            buf_self = (effective_self->getDataType() == Data_Type::FLOAT16)
-                           ? effective_self->storage
-                           : effective_self->getEffectiveFp16Storage();
-            buf_other = (effective_other->getDataType() == Data_Type::FLOAT16)
-                            ? effective_other->storage
-                            : effective_other->getEffectiveFp16Storage();
-        }
-        else
-        {
-            buf_self = effective_self->storage;
-            buf_other = effective_other->storage;
-        }
-
         pushToGraph(pipeline_id, {buf_self, buf_other, output_gpu.storage}, dims, (dims.total_elements + 255) / 256);
+        output_gpu.markGpuMutated();
     }
 
-public:    Gpu_Tensor_Impl(size_t rows, size_t columns);
+public:
+    Gpu_Tensor_Impl(size_t rows, size_t columns);
     Gpu_Tensor_Impl(size_t rows, size_t columns, const std::vector<float> &host_data);
     explicit Gpu_Tensor_Impl(Shape tensor_shape, Data_Type type = Data_Type::FLOAT32);
     Gpu_Tensor_Impl(Shape tensor_shape, const std::vector<float> &host_data, Data_Type type = Data_Type::FLOAT32);
     Gpu_Tensor_Impl(Shape tensor_shape, Stride tensor_strides, std::shared_ptr<gpu::vector> existing_storage, size_t offset_bytes, Data_Type type = Data_Type::FLOAT32);
 
-
-    ~Gpu_Tensor_Impl() noexcept override = default;    void reshape(size_t rows, size_t columns) override;
+    ~Gpu_Tensor_Impl() noexcept override = default;
+    void reshape(size_t rows, size_t columns) override;
     void reshape(Shape new_shape) override;
     void permute(const std::vector<size_t> &axes_permutation, Tensor_Impl &output) const override;
     void slice(size_t axis, size_t start, size_t length, Tensor_Impl &output) const override;
@@ -247,122 +334,18 @@ public:    Gpu_Tensor_Impl(size_t rows, size_t columns);
     void transpose(Tensor_Impl &output) const override;
     void inverse(Tensor_Impl &output) const override;
     void normalize(Tensor_Impl &output) const override;
-    void relu(Tensor_Impl &output) const override;
-    void reluBackward(const Tensor_Impl &output_gradient, Tensor_Impl &input_gradient) const override;
-    void gelu(Tensor_Impl &output) const override;
-    void geluBackward(const Tensor_Impl &output_gradient, Tensor_Impl &input_gradient) const override;
-    void softmax(Tensor_Impl &output) const override;
-    void softmaxBackward(const Tensor_Impl &output_gradient, Tensor_Impl &input_gradient) const override;
-    void sgdUpdate(const Tensor_Impl &gradient, float learning_rate, float max_gradient = 0.0F, float inv_scale = 1.0F) override;
-    void adamUpdate(const Tensor_Impl &gradient,
-                    const Tensor_Impl &first_moment,
-                    const Tensor_Impl &second_moment,
-                    float learning_rate,
-                    float beta1,
-                    float beta2,
-                    float epsilon,
-                    size_t timestep,
-                    float max_gradient = 1.0F,
-                    float inv_scale = 1.0F,
-                    float weight_decay = 0.0F) override;
     void matmulAdd(const Tensor_Impl &weights, const Tensor_Impl &biases, Tensor_Impl &output) const override;
     void uploadData(const std::vector<float> &host_data) override;
     void zero() override;
     void fill(float value) override;
-    void conv2d(const Tensor_Impl &weights, const Tensor_Impl &biases, Tensor_Impl &output,
-                uint32_t input_height, uint32_t input_width, uint32_t input_channels,
-                uint32_t output_channels, uint32_t kernel_size,
-                uint32_t stride, uint32_t padding,
-                Tensor_Impl *scratch = nullptr) const override;
-    void conv2dBackwardInput(const Tensor_Impl &weights, Tensor_Impl &input_gradient,
-                             uint32_t input_height, uint32_t input_width, uint32_t input_channels,
-                             uint32_t output_height, uint32_t output_width, uint32_t output_channels,
-                             uint32_t kernel_size, uint32_t stride, uint32_t padding) const override;
-    void conv2dBackwardWeight(const Tensor_Impl &output_gradient, Tensor_Impl &weight_gradient, Tensor_Impl &bias_gradient,
-                              uint32_t input_height, uint32_t input_width, uint32_t input_channels,
-                              uint32_t output_height, uint32_t output_width, uint32_t output_channels,
-                              uint32_t kernel_size, uint32_t stride, uint32_t padding,
-                              Tensor_Impl *im2col_scratch = nullptr) const override;
-    void maxpool2d(Tensor_Impl &output, Tensor_Impl &output_mask,
-                   uint32_t input_height, uint32_t input_width, uint32_t channels,
-                   uint32_t kernel_size, uint32_t stride, uint32_t padding) const override;
-    void maxpool2dBackward(const Tensor_Impl &mask, Tensor_Impl &input_gradient,
-                           uint32_t input_height, uint32_t input_width, uint32_t channels,
-                           uint32_t output_height, uint32_t output_width,
-                           uint32_t kernel_size, uint32_t stride, uint32_t padding) const override;
-    void globalAvgPool2d(Tensor_Impl &output, uint32_t input_height, uint32_t input_width, uint32_t channels) const override;
-    void globalAvgPool2dBackward(Tensor_Impl &input_gradient, uint32_t input_height, uint32_t input_width, uint32_t channels) const override;
-    void batchNormForward(const Tensor_Impl &gamma, const Tensor_Impl &beta,
-                          Tensor_Impl &running_mean, Tensor_Impl &running_variance,
-                          Tensor_Impl &batch_mean, Tensor_Impl &batch_variance,
-                          Tensor_Impl &normalized_input, Tensor_Impl &output,
-                          float epsilon, float momentum, bool is_training) const override;
-    void batchNormBackward(const Tensor_Impl &output_gradient, const Tensor_Impl &gamma, const Tensor_Impl &batch_variance, const Tensor_Impl &normalized_input,
-                           Tensor_Impl &gamma_gradient, Tensor_Impl &beta_gradient, Tensor_Impl &input_gradient, float epsilon) const override;
-    void linearForward(const Tensor_Impl &weights, const Tensor_Impl &biases, Tensor_Impl &output) const override;
-    void linearBackwardInput(const Tensor_Impl &weights, Tensor_Impl &input_gradient) const override;
-    void linearBackwardWeightBias(const Tensor_Impl &output_gradient, Tensor_Impl &weight_gradient, Tensor_Impl &bias_gradient, bool accumulate = false) const override;
-    void linearBackwardWeightAdam(
-        const Tensor_Impl &output_gradient,
-        Tensor_Impl &weights,
-        Tensor_Impl &first_moment,
-        Tensor_Impl &second_moment,
-        Tensor_Impl &bias_gradient,
-        float learning_rate,
-        float beta1,
-        float beta2,
-        float epsilon,
-        size_t timestep,
-        float max_gradient = 1.0F,
-        float inv_scale = 1.0F,
-        float weight_decay = 0.0F) override;
-    void batchNorm2dForward(const Tensor_Impl &gamma, const Tensor_Impl &beta,
-                            Tensor_Impl &running_mean, Tensor_Impl &running_variance,
-                            Tensor_Impl &batch_mean, Tensor_Impl &batch_variance,
-                            Tensor_Impl &normalized_input, Tensor_Impl &output,
-                            uint32_t input_height, uint32_t input_width, uint32_t input_channels,
-                            float epsilon, float momentum, bool is_training) const override;
-    void batchNorm2dBackward(const Tensor_Impl &gamma, const Tensor_Impl &batch_variance, const Tensor_Impl &normalized_input,
-                             Tensor_Impl &gamma_gradient, Tensor_Impl &beta_gradient, Tensor_Impl &input_gradient,
-                             uint32_t input_height, uint32_t input_width, uint32_t input_channels, float epsilon) const override;
-    void cceLoss(const Tensor_Impl &target, Tensor_Impl &output, float epsilon) const override;
-    void mseLoss(const Tensor_Impl &target, Tensor_Impl &output) const override;
-    void maeLoss(const Tensor_Impl &target, Tensor_Impl &output) const override;
-    void bceLoss(const Tensor_Impl &target, Tensor_Impl &output, float epsilon) const override;
-    void huberLoss(const Tensor_Impl &target, Tensor_Impl &output, float delta) const override;
     void concatenateColumns(const Tensor_Impl& other, Tensor_Impl& output) const override;
     void concatenateRows(const Tensor_Impl& other, Tensor_Impl& output) const override;
     void splitColumns(size_t split_index, Tensor_Impl &result_left, Tensor_Impl &result_right) const override;
     void splitRows(size_t split_index, Tensor_Impl &result_up, Tensor_Impl &result_down) const override;
-    void rmsNormForward(const Tensor_Impl &gamma, Tensor_Impl &inv_rms, Tensor_Impl &output, float epsilon) const override;
-    void rmsNormBackward(const Tensor_Impl &output_gradient, const Tensor_Impl &gamma, const Tensor_Impl &inv_rms,
-                         Tensor_Impl &gamma_gradient, Tensor_Impl &input_gradient, bool accumulate_gamma = false) const override;
-    void applyRoPE(Tensor_Impl &output, uint32_t seq_len, uint32_t head_dim, int direction = 1, float base = 10000.0f, uint32_t num_heads = 1, uint32_t mode = 0) const override;
-    void swigluForward(const Tensor_Impl &b, Tensor_Impl &output) const override;
-    void swigluBackward(const Tensor_Impl &output_gradient, const Tensor_Impl &b, Tensor_Impl &grad_a, Tensor_Impl &grad_b) const override;
-    void fusedSwiGLUForward(Tensor_Impl &output) const override;
-    void fusedSwiGLUBackward(const Tensor_Impl &output_gradient, Tensor_Impl &input_gradient) const override;
-    void flashAttentionForward(const Tensor_Impl &k, const Tensor_Impl &v, Tensor_Impl &output,
-                               uint32_t num_heads, uint32_t seq_len, uint32_t head_dim,
-                               bool is_causal = false, float scale = 0.0f,
-                               Tensor_Impl *l_stats = nullptr) const override;
-    void flashAttentionBackward(const Tensor_Impl &k, const Tensor_Impl &v,
-                                const Tensor_Impl &o, const Tensor_Impl &do_grad,
-                                Tensor_Impl &dq, Tensor_Impl &dk, Tensor_Impl &dv,
-                                uint32_t num_heads, uint32_t seq_len, uint32_t head_dim,
-                                bool is_causal = false, float scale = 0.0f,
-                                const Tensor_Impl *l_stats = nullptr) const override;
-    void embeddingForward(const Tensor_Impl &indices, Tensor_Impl &output) const override;
-    void embeddingBackward(const Tensor_Impl &indices, const Tensor_Impl &output_gradient, Tensor_Impl &weight_gradient) const override;
-    void singleTokenAttentionForward(const Tensor_Impl &k, const Tensor_Impl &v, Tensor_Impl &output,
-                                     size_t num_heads, size_t head_dim, size_t total_seq_len) const override;
-    float fusedCrossEntropyLoss(const Tensor_Impl &targets, Tensor_Impl &d_logits, uint32_t valid_tokens = 0) const override;
-    const std::vector<float> &getData() const noexcept override;
+    const std::vector<float> &getData() const override;
     Mutable_Storage_Handle getStorage() override;
 
-
     Storage_Handle getStorage() const override { return storage; }
-    std::shared_ptr<gpu::vector> getVector() override { return storage; }
     bool isEmpty() const noexcept override { return !storage || storage->isEmpty(); }
 
-};;
+};

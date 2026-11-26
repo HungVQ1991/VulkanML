@@ -6,10 +6,13 @@
 #include <cstdint>
 #include <format>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <random>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -17,6 +20,72 @@
 #include "helper/logger.h"
 #include "helper/magic_enum.hpp"
 #include "math/tensor.h"
+#include "math/tensor_impl.h"
+
+namespace
+{
+static uint32_t validateUNetIoTensor(
+    const Tensor &t,
+    Execution_Target expected_target,
+    uint32_t expected_channels,
+    uint32_t expected_height,
+    uint32_t expected_width,
+    const char *fn_name,
+    const size_t *expected_batch = nullptr)
+{
+    if (!t.getImplementation())
+    {
+        throw std::invalid_argument(std::format("U_Net_Layer::{}: Tensor has null implementation", fn_name));
+    }
+    if (t.getExecutionTarget() != expected_target)
+    {
+        throw std::invalid_argument(std::format("U_Net_Layer::{}: Execution_Target mismatch", fn_name));
+    }
+    if (t.getDataType() == Data_Type::TERNARY_INT2)
+    {
+        throw std::invalid_argument(std::format("U_Net_Layer::{}: TERNARY_INT2 tensor is not supported", fn_name));
+    }
+    if (t.isEmpty())
+    {
+        throw std::invalid_argument(std::format("U_Net_Layer::{}: Tensor is empty", fn_name));
+    }
+    const Shape &sh = t.getShape();
+    const size_t rank = sh.getRank();
+    if (rank != 2 && rank != 4)
+    {
+        throw std::invalid_argument(std::format("U_Net_Layer::{}: Expected rank-2 or rank-4 tensor, got rank {}", fn_name, rank));
+    }
+    const size_t batch = sh[0];
+    if (batch == 0 || batch > std::numeric_limits<uint32_t>::max())
+    {
+        throw std::invalid_argument(std::format("U_Net_Layer::{}: Invalid batch size {}", fn_name, batch));
+    }
+    if (expected_batch && batch != *expected_batch)
+    {
+        throw std::invalid_argument(std::format(
+            "U_Net_Layer::{}: Batch size {} mismatch (expected {})", fn_name, batch, *expected_batch));
+    }
+    const size_t expected_cols = static_cast<size_t>(expected_channels) * expected_height * expected_width;
+    if (rank == 2)
+    {
+        if (sh[1] != expected_cols)
+        {
+            throw std::invalid_argument(std::format(
+                "U_Net_Layer::{}: Rank-2 column count {} mismatch (expected {})", fn_name, sh[1], expected_cols));
+        }
+    }
+    else
+    {
+        if (sh[1] != expected_channels || sh[2] != expected_height || sh[3] != expected_width)
+        {
+            throw std::invalid_argument(std::format(
+                "U_Net_Layer::{}: Rank-4 shape must be [B, {}, {}, {}]",
+                fn_name, expected_channels, expected_height, expected_width));
+        }
+    }
+    return static_cast<uint32_t>(batch);
+}
+}
 
 U_Net_Layer::U_Net_Layer(
     uint32_t _height,
@@ -24,25 +93,72 @@ U_Net_Layer::U_Net_Layer(
     uint32_t _in_channels,
     uint32_t _out_channels,
     uint32_t _base_channels,
-    Execution_Target _execution_target)
+    Execution_Target _execution_target,
+    Data_Type _data_type)
     : input_height(_height),
       input_width(_width),
       in_channels(_in_channels),
       out_channels(_out_channels),
       base_channels(_base_channels),
       execution_target(_execution_target),
+      data_type(_data_type),
       is_forward_completed(false),
       is_training(true),
-      is_accumulated(false),
       input_tensor(0, 0, _execution_target),
       output_tensor(0, 0, _execution_target),
-      input_gradient_tensor(0, 0, _execution_target)
+      input_gradient_tensor(0, 0, _execution_target),
+      skip1_act(0, 0, _execution_target),
+      skip2_act(0, 0, _execution_target),
+      skip3_act(0, 0, _execution_target),
+      dec3_concat(0, 0, _execution_target),
+      dec2_concat(0, 0, _execution_target),
+      dec1_concat(0, 0, _execution_target),
+      in_nhwc_scratch(0, 0, _execution_target),
+      out_nchw_scratch(0, 0, _execution_target),
+      grad_nhwc_scratch(0, 0, _execution_target),
+      in_grad_nchw_scratch(0, 0, _execution_target),
+      up3_cast_scratch(0, 0, _execution_target),
+      up2_cast_scratch(0, 0, _execution_target),
+      up1_cast_scratch(0, 0, _execution_target),
+      dec3_concat_2d_scratch(0, 0, _execution_target),
+      dec2_concat_2d_scratch(0, 0, _execution_target),
+      dec1_concat_2d_scratch(0, 0, _execution_target),
+      sig_grad_cast_scratch(0, 0, _execution_target),
+      d_up1_scratch(0, 0, _execution_target),
+      d_skip1_scratch(0, 0, _execution_target),
+      d_skip1_cast_scratch(0, 0, _execution_target),
+      enc1_grad_sum(0, 0, _execution_target),
+      d_up2_scratch(0, 0, _execution_target),
+      d_skip2_scratch(0, 0, _execution_target),
+      d_skip2_cast_scratch(0, 0, _execution_target),
+      enc2_grad_sum(0, 0, _execution_target),
+      d_up3_scratch(0, 0, _execution_target),
+      d_skip3_scratch(0, 0, _execution_target),
+      d_skip3_cast_scratch(0, 0, _execution_target),
+      enc3_grad_sum(0, 0, _execution_target)
 {
+    if (in_channels == 0 || out_channels == 0 || base_channels == 0 ||
+        input_height < 8 || input_width < 8 || (input_height % 8) != 0 || (input_width % 8) != 0)
+    {
+        throw std::invalid_argument("U_Net_Layer: height and width must be >= 8 and divisible by 8, and channels > 0");
+    }
+    if (base_channels > std::numeric_limits<uint32_t>::max() / 8)
+    {
+        throw std::overflow_error("U_Net_Layer: base_channels * 8 exceeds uint32_t limit");
+    }
     buildNetwork();
 }
 
 void U_Net_Layer::buildNetwork()
 {
+    enc1_layers.clear();
+    enc2_layers.clear();
+    enc3_layers.clear();
+    bottleneck_layers.clear();
+    dec3_layers.clear();
+    dec2_layers.clear();
+    dec1_layers.clear();
+
     uint32_t c1 = base_channels;
     uint32_t c2 = base_channels * 2;
     uint32_t c3 = base_channels * 4;
@@ -51,193 +167,307 @@ void U_Net_Layer::buildNetwork()
     uint32_t h = input_height;
     uint32_t w = input_width;
 
-    // --- ENCODER 1: (H, W, in_channels) -> (H, W, c1) ---
-    enc1_layers.push_back(std::make_unique<Conv2d_Layer>(h, w, in_channels, c1, 3, 1, 1, execution_target));
+    enc1_layers.push_back(std::make_unique<Conv2d_Layer>(h, w, in_channels, c1, 3, 1, 1, execution_target, data_type));
     enc1_layers.push_back(std::make_unique<Batch_Norm_2d_Layer>(h, w, c1, 1e-5f, 0.1f, execution_target));
     enc1_layers.push_back(std::make_unique<Gelu_Layer>(execution_target));
-    enc1_layers.push_back(std::make_unique<Conv2d_Layer>(h, w, c1, c1, 3, 1, 1, execution_target));
+    enc1_layers.push_back(std::make_unique<Conv2d_Layer>(h, w, c1, c1, 3, 1, 1, execution_target, data_type));
     enc1_layers.push_back(std::make_unique<Batch_Norm_2d_Layer>(h, w, c1, 1e-5f, 0.1f, execution_target));
     enc1_layers.push_back(std::make_unique<Gelu_Layer>(execution_target));
     pool1 = std::make_unique<Max_Pool_2d_Layer>(h, w, c1, 2, 2, 0, execution_target);
 
-    // --- ENCODER 2: (H/2, W/2, c1) -> (H/2, W/2, c2) ---
     h /= 2; w /= 2;
-    enc2_layers.push_back(std::make_unique<Conv2d_Layer>(h, w, c1, c2, 3, 1, 1, execution_target));
+    enc2_layers.push_back(std::make_unique<Conv2d_Layer>(h, w, c1, c2, 3, 1, 1, execution_target, data_type));
     enc2_layers.push_back(std::make_unique<Batch_Norm_2d_Layer>(h, w, c2, 1e-5f, 0.1f, execution_target));
     enc2_layers.push_back(std::make_unique<Gelu_Layer>(execution_target));
-    enc2_layers.push_back(std::make_unique<Conv2d_Layer>(h, w, c2, c2, 3, 1, 1, execution_target));
+    enc2_layers.push_back(std::make_unique<Conv2d_Layer>(h, w, c2, c2, 3, 1, 1, execution_target, data_type));
     enc2_layers.push_back(std::make_unique<Batch_Norm_2d_Layer>(h, w, c2, 1e-5f, 0.1f, execution_target));
     enc2_layers.push_back(std::make_unique<Gelu_Layer>(execution_target));
     pool2 = std::make_unique<Max_Pool_2d_Layer>(h, w, c2, 2, 2, 0, execution_target);
 
-    // --- ENCODER 3: (H/4, W/4, c2) -> (H/4, W/4, c3) ---
     h /= 2; w /= 2;
-    enc3_layers.push_back(std::make_unique<Conv2d_Layer>(h, w, c2, c3, 3, 1, 1, execution_target));
+    enc3_layers.push_back(std::make_unique<Conv2d_Layer>(h, w, c2, c3, 3, 1, 1, execution_target, data_type));
     enc3_layers.push_back(std::make_unique<Batch_Norm_2d_Layer>(h, w, c3, 1e-5f, 0.1f, execution_target));
     enc3_layers.push_back(std::make_unique<Gelu_Layer>(execution_target));
-    enc3_layers.push_back(std::make_unique<Conv2d_Layer>(h, w, c3, c3, 3, 1, 1, execution_target));
+    enc3_layers.push_back(std::make_unique<Conv2d_Layer>(h, w, c3, c3, 3, 1, 1, execution_target, data_type));
     enc3_layers.push_back(std::make_unique<Batch_Norm_2d_Layer>(h, w, c3, 1e-5f, 0.1f, execution_target));
     enc3_layers.push_back(std::make_unique<Gelu_Layer>(execution_target));
     pool3 = std::make_unique<Max_Pool_2d_Layer>(h, w, c3, 2, 2, 0, execution_target);
 
-    // --- BOTTLENECK: (H/8, W/8, c3) -> (H/8, W/8, c4) ---
     h /= 2; w /= 2;
-    bottleneck_layers.push_back(std::make_unique<Conv2d_Layer>(h, w, c3, c4, 3, 1, 1, execution_target));
+    bottleneck_layers.push_back(std::make_unique<Conv2d_Layer>(h, w, c3, c4, 3, 1, 1, execution_target, data_type));
     bottleneck_layers.push_back(std::make_unique<Batch_Norm_2d_Layer>(h, w, c4, 1e-5f, 0.1f, execution_target));
     bottleneck_layers.push_back(std::make_unique<Gelu_Layer>(execution_target));
-    bottleneck_layers.push_back(std::make_unique<Conv2d_Layer>(h, w, c4, c4, 3, 1, 1, execution_target));
+    bottleneck_layers.push_back(std::make_unique<Conv2d_Layer>(h, w, c4, c4, 3, 1, 1, execution_target, data_type));
     bottleneck_layers.push_back(std::make_unique<Batch_Norm_2d_Layer>(h, w, c4, 1e-5f, 0.1f, execution_target));
     bottleneck_layers.push_back(std::make_unique<Gelu_Layer>(execution_target));
 
-    // --- DECODER 3: (H/8, W/8) -> (H/4, W/4), concat (c4 + c3) -> c3 ---
     up3 = std::make_unique<Up_Sample_2d_Layer>(h, w, c4, 2, execution_target);
     h *= 2; w *= 2;
-    dec3_layers.push_back(std::make_unique<Conv2d_Layer>(h, w, c4 + c3, c3, 3, 1, 1, execution_target));
+    dec3_layers.push_back(std::make_unique<Conv2d_Layer>(h, w, c4 + c3, c3, 3, 1, 1, execution_target, data_type));
     dec3_layers.push_back(std::make_unique<Batch_Norm_2d_Layer>(h, w, c3, 1e-5f, 0.1f, execution_target));
     dec3_layers.push_back(std::make_unique<Gelu_Layer>(execution_target));
-    dec3_layers.push_back(std::make_unique<Conv2d_Layer>(h, w, c3, c3, 3, 1, 1, execution_target));
+    dec3_layers.push_back(std::make_unique<Conv2d_Layer>(h, w, c3, c3, 3, 1, 1, execution_target, data_type));
     dec3_layers.push_back(std::make_unique<Batch_Norm_2d_Layer>(h, w, c3, 1e-5f, 0.1f, execution_target));
     dec3_layers.push_back(std::make_unique<Gelu_Layer>(execution_target));
 
-    // --- DECODER 2: (H/4, W/4) -> (H/2, W/2), concat (c3 + c2) -> c2 ---
     up2 = std::make_unique<Up_Sample_2d_Layer>(h, w, c3, 2, execution_target);
     h *= 2; w *= 2;
-    dec2_layers.push_back(std::make_unique<Conv2d_Layer>(h, w, c3 + c2, c2, 3, 1, 1, execution_target));
+    dec2_layers.push_back(std::make_unique<Conv2d_Layer>(h, w, c3 + c2, c2, 3, 1, 1, execution_target, data_type));
     dec2_layers.push_back(std::make_unique<Batch_Norm_2d_Layer>(h, w, c2, 1e-5f, 0.1f, execution_target));
     dec2_layers.push_back(std::make_unique<Gelu_Layer>(execution_target));
-    dec2_layers.push_back(std::make_unique<Conv2d_Layer>(h, w, c2, c2, 3, 1, 1, execution_target));
+    dec2_layers.push_back(std::make_unique<Conv2d_Layer>(h, w, c2, c2, 3, 1, 1, execution_target, data_type));
     dec2_layers.push_back(std::make_unique<Batch_Norm_2d_Layer>(h, w, c2, 1e-5f, 0.1f, execution_target));
     dec2_layers.push_back(std::make_unique<Gelu_Layer>(execution_target));
 
-    // --- DECODER 1: (H/2, W/2) -> (H, W), concat (c2 + c1) -> c1 ---
     up1 = std::make_unique<Up_Sample_2d_Layer>(h, w, c2, 2, execution_target);
     h *= 2; w *= 2;
-    dec1_layers.push_back(std::make_unique<Conv2d_Layer>(h, w, c2 + c1, c1, 3, 1, 1, execution_target));
+    dec1_layers.push_back(std::make_unique<Conv2d_Layer>(h, w, c2 + c1, c1, 3, 1, 1, execution_target, data_type));
     dec1_layers.push_back(std::make_unique<Batch_Norm_2d_Layer>(h, w, c1, 1e-5f, 0.1f, execution_target));
     dec1_layers.push_back(std::make_unique<Gelu_Layer>(execution_target));
-    dec1_layers.push_back(std::make_unique<Conv2d_Layer>(h, w, c1, c1, 3, 1, 1, execution_target));
+    dec1_layers.push_back(std::make_unique<Conv2d_Layer>(h, w, c1, c1, 3, 1, 1, execution_target, data_type));
     dec1_layers.push_back(std::make_unique<Batch_Norm_2d_Layer>(h, w, c1, 1e-5f, 0.1f, execution_target));
     dec1_layers.push_back(std::make_unique<Gelu_Layer>(execution_target));
 
-    // --- HEAD: 1x1 Conv + Sigmoid ---
-    final_conv = std::make_unique<Conv2d_Layer>(h, w, c1, out_channels, 1, 1, 0, execution_target);
+    final_conv = std::make_unique<Conv2d_Layer>(h, w, c1, out_channels, 1, 1, 0, execution_target, data_type);
     final_sigmoid = std::make_unique<Sigmoid_Layer>(execution_target);
+}
+
+void U_Net_Layer::prepareInference()
+{
+    auto prep_vec = [](auto &vec) {
+        for (auto &l : vec) l->prepareInference();
+    };
+    prep_vec(enc1_layers);
+    if (pool1) pool1->prepareInference();
+    prep_vec(enc2_layers);
+    if (pool2) pool2->prepareInference();
+    prep_vec(enc3_layers);
+    if (pool3) pool3->prepareInference();
+    prep_vec(bottleneck_layers);
+    if (up3) up3->prepareInference();
+    prep_vec(dec3_layers);
+    if (up2) up2->prepareInference();
+    prep_vec(dec2_layers);
+    if (up1) up1->prepareInference();
+    prep_vec(dec1_layers);
+    if (final_conv) final_conv->prepareInference();
+    if (final_sigmoid) final_sigmoid->prepareInference();
+}
+
+void U_Net_Layer::quantizeToTernary()
+{
+    data_type = Data_Type::TERNARY_INT2;
+    auto quant_vec = [](auto &vec) {
+        for (auto &l : vec)
+        {
+            if (auto conv = dynamic_cast<Conv2d_Layer*>(l.get())) conv->quantizeToTernary();
+        }
+    };
+    quant_vec(enc1_layers);
+    quant_vec(enc2_layers);
+    quant_vec(enc3_layers);
+    quant_vec(bottleneck_layers);
+    quant_vec(dec3_layers);
+    quant_vec(dec2_layers);
+    quant_vec(dec1_layers);
+    if (final_conv) final_conv->quantizeToTernary();
+}
+
+void U_Net_Layer::dequantizeFromTernary()
+{
+    data_type = is_mixed_precision_enabled ? Data_Type::FLOAT16 : Data_Type::FLOAT32;
+    auto dequant_vec = [](auto &vec) {
+        for (auto &l : vec)
+        {
+            if (l) l->dequantizeFromTernary();
+        }
+    };
+    dequant_vec(enc1_layers);
+    dequant_vec(enc2_layers);
+    dequant_vec(enc3_layers);
+    dequant_vec(bottleneck_layers);
+    dequant_vec(dec3_layers);
+    dequant_vec(dec2_layers);
+    dequant_vec(dec1_layers);
+    if (final_conv) final_conv->dequantizeFromTernary();
+}
+
+void U_Net_Layer::snapshotNonTrainableState(std::vector<std::vector<float>> &_out) const
+{
+    auto snap_vec = [&](const auto &vec) {
+        for (const auto &l : vec)
+        {
+            if (l) l->snapshotNonTrainableState(_out);
+        }
+    };
+    snap_vec(enc1_layers);
+    snap_vec(enc2_layers);
+    snap_vec(enc3_layers);
+    snap_vec(bottleneck_layers);
+    snap_vec(dec3_layers);
+    snap_vec(dec2_layers);
+    snap_vec(dec1_layers);
+}
+
+void U_Net_Layer::restoreNonTrainableState(const std::vector<std::vector<float>> &_in, size_t &_cursor)
+{
+    auto rest_vec = [&](auto &vec) {
+        for (auto &l : vec)
+        {
+            if (l) l->restoreNonTrainableState(_in, _cursor);
+        }
+    };
+    rest_vec(enc1_layers);
+    rest_vec(enc2_layers);
+    rest_vec(enc3_layers);
+    rest_vec(bottleneck_layers);
+    rest_vec(dec3_layers);
+    rest_vec(dec2_layers);
+    rest_vec(dec1_layers);
 }
 
 std::unique_ptr<ILayer> U_Net_Layer::clone() const
 {
-    auto cloned = std::make_unique<U_Net_Layer>(input_height, input_width, in_channels, out_channels, base_channels, execution_target);
+    auto cloned = std::make_unique<U_Net_Layer>(input_height, input_width, in_channels, out_channels, base_channels, execution_target, data_type);
+    auto clone_vec = [](const auto &src_vec, auto &dst_vec) {
+        dst_vec.clear();
+        dst_vec.reserve(src_vec.size());
+        for (const auto &l : src_vec)
+        {
+            dst_vec.push_back(l ? l->clone() : nullptr);
+        }
+    };
+    auto clone_as = [](const auto &src_ptr, auto &dst_ptr) {
+        using LayerT = typename std::remove_reference_t<decltype(dst_ptr)>::element_type;
+        if (src_ptr)
+        {
+            auto base_clone = src_ptr->clone();
+            dst_ptr.reset(static_cast<LayerT *>(base_clone.release()));
+        }
+    };
+
+    clone_vec(enc1_layers, cloned->enc1_layers);
+    clone_as(pool1, cloned->pool1);
+    clone_vec(enc2_layers, cloned->enc2_layers);
+    clone_as(pool2, cloned->pool2);
+    clone_vec(enc3_layers, cloned->enc3_layers);
+    clone_as(pool3, cloned->pool3);
+    clone_vec(bottleneck_layers, cloned->bottleneck_layers);
+    clone_as(up3, cloned->up3);
+    clone_vec(dec3_layers, cloned->dec3_layers);
+    clone_as(up2, cloned->up2);
+    clone_vec(dec2_layers, cloned->dec2_layers);
+    clone_as(up1, cloned->up1);
+    clone_vec(dec1_layers, cloned->dec1_layers);
+    clone_as(final_conv, cloned->final_conv);
+    clone_as(final_sigmoid, cloned->final_sigmoid);
+
+    cloned->setTrainingMode(is_training);
+    cloned->setMixedPrecision(is_mixed_precision_enabled);
+    cloned->setAccumulated(is_accumulated);
     return cloned;
 }
 
 Tensor U_Net_Layer::forward(const Tensor &_input_tensor)
 {
+    uint32_t b = validateUNetIoTensor(
+        _input_tensor, execution_target, in_channels, input_height, input_width, "forward");
+
     input_tensor = _input_tensor;
     Tensor cur = _input_tensor;
 
-    // 1. Encoder 1
+    if (_input_tensor.getShape().getRank() == 4)
+    {
+        if (in_channels > 1)
+        {
+            _input_tensor.permute({0, 2, 3, 1}).contiguous(in_nhwc_scratch);
+            cur = in_nhwc_scratch.view(Shape{b, static_cast<size_t>(input_height) * input_width * in_channels});
+        }
+        else
+        {
+            cur = _input_tensor.view(Shape{b, static_cast<size_t>(input_height) * input_width});
+        }
+    }
+
     for (auto &layer : enc1_layers) cur = layer->forward(cur);
     skip1_act = cur;
     cur = pool1->forward(cur);
 
-    // 2. Encoder 2
     for (auto &layer : enc2_layers) cur = layer->forward(cur);
     skip2_act = cur;
     cur = pool2->forward(cur);
 
-    // 3. Encoder 3
     for (auto &layer : enc3_layers) cur = layer->forward(cur);
     skip3_act = cur;
     cur = pool3->forward(cur);
 
-    // 4. Bottleneck
     for (auto &layer : bottleneck_layers) cur = layer->forward(cur);
 
-    uint32_t b = static_cast<uint32_t>(_input_tensor.getRows());
     uint32_t c1 = base_channels;
     uint32_t c2 = base_channels * 2;
     uint32_t c3 = base_channels * 4;
     uint32_t c4 = base_channels * 8;
 
-    uint32_t h3 = input_height / 4;
-    uint32_t w3 = input_width / 4;
-    uint32_t h2 = input_height / 2;
-    uint32_t w2 = input_width / 2;
-    uint32_t h1 = input_height;
-    uint32_t w1 = input_width;
+    const size_t b_sz = b;
+    const size_t h3_sz = input_height / 4;
+    const size_t w3_sz = input_width / 4;
+    const size_t h2_sz = input_height / 2;
+    const size_t w2_sz = input_width / 2;
+    const size_t h1_sz = input_height;
+    const size_t w1_sz = input_width;
 
-    // 5. Decoder 3
     Tensor up_feat3 = up3->forward(cur);
     if (up_feat3.getDataType() != skip3_act.getDataType())
     {
-        up_feat3 = up_feat3.to(skip3_act.getDataType());
+        up_feat3.to(skip3_act.getDataType(), up3_cast_scratch);
+        up_feat3 = up3_cast_scratch;
     }
-    up_feat3.reshape(Shape{b * h3 * w3, c4});
-    skip3_act.reshape(Shape{b * h3 * w3, c3});
-    dec3_concat = up_feat3.concatenateColumns(skip3_act);
-    dec3_concat.reshape(Shape{b, h3 * w3 * (c4 + c3)});
-    skip3_act.reshape(Shape{b, h3 * w3 * c3});
+    up_feat3.view(Shape{b_sz * h3_sz * w3_sz, c4}).concatenateColumns(skip3_act.view(Shape{b_sz * h3_sz * w3_sz, c3}), dec3_concat_2d_scratch);
+    dec3_concat = dec3_concat_2d_scratch.view(Shape{b_sz, h3_sz * w3_sz * (static_cast<size_t>(c4) + c3)});
     cur = dec3_concat;
     for (auto &layer : dec3_layers) cur = layer->forward(cur);
 
-    // 6. Decoder 2
     Tensor up_feat2 = up2->forward(cur);
     if (up_feat2.getDataType() != skip2_act.getDataType())
     {
-        up_feat2 = up_feat2.to(skip2_act.getDataType());
+        up_feat2.to(skip2_act.getDataType(), up2_cast_scratch);
+        up_feat2 = up2_cast_scratch;
     }
-    up_feat2.reshape(Shape{b * h2 * w2, c3});
-    skip2_act.reshape(Shape{b * h2 * w2, c2});
-    dec2_concat = up_feat2.concatenateColumns(skip2_act);
-    dec2_concat.reshape(Shape{b, h2 * w2 * (c3 + c2)});
-    skip2_act.reshape(Shape{b, h2 * w2 * c2});
+    up_feat2.view(Shape{b_sz * h2_sz * w2_sz, c3}).concatenateColumns(skip2_act.view(Shape{b_sz * h2_sz * w2_sz, c2}), dec2_concat_2d_scratch);
+    dec2_concat = dec2_concat_2d_scratch.view(Shape{b_sz, h2_sz * w2_sz * (static_cast<size_t>(c3) + c2)});
     cur = dec2_concat;
     for (auto &layer : dec2_layers) cur = layer->forward(cur);
 
-    // 7. Decoder 1
     Tensor up_feat1 = up1->forward(cur);
     if (up_feat1.getDataType() != skip1_act.getDataType())
     {
-        up_feat1 = up_feat1.to(skip1_act.getDataType());
+        up_feat1.to(skip1_act.getDataType(), up1_cast_scratch);
+        up_feat1 = up1_cast_scratch;
     }
-    up_feat1.reshape(Shape{b * h1 * w1, c2});
-    skip1_act.reshape(Shape{b * h1 * w1, c1});
-    dec1_concat = up_feat1.concatenateColumns(skip1_act);
-    dec1_concat.reshape(Shape{b, h1 * w1 * (c2 + c1)});
-    skip1_act.reshape(Shape{b, h1 * w1 * c1});
+    up_feat1.view(Shape{b_sz * h1_sz * w1_sz, c2}).concatenateColumns(skip1_act.view(Shape{b_sz * h1_sz * w1_sz, c1}), dec1_concat_2d_scratch);
+    dec1_concat = dec1_concat_2d_scratch.view(Shape{b_sz, h1_sz * w1_sz * (static_cast<size_t>(c2) + c1)});
     cur = dec1_concat;
     for (auto &layer : dec1_layers) cur = layer->forward(cur);
 
-    // 8. Head
     Tensor before_sigmoid = final_conv->forward(cur);
-    output_tensor = final_sigmoid->forward(before_sigmoid);
+    Tensor sig_out = final_sigmoid->forward(before_sigmoid);
 
     if (_input_tensor.getShape().getRank() == 4)
     {
-        output_tensor.reshape(Shape{_input_tensor.getShape()[0], out_channels, input_height, input_width});
+        if (out_channels > 1)
+        {
+            sig_out.view(Shape{b, input_height, input_width, out_channels}).permute({0, 3, 1, 2}).contiguous(out_nchw_scratch);
+            output_tensor = out_nchw_scratch;
+        }
+        else
+        {
+            output_tensor = sig_out.view(Shape{b, out_channels, input_height, input_width});
+        }
     }
-
-    // {
-    //     std::string mode_str = is_training ? "[TRAIN TRACE] " : "[EVAL TRACE] ";
-    //     auto check = [&](const std::string& name, const Tensor& t) {
-    //         auto d = t.getData();
-    //         float mi = 1e9f, ma = -1e9f, sum = 0.0f;
-    //         int z = 0, nan_c = 0;
-    //         for (float v : d) {
-    //             if (std::isnan(v)) nan_c++;
-    //             else { mi = std::min(mi, v); ma = std::max(ma, v); sum += v; if (v == 0.0f) z++; }
-    //         }
-    //         std::cout << mode_str << name << ": min=" << mi << " max=" << ma << " avg=" << sum / d.size() << " zeros=" << z << "/" << d.size() << " nans=" << nan_c << std::endl;
-    //     };
-    //     check("input", _input_tensor);
-    //     check("skip1", skip1_act);
-    //     check("skip2", skip2_act);
-    //     check("skip3", skip3_act);
-    //     check("dec1_concat", dec1_concat);
-    //     check("dec1_out(cur)", cur);
-    //     check("final_conv_out", before_sigmoid);
-    //     check("final_sigmoid_out", output_tensor);
-    // }
+    else
+    {
+        output_tensor = sig_out;
+    }
 
     is_forward_completed = true;
     return output_tensor;
@@ -249,107 +479,117 @@ Tensor U_Net_Layer::backward(const Tensor &_output_gradient)
     {
         throw std::runtime_error("U_Net_Layer::backward: Forward must be called before backward");
     }
-
-    Tensor grad = final_sigmoid->backward(_output_gradient);
-    if (grad.getShape().getRank() != 2)
+    const size_t fwd_batch = (input_tensor.getShape().getRank() >= 1) ? input_tensor.getShape()[0] : 0;
+    uint32_t b = validateUNetIoTensor(
+        _output_gradient, execution_target, out_channels, input_height, input_width, "backward", &fwd_batch);
+    const size_t b_sz = b;
+    Tensor grad_in = _output_gradient;
+    if (grad_in.getShape().getRank() == 4)
     {
-        grad.reshape(Shape{grad.getShape()[0], grad.getTotalElements() / grad.getShape()[0]});
+        if (out_channels > 1)
+        {
+            grad_in.permute({0, 2, 3, 1}).contiguous(grad_nhwc_scratch);
+            grad_in = grad_nhwc_scratch.view(Shape{b, static_cast<size_t>(input_height) * input_width * out_channels});
+        }
+        else
+        {
+            grad_in = grad_in.view(Shape{b, static_cast<size_t>(input_height) * input_width});
+        }
     }
 
-    uint32_t b = static_cast<uint32_t>(grad.getRows());
+    Data_Type sig_dtype = final_sigmoid->getOutput().getDataType();
+    if (grad_in.getDataType() != sig_dtype)
+    {
+        grad_in.to(sig_dtype, sig_grad_cast_scratch);
+        grad_in = sig_grad_cast_scratch;
+    }
+
+    Tensor grad = final_sigmoid->backward(grad_in);
+    if (grad.getShape().getRank() != 2)
+    {
+        grad = grad.view(Shape{b, grad.getTotalElements() / b});
+    }
+
     uint32_t c1 = base_channels;
     uint32_t c2 = base_channels * 2;
     uint32_t c3 = base_channels * 4;
     uint32_t c4 = base_channels * 8;
 
-    uint32_t h1 = input_height;
-    uint32_t w1 = input_width;
-    uint32_t h2 = input_height / 2;
-    uint32_t w2 = input_width / 2;
-    uint32_t h3 = input_height / 4;
-    uint32_t w3 = input_width / 4;
+    const size_t h1_sz = input_height;
+    const size_t w1_sz = input_width;
+    const size_t h2_sz = input_height / 2;
+    const size_t w2_sz = input_width / 2;
+    const size_t h3_sz = input_height / 4;
+    const size_t w3_sz = input_width / 4;
 
     grad = final_conv->backward(grad);
 
-    // Backward Decoder 1
     for (auto it = dec1_layers.rbegin(); it != dec1_layers.rend(); ++it)
     {
         grad = (*it)->backward(grad);
     }
-    // Tách gradient dec1_concat theo kênh per-pixel: nửa trái up1 (c2), nửa phải skip1 (c1)
-    grad.reshape(Shape{b * h1 * w1, c2 + c1});
-    auto [d_up1, d_skip1] = grad.splitColumns(c2);
-    d_up1.reshape(Shape{b, h1 * w1 * c2});
-    d_skip1.reshape(Shape{b, h1 * w1 * c1});
+    grad.view(Shape{b_sz * h1_sz * w1_sz, static_cast<size_t>(c2) + c1}).splitColumns(c2, d_up1_scratch, d_skip1_scratch);
+    Tensor d_up1 = d_up1_scratch.view(Shape{b_sz, h1_sz * w1_sz * c2});
+    Tensor d_skip1 = d_skip1_scratch.view(Shape{b_sz, h1_sz * w1_sz * c1});
     grad = up1->backward(d_up1);
 
-    // Backward Decoder 2
     for (auto it = dec2_layers.rbegin(); it != dec2_layers.rend(); ++it)
     {
         grad = (*it)->backward(grad);
     }
-    // Tách gradient dec2_concat theo kênh per-pixel: nửa trái up2 (c3), nửa phải skip2 (c2)
-    grad.reshape(Shape{b * h2 * w2, c3 + c2});
-    auto [d_up2, d_skip2] = grad.splitColumns(c3);
-    d_up2.reshape(Shape{b, h2 * w2 * c3});
-    d_skip2.reshape(Shape{b, h2 * w2 * c2});
+    grad.view(Shape{b_sz * h2_sz * w2_sz, static_cast<size_t>(c3) + c2}).splitColumns(c3, d_up2_scratch, d_skip2_scratch);
+    Tensor d_up2 = d_up2_scratch.view(Shape{b_sz, h2_sz * w2_sz * c3});
+    Tensor d_skip2 = d_skip2_scratch.view(Shape{b_sz, h2_sz * w2_sz * c2});
     grad = up2->backward(d_up2);
 
-    // Backward Decoder 3
     for (auto it = dec3_layers.rbegin(); it != dec3_layers.rend(); ++it)
     {
         grad = (*it)->backward(grad);
     }
-    // Tách gradient dec3_concat theo kênh per-pixel: nửa trái up3 (c4), nửa phải skip3 (c3)
-    grad.reshape(Shape{b * h3 * w3, c4 + c3});
-    auto [d_up3, d_skip3] = grad.splitColumns(c4);
-    d_up3.reshape(Shape{b, h3 * w3 * c4});
-    d_skip3.reshape(Shape{b, h3 * w3 * c3});
+    grad.view(Shape{b_sz * h3_sz * w3_sz, static_cast<size_t>(c4) + c3}).splitColumns(c4, d_up3_scratch, d_skip3_scratch);
+    Tensor d_up3 = d_up3_scratch.view(Shape{b_sz, h3_sz * w3_sz * c4});
+    Tensor d_skip3 = d_skip3_scratch.view(Shape{b_sz, h3_sz * w3_sz * c3});
     grad = up3->backward(d_up3);
 
-    // Backward Bottleneck
     for (auto it = bottleneck_layers.rbegin(); it != bottleneck_layers.rend(); ++it)
     {
         grad = (*it)->backward(grad);
     }
 
-    // Backward Pool 3 + cộng skip 3
     grad = pool3->backward(grad);
     if (d_skip3.getDataType() != grad.getDataType())
     {
-        d_skip3 = d_skip3.to(grad.getDataType());
+        d_skip3.to(grad.getDataType(), d_skip3_cast_scratch);
+        d_skip3 = d_skip3_cast_scratch;
     }
-    Tensor temp_grad3(grad.getShape(), grad.getDataType(), grad.getExecutionTarget());
-    grad.add(d_skip3, temp_grad3);
-    grad = temp_grad3;
+    grad.add(d_skip3, enc3_grad_sum);
+    grad = enc3_grad_sum;
     for (auto it = enc3_layers.rbegin(); it != enc3_layers.rend(); ++it)
     {
         grad = (*it)->backward(grad);
     }
 
-    // Backward Pool 2 + cộng skip 2
     grad = pool2->backward(grad);
     if (d_skip2.getDataType() != grad.getDataType())
     {
-        d_skip2 = d_skip2.to(grad.getDataType());
+        d_skip2.to(grad.getDataType(), d_skip2_cast_scratch);
+        d_skip2 = d_skip2_cast_scratch;
     }
-    Tensor temp_grad2(grad.getShape(), grad.getDataType(), grad.getExecutionTarget());
-    grad.add(d_skip2, temp_grad2);
-    grad = temp_grad2;
+    grad.add(d_skip2, enc2_grad_sum);
+    grad = enc2_grad_sum;
     for (auto it = enc2_layers.rbegin(); it != enc2_layers.rend(); ++it)
     {
         grad = (*it)->backward(grad);
     }
 
-    // Backward Pool 1 + cộng skip 1
     grad = pool1->backward(grad);
     if (d_skip1.getDataType() != grad.getDataType())
     {
-        d_skip1 = d_skip1.to(grad.getDataType());
+        d_skip1.to(grad.getDataType(), d_skip1_cast_scratch);
+        d_skip1 = d_skip1_cast_scratch;
     }
-    Tensor temp_grad1(grad.getShape(), grad.getDataType(), grad.getExecutionTarget());
-    grad.add(d_skip1, temp_grad1);
-    grad = temp_grad1;
+    grad.add(d_skip1, enc1_grad_sum);
+    grad = enc1_grad_sum;
     for (auto it = enc1_layers.rbegin(); it != enc1_layers.rend(); ++it)
     {
         grad = (*it)->backward(grad);
@@ -357,10 +597,21 @@ Tensor U_Net_Layer::backward(const Tensor &_output_gradient)
 
     if (input_tensor.getShape().getRank() == 4)
     {
-        grad.reshape(input_tensor.getShape());
+        if (in_channels > 1)
+        {
+            grad.view(Shape{b, input_height, input_width, in_channels}).permute({0, 3, 1, 2}).contiguous(in_grad_nchw_scratch);
+            input_gradient_tensor = in_grad_nchw_scratch;
+        }
+        else
+        {
+            input_gradient_tensor = grad.view(input_tensor.getShape());
+        }
+    }
+    else
+    {
+        input_gradient_tensor = grad;
     }
 
-    input_gradient_tensor = grad;
     return input_gradient_tensor;
 }
 
@@ -399,7 +650,7 @@ void U_Net_Layer::resetGradient()
 
 void U_Net_Layer::resetGradients()
 {
-    resetGradient();
+    is_forward_completed = false;
     auto reset_vec = [](auto &vec) {
         for (auto &l : vec) l->resetGradients();
     };
@@ -450,6 +701,30 @@ std::vector<std::pair<Tensor *, Tensor *>> U_Net_Layer::getParametersAndGradient
     return total_params;
 }
 
+std::vector<const Tensor *> U_Net_Layer::getNoDecayParameters() const
+{
+    std::vector<const Tensor *> no_decay;
+    auto append_nd = [&](const auto &layer_ptr) {
+        if (layer_ptr)
+        {
+            auto p = layer_ptr->getNoDecayParameters();
+            no_decay.insert(no_decay.end(), p.begin(), p.end());
+        }
+    };
+    auto append_vec = [&](const auto &vec) {
+        for (const auto &l : vec) append_nd(l);
+    };
+    append_vec(enc1_layers);
+    append_vec(enc2_layers);
+    append_vec(enc3_layers);
+    append_vec(bottleneck_layers);
+    append_vec(dec3_layers);
+    append_vec(dec2_layers);
+    append_vec(dec1_layers);
+    append_nd(final_conv);
+    return no_decay;
+}
+
 void U_Net_Layer::saveConfiguration(std::ofstream &_out) const
 {
     _out.write(reinterpret_cast<const char *>(&input_height), sizeof(input_height));
@@ -484,11 +759,28 @@ void U_Net_Layer::saveInference(std::ofstream &_out) const
 
 void U_Net_Layer::loadInference(std::ifstream &_in)
 {
-    _in.read(reinterpret_cast<char *>(&input_height), sizeof(input_height));
-    _in.read(reinterpret_cast<char *>(&input_width), sizeof(input_width));
-    _in.read(reinterpret_cast<char *>(&in_channels), sizeof(in_channels));
-    _in.read(reinterpret_cast<char *>(&out_channels), sizeof(out_channels));
-    _in.read(reinterpret_cast<char *>(&base_channels), sizeof(base_channels));
+    uint32_t h = 0, w = 0, ic = 0, oc = 0, bc = 0;
+    _in.read(reinterpret_cast<char *>(&h), sizeof(h));
+    _in.read(reinterpret_cast<char *>(&w), sizeof(w));
+    _in.read(reinterpret_cast<char *>(&ic), sizeof(ic));
+    _in.read(reinterpret_cast<char *>(&oc), sizeof(oc));
+    _in.read(reinterpret_cast<char *>(&bc), sizeof(bc));
+    if (!_in.good() || ic == 0 || oc == 0 || bc == 0 || bc > (std::numeric_limits<uint32_t>::max() / 8) || h < 8 || w < 8 || (h % 8) != 0 || (w % 8) != 0)
+    {
+        throw std::runtime_error("U_Net_Layer::loadInference: Invalid or corrupted U-Net configuration header");
+    }
+    if (h != input_height || w != input_width || ic != in_channels || oc != out_channels || bc != base_channels)
+    {
+        input_height = h;
+        input_width = w;
+        in_channels = ic;
+        out_channels = oc;
+        base_channels = bc;
+        buildNetwork();
+        setMixedPrecision(is_mixed_precision_enabled);
+        setTrainingMode(is_training);
+        setAccumulated(is_accumulated);
+    }
 
     auto load_vec = [&](auto &vec) {
         for (auto &l : vec) l->loadInference(_in);
@@ -508,6 +800,9 @@ void U_Net_Layer::loadInference(std::ifstream &_in)
     load_vec(dec1_layers);
     final_conv->loadInference(_in);
     final_sigmoid->loadInference(_in);
+    if (final_conv) data_type = final_conv->getDataType();
+    resetGradient();
+    invalidateWeightCache();
 }
 
 void U_Net_Layer::saveCheckpoint(std::ofstream &_out) const
@@ -535,11 +830,28 @@ void U_Net_Layer::saveCheckpoint(std::ofstream &_out) const
 
 void U_Net_Layer::loadCheckpoint(std::ifstream &_in)
 {
-    _in.read(reinterpret_cast<char *>(&input_height), sizeof(input_height));
-    _in.read(reinterpret_cast<char *>(&input_width), sizeof(input_width));
-    _in.read(reinterpret_cast<char *>(&in_channels), sizeof(in_channels));
-    _in.read(reinterpret_cast<char *>(&out_channels), sizeof(out_channels));
-    _in.read(reinterpret_cast<char *>(&base_channels), sizeof(base_channels));
+    uint32_t h = 0, w = 0, ic = 0, oc = 0, bc = 0;
+    _in.read(reinterpret_cast<char *>(&h), sizeof(h));
+    _in.read(reinterpret_cast<char *>(&w), sizeof(w));
+    _in.read(reinterpret_cast<char *>(&ic), sizeof(ic));
+    _in.read(reinterpret_cast<char *>(&oc), sizeof(oc));
+    _in.read(reinterpret_cast<char *>(&bc), sizeof(bc));
+    if (!_in.good() || ic == 0 || oc == 0 || bc == 0 || bc > (std::numeric_limits<uint32_t>::max() / 8) || h < 8 || w < 8 || (h % 8) != 0 || (w % 8) != 0)
+    {
+        throw std::runtime_error("U_Net_Layer::loadCheckpoint: Invalid or corrupted U-Net configuration header");
+    }
+    if (h != input_height || w != input_width || ic != in_channels || oc != out_channels || bc != base_channels)
+    {
+        input_height = h;
+        input_width = w;
+        in_channels = ic;
+        out_channels = oc;
+        base_channels = bc;
+        buildNetwork();
+        setMixedPrecision(is_mixed_precision_enabled);
+        setTrainingMode(is_training);
+        setAccumulated(is_accumulated);
+    }
 
     auto load_vec = [&](auto &vec) {
         for (auto &l : vec) l->loadCheckpoint(_in);
@@ -559,12 +871,20 @@ void U_Net_Layer::loadCheckpoint(std::ifstream &_in)
     load_vec(dec1_layers);
     final_conv->loadCheckpoint(_in);
     final_sigmoid->loadCheckpoint(_in);
+    if (final_conv) data_type = final_conv->getDataType();
+    resetGradient();
+    invalidateWeightCache();
 }
 
 void U_Net_Layer::setExecutionTarget(Execution_Target _new_execution_target)
 {
+    if (execution_target == _new_execution_target)
+    {
+        return;
+    }
+    logChangeExecutionTarget(_new_execution_target);
     execution_target = _new_execution_target;
-    auto set_t = [&](auto &l) { l->setExecutionTarget(_new_execution_target); };
+    auto set_t = [&](auto &l) { if (l) l->setExecutionTarget(_new_execution_target); };
     auto set_vec = [&](auto &v) { for (auto &l : v) set_t(l); };
 
     set_vec(enc1_layers);
@@ -586,11 +906,41 @@ void U_Net_Layer::setExecutionTarget(Execution_Target _new_execution_target)
     input_tensor.setExecutionTarget(_new_execution_target);
     output_tensor.setExecutionTarget(_new_execution_target);
     input_gradient_tensor.setExecutionTarget(_new_execution_target);
+    skip1_act.setExecutionTarget(_new_execution_target);
+    skip2_act.setExecutionTarget(_new_execution_target);
+    skip3_act.setExecutionTarget(_new_execution_target);
+    dec3_concat.setExecutionTarget(_new_execution_target);
+    dec2_concat.setExecutionTarget(_new_execution_target);
+    dec1_concat.setExecutionTarget(_new_execution_target);
+    in_nhwc_scratch = Tensor(0, 0, _new_execution_target);
+    out_nchw_scratch = Tensor(0, 0, _new_execution_target);
+    grad_nhwc_scratch = Tensor(0, 0, _new_execution_target);
+    in_grad_nchw_scratch = Tensor(0, 0, _new_execution_target);
+    up3_cast_scratch = Tensor(0, 0, _new_execution_target);
+    up2_cast_scratch = Tensor(0, 0, _new_execution_target);
+    up1_cast_scratch = Tensor(0, 0, _new_execution_target);
+    dec3_concat_2d_scratch = Tensor(0, 0, _new_execution_target);
+    dec2_concat_2d_scratch = Tensor(0, 0, _new_execution_target);
+    dec1_concat_2d_scratch = Tensor(0, 0, _new_execution_target);
+    sig_grad_cast_scratch = Tensor(0, 0, _new_execution_target);
+    d_up1_scratch = Tensor(0, 0, _new_execution_target);
+    d_skip1_scratch = Tensor(0, 0, _new_execution_target);
+    d_skip1_cast_scratch = Tensor(0, 0, _new_execution_target);
+    enc1_grad_sum = Tensor(0, 0, _new_execution_target);
+    d_up2_scratch = Tensor(0, 0, _new_execution_target);
+    d_skip2_scratch = Tensor(0, 0, _new_execution_target);
+    d_skip2_cast_scratch = Tensor(0, 0, _new_execution_target);
+    enc2_grad_sum = Tensor(0, 0, _new_execution_target);
+    d_up3_scratch = Tensor(0, 0, _new_execution_target);
+    d_skip3_scratch = Tensor(0, 0, _new_execution_target);
+    d_skip3_cast_scratch = Tensor(0, 0, _new_execution_target);
+    enc3_grad_sum = Tensor(0, 0, _new_execution_target);
+    invalidateWeightCache();
 }
 
 void U_Net_Layer::setAccumulated(bool _is_accumulated) noexcept
 {
-    is_accumulated = _is_accumulated;
+    ILayer::setAccumulated(_is_accumulated);
     auto set_acc = [&](auto &v) { for (auto &l : v) l->setAccumulated(_is_accumulated); };
     set_acc(enc1_layers);
     pool1->setAccumulated(_is_accumulated);
@@ -612,6 +962,7 @@ void U_Net_Layer::setAccumulated(bool _is_accumulated) noexcept
 void U_Net_Layer::setTrainingMode(bool _training)
 {
     is_training = _training;
+    ILayer::setTrainingMode(_training);
     auto set_tm = [&](auto &v) { for (auto &l : v) l->setTrainingMode(_training); };
     set_tm(enc1_layers);
     pool1->setTrainingMode(_training);
@@ -632,6 +983,7 @@ void U_Net_Layer::setTrainingMode(bool _training)
 
 void U_Net_Layer::setMixedPrecision(bool _enable) noexcept
 {
+    ILayer::setMixedPrecision(_enable);
     auto set_mp = [&](auto &v) { for (auto &l : v) l->setMixedPrecision(_enable); };
     set_mp(enc1_layers);
     pool1->setMixedPrecision(_enable);
@@ -672,6 +1024,61 @@ void U_Net_Layer::invalidateWeightCache() noexcept
 
 void U_Net_Layer::inspectAllBatchNorms() const
 {
+    auto summarize = [](const std::vector<float> &vals, bool check_neg) {
+        size_t finite_cnt = 0;
+        size_t non_finite_cnt = 0;
+        size_t neg_cnt = 0;
+        float mn = 0.0f;
+        float mx = 0.0f;
+        double sum = 0.0;
+        for (float v : vals)
+        {
+            if (!std::isfinite(v))
+            {
+                ++non_finite_cnt;
+                continue;
+            }
+            if (check_neg && v < 0.0f)
+            {
+                ++neg_cnt;
+            }
+            if (finite_cnt == 0)
+            {
+                mn = mx = v;
+            }
+            else
+            {
+                mn = std::min(mn, v);
+                mx = std::max(mx, v);
+            }
+            sum += static_cast<double>(v);
+            ++finite_cnt;
+        }
+        double avg = (finite_cnt > 0) ? (sum / static_cast<double>(finite_cnt)) : 0.0;
+        return std::tuple<size_t, size_t, size_t, float, float, double>{
+            finite_cnt, non_finite_cnt, neg_cnt, mn, mx, avg
+        };
+    };
+
+    auto fmt_stat = [](const char *label, const std::vector<float> &vals,
+                       const std::tuple<size_t, size_t, size_t, float, float, double> &s) -> std::string {
+        auto [fin, nonfin, neg, mn, mx, avg] = s;
+        if (vals.empty())
+        {
+            return std::format("{}[empty]", label);
+        }
+        if (fin == 0)
+        {
+            return std::format("{}[none finite (nonfinite={})]", label, nonfin);
+        }
+        if (neg > 0)
+        {
+            return std::format("{}[{:.4g}..{:.4g} avg={:.4g} neg={}]", label, mn, mx, avg, neg);
+        }
+        return std::format("{}[{:.4g}..{:.4g} avg={:.4g}]", label, mn, mx, avg);
+    };
+
+    std::ostringstream report;
     auto check_list = [&](const std::string &prefix, const auto &vec)
     {
         for (size_t i = 0; i < vec.size(); ++i)
@@ -681,41 +1088,42 @@ void U_Net_Layer::inspectAllBatchNorms() const
             {
                 auto rm = bn->getRunningMean().getData();
                 auto rv = bn->getRunningVariance().getData();
-                int rm_nans = 0, rv_nans = 0;
-                for (float v : rm) if (std::isnan(v)) rm_nans++;
-                for (float v : rv) if (std::isnan(v)) rv_nans++;
-                float rm_min = 1e9f, rm_max = -1e9f, rm_sum = 0.0f;
-                float rv_min = 1e9f, rv_max = -1e9f, rv_sum = 0.0f;
-                for (float v : rm) { if (!std::isnan(v)) { rm_min = std::min(rm_min, v); rm_max = std::max(rm_max, v); rm_sum += v; } }
-                for (float v : rv) { if (!std::isnan(v)) { rv_min = std::min(rv_min, v); rv_max = std::max(rv_max, v); rv_sum += v; } }
+                auto rm_s = summarize(rm, false);
+                auto rv_s = summarize(rv, true);
                 auto bm = bn->getBatchMean().getData();
                 auto bv = bn->getBatchVariance().getData();
-                float bm_min = 1e9f, bm_max = -1e9f, bm_sum = 0.0f;
-                float bv_min = 1e9f, bv_max = -1e9f, bv_sum = 0.0f;
-                for (float v : bm) { if (!std::isnan(v)) { bm_min = std::min(bm_min, v); bm_max = std::max(bm_max, v); bm_sum += v; } }
-                for (float v : bv) { if (!std::isnan(v)) { bv_min = std::min(bv_min, v); bv_max = std::max(bv_max, v); bv_sum += v; } }
-                std::cout << prefix << "[" << i << "] (C=" << rm.size() << "): "
-                          << "RM[" << rm_min << ".." << rm_max << " avg=" << rm_sum / rm.size() << "], "
-                          << "RV[" << rv_min << ".." << rv_max << " avg=" << rv_sum / rv.size() << "]"
-                          << (bm.empty() ? "" : std::format(" | BM[{:.2f}..{:.2f} avg={:.2f}], BV[{:.2f}..{:.2f} avg={:.2f}]", bm_min, bm_max, bm_sum / bm.size(), bv_min, bv_max, bv_sum / bv.size()));
-                if (rm_nans > 0 || rv_nans > 0)
+                report << prefix << "[" << i << "] (C=" << rm.size() << "): "
+                       << fmt_stat("RM", rm, rm_s) << ", "
+                       << fmt_stat("RV", rv, rv_s);
+                if (!bm.empty())
                 {
-                    std::cout << " (NaNs: RM=" << rm_nans << ", RV=" << rv_nans << ")";
+                    report << " | " << fmt_stat("BM", bm, summarize(bm, false));
                 }
-                std::cout << std::endl;
+                if (!bv.empty())
+                {
+                    report << (bm.empty() ? " | " : ", ") << fmt_stat("BV", bv, summarize(bv, true));
+                }
+                const size_t rm_nonfin = std::get<1>(rm_s);
+                const size_t rv_nonfin = std::get<1>(rv_s);
+                const size_t rv_neg = std::get<2>(rv_s);
+                if (rm_nonfin > 0 || rv_nonfin > 0 || rv_neg > 0)
+                {
+                    report << " (NonFinite: RM=" << rm_nonfin << ", RV=" << rv_nonfin << ", RV<0=" << rv_neg << ")";
+                }
+                report << "\n";
             }
             auto *conv = dynamic_cast<Conv2d_Layer*>(vec[i].get());
             if (conv)
             {
                 auto w = conv->getWeights().getData();
                 auto b = conv->getBiases().getData();
-                int w_nans = 0, b_nans = 0;
-                for (float v : w) if (std::isnan(v)) w_nans++;
-                for (float v : b) if (std::isnan(v)) b_nans++;
-                if (w_nans > 0 || b_nans > 0)
+                size_t w_bad = 0, b_bad = 0;
+                for (float v : w) if (!std::isfinite(v)) ++w_bad;
+                for (float v : b) if (!std::isfinite(v)) ++b_bad;
+                if (w_bad > 0 || b_bad > 0)
                 {
-                    std::cout << prefix << "[" << i << "] CONV2D NaNs! W: " << w_nans << "/" << w.size()
-                              << ", B: " << b_nans << "/" << b.size() << std::endl;
+                    report << prefix << "[" << i << "] CONV2D NonFinite! W: " << w_bad << "/" << w.size()
+                           << ", B: " << b_bad << "/" << b.size() << "\n";
                 }
             }
         }
@@ -733,10 +1141,20 @@ void U_Net_Layer::inspectAllBatchNorms() const
     {
         auto b = final_conv->getBiases().getData();
         auto w = final_conv->getWeights().getData();
-        float w_mean = 0.0f;
-        for (float v : w) w_mean += v;
-        if (!w.empty()) w_mean /= w.size();
-        std::cout << "final_conv: bias=" << (b.empty() ? 0.0f : b[0]) << ", w_mean=" << w_mean << std::endl;
+        auto w_s = summarize(w, false);
+        const size_t w_fin = std::get<0>(w_s);
+        const size_t w_bad = std::get<1>(w_s);
+        const double w_mean = std::get<5>(w_s);
+        report << "final_conv: bias=" << (b.empty() ? 0.0f : b[0])
+               << ", w_mean=" << (w_fin > 0 ? std::format("{:.6g}", w_mean) : std::string("none"))
+               << (w_bad > 0 ? std::format(" (nonfinite={})", w_bad) : std::string(""))
+               << "\n";
+    }
+
+    const std::string out = report.str();
+    if (!out.empty())
+    {
+        Logger::info(out, Log_Feature::LAYER_INSPECTION);
     }
 }
 
@@ -776,8 +1194,8 @@ bool U_Net_Layer::hasNanInRunningStats() const
             {
                 auto rm = bn->getRunningMean().getData();
                 auto rv = bn->getRunningVariance().getData();
-                for (float v : rm) if (std::isnan(v)) return true;
-                for (float v : rv) if (std::isnan(v)) return true;
+                for (float v : rm) if (!std::isfinite(v)) return true;
+                for (float v : rv) if (!std::isfinite(v) || v < 0.0f) return true;
             }
         }
         return false;

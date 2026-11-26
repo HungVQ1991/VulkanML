@@ -11,7 +11,6 @@
 #include <utility>
 #include <vector>
 
-#include "engine/execution_engine.h"
 #include "helper/logger.h"
 #include "helper/magic_enum.hpp"
 #include "layer/ilayer.h"
@@ -30,22 +29,29 @@ private:
     Tensor input_tensor;
     Tensor output_tensor;
     Tensor input_gradient_tensor;
+    Tensor input_tensor_fp16;
+    Tensor output_gradient_fp16;
+    Tensor input_gradient_tensor_fp16;
 
     bool is_forward_completed = false;
     Execution_Target execution_target = Execution_Target::CPU;
     bool cache_is_3d = false;
-    Shape cache_orig_shape;    void initializeParameters();
-
+    Shape cache_orig_shape;
+    void initializeParameters();
 
 public:
-    using ILayer::forward;    explicit RMSNorm_Layer(size_t _dimension,
+    using ILayer::forward;
+    explicit RMSNorm_Layer(size_t _dimension,
                            float _epsilon = 1e-5f,
                            Execution_Target _execution_target = Execution_Target::CPU,
                            Data_Type _data_type = Data_Type::FLOAT32);
 
-
-    ~RMSNorm_Layer() noexcept override = default;    Tensor forward(const Tensor &_input_tensor) override;
+    ~RMSNorm_Layer() noexcept override = default;
+    Tensor forward(const Tensor &_input_tensor) override;
     Tensor backward(const Tensor &_output_gradient) override;
+    Tensor forwardResidualAdd(const Tensor &_residual, const Tensor &_branch, float _scale, Tensor &_out_residual);
+    void backwardResidualAdd(const Tensor &_output_gradient, const Tensor &_residual_grad,
+                             Tensor &_out_sum, Tensor *_out_scaled = nullptr, float _scale = 1.0f);
     std::unique_ptr<ILayer> clone() const override;
     void resetGradient() override;
     void resetGradients() override;
@@ -55,22 +61,25 @@ public:
     void saveCheckpoint(std::ofstream &_output_file_stream) const override;
     void loadCheckpoint(std::ifstream &_input_file_stream) override;
 
-
     bool hasParameters() const noexcept override { return true; }
     std::vector<std::pair<Tensor *, Tensor *>> getParametersAndGradients() override;
-    std::vector<const Tensor *> getNoDecayParameters() const override { return { &gamma }; }
+    std::vector<const Tensor *> getNoDecayParameters() const override { return is_trainable ? std::vector<const Tensor *>{ &gamma } : std::vector<const Tensor *>{}; }
 
     const Tensor &getWeights() const override { return gamma; }
     const Tensor &getWeightsGradient() const override { return gamma_gradient_tensor; }
     const Tensor &getInput() const override { return input_tensor; }
     const Tensor &getOutput() const override { return output_tensor; }
     const Tensor &getGamma() const noexcept { return gamma; }
-    const Tensor &getGammaGradient() const noexcept { return gamma_gradient_tensor; }    size_t getDimension() const noexcept;
+    const Tensor &getGammaGradient() const noexcept { return gamma_gradient_tensor; }
+    size_t getDimension() const noexcept;
 
     float getEpsilon() const noexcept { return epsilon; }
+    void setEpsilon(float _epsilon);
     Execution_Target getExecutionTarget() const override { return execution_target; }
-    Layer_Type getLayerType() const noexcept override { return Layer_Type::RMSNORM; }    void setExecutionTarget(Execution_Target _new_target) override;
+    Layer_Type getLayerType() const noexcept override { return Layer_Type::RMSNORM; }
+    void setExecutionTarget(Execution_Target _new_target) override;
     void setMixedPrecision(bool _enable) noexcept override;
     void invalidateWeightCache() noexcept override;
+    void copyStateTo(RMSNorm_Layer &_dst) const;
 
-};;
+};

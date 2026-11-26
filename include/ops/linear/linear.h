@@ -13,4 +13,4 @@ void linearBackwardInput(const Tensor &output_gradient, const Tensor &weights, T
 void linearBackwardWeightBias(const Tensor &input, const Tensor &output_gradient,
                              Tensor &weight_gradient, Tensor &bias_gradient, bool accumulate = false);
 
-} // namespace ops::linear
+}

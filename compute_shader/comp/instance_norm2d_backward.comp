@@ -1,12 +1,24 @@
 #version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#endif
 
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
+#ifdef USE_FP16
+layout(std430, binding = 0) readonly buffer GradOutput { float16_t dY[]; };
+#else
 layout(std430, binding = 0) readonly buffer GradOutput { float dY[]; };
+#endif
 layout(std430, binding = 1) readonly buffer NormX { float normalized_input[]; };
 layout(std430, binding = 2) readonly buffer Gamma { float gamma[]; };
 layout(std430, binding = 3) readonly buffer SavedInvStd { float saved_inv_std[]; };
+#ifdef USE_FP16
+layout(std430, binding = 4) writeonly buffer GradInput { float16_t dX[]; };
+#else
 layout(std430, binding = 4) writeonly buffer GradInput { float dX[]; };
+#endif
 layout(std430, binding = 5) buffer GradGamma { uint dgamma_raw[]; };
 layout(std430, binding = 6) buffer GradBeta { uint dbeta_raw[]; };
 
@@ -72,12 +84,22 @@ void main() {
     float loc_s2 = 0.0;
     for (uint m = tid; m < M; m += 256) {
         uint idx = batch_offset + m * C + c;
+#ifdef USE_FP16
+        float dy = float(dY[idx]);
+#else
         float dy = dY[idx];
+#endif
         if (isnan(dy) || isinf(dy)) dy = 0.0;
+#ifdef USE_FP16
+        dy = clamp(dy, -65504.0, 65504.0);
+#endif
         float x_hat = normalized_input[idx];
         if (isnan(x_hat) || isinf(x_hat)) x_hat = 0.0;
         float prod = dy * x_hat;
         if (isnan(prod) || isinf(prod)) prod = 0.0;
+#ifdef USE_FP16
+        prod = clamp(prod, -65504.0, 65504.0);
+#endif
         loc_s1 += dy;
         loc_s2 += prod;
     }
@@ -114,12 +136,21 @@ void main() {
 
     for (uint m = tid; m < M; m += 256) {
         uint idx = batch_offset + m * C + c;
+#ifdef USE_FP16
+        float dy = float(dY[idx]);
+#else
         float dy = dY[idx];
+#endif
         if (isnan(dy) || isinf(dy)) dy = 0.0;
         float x_hat = normalized_input[idx];
         if (isnan(x_hat) || isinf(x_hat)) x_hat = 0.0;
         float dx = g_inv_std * (dy - s1_over_m - x_hat * s2_over_m);
         if (isnan(dx) || isinf(dx)) dx = 0.0;
+#ifdef USE_FP16
+        dx = clamp(dx, -65504.0, 65504.0);
+        dX[idx] = float16_t(dx);
+#else
         dX[idx] = dx;
+#endif
     }
 }

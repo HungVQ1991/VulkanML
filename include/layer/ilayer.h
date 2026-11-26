@@ -1,58 +1,58 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <concepts>
 #include <cstddef>
+#include <cstdint>
 #include <format>
 #include <fstream>
 #include <memory>
 #include <sstream>
+#include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
 #include <functional>
 #include <random>
 
-#include "engine/execution_engine.h"
-#include "engine/gpu_vector.h"
 #include "helper/logger.h"
 #include "helper/magic_enum.hpp"
 #include "math/tensor.h"
 
-template<typename T>
-std::string getEnumString(T str)
+enum class Layer_Type : uint32_t
 {
-    return static_cast<std::string>(magic_enum::enum_name<T>(str));
-}
-
-enum class Layer_Type
-{
-    LINEAR,
-    CONV2D,
-    BATCH_NORM,
-    BATCH_NORM_2D,
-    MAX_POOL_2D,
-    GLOBAL_AVG_POOL_2D,
-    RELU,
-    GELU,
-    SOFTMAX,
-    RES_NET_BLOCK_2D,
-    RES_NET_20,
-    PPO_ACTOR_CRITIC,
-    RMSNORM,
-    SWIGLU,
-    EMBEDDING,
-    TRANSFORMER_BLOCK, SIGMOID, DROPOUT,
-    UP_SAMPLE_2D,
-    U_NET,
-    INSTANCE_NORM_2D,
-    LEAKY_RELU,
-    NN_UNET,
-    MULTI_SCALE_RESNET_18,
-    AVG_POOL_2D,
-    TERNARY_LINEAR,
-    LAYER_TYPE_END
+    LINEAR = 0,
+    CONV2D = 1,
+    BATCH_NORM = 2,
+    BATCH_NORM_2D = 3,
+    MAX_POOL_2D = 4,
+    GLOBAL_AVG_POOL_2D = 5,
+    RELU = 6,
+    GELU = 7,
+    SOFTMAX = 8,
+    RES_NET_BLOCK_2D = 9,
+    RES_NET_20 = 10,
+    PPO_ACTOR_CRITIC = 11,
+    RMSNORM = 12,
+    SWIGLU = 13,
+    EMBEDDING = 14,
+    TRANSFORMER_BLOCK = 15,
+    SIGMOID = 16,
+    DROPOUT = 17,
+    UP_SAMPLE_2D = 18,
+    U_NET = 19,
+    INSTANCE_NORM_2D = 20,
+    LEAKY_RELU = 21,
+    NN_UNET = 22,
+    MULTI_SCALE_RESNET_18 = 23,
+    AVG_POOL_2D = 24,
+    TERNARY_LINEAR = 25,
+    LORA_LINEAR = 26,
+    LAYER_TYPE_END = 27
 };
 
 enum class Hook_Type
@@ -65,130 +65,106 @@ enum class Hook_Type
 class ILayer
 {
 private:
-    static const Tensor &emptyTensor()
-    {
-        static const Tensor empty_tensor(0, 0);
-        return empty_tensor;
-    }
+    static const Tensor &emptyTensor();
+    std::shared_ptr<bool> hook_lifetime_token = std::make_shared<bool>(true);
 
 protected:
     bool is_accumulated = false;
     bool is_mixed_precision_enabled = false;
+    bool is_trainable = true;
+
+    template<typename T>
+    static std::string getEnumString(T str)
+    {
+        return static_cast<std::string>(magic_enum::enum_name<T>(str));
+    }
+
+    void copyBaseStateTo(ILayer &_target) const noexcept
+    {
+        _target.setAccumulated(is_accumulated);
+        _target.setMixedPrecision(is_mixed_precision_enabled);
+        _target.setTrainable(is_trainable);
+    }
 
 public:
-    void logBufferAddress(Tensor *_target_tensor, const std::string &_tensor_name) const
-    {
-        return;
-        std::string layer_name = std::string(magic_enum::enum_name<Layer_Type>(getLayerType()));
-        if (!_target_tensor)
-        {
-            Logger::logMessage(Input_Format{"{}::logBufferAddress: Target tensor is null", layer_name},
-                               Log_Level::LOG_ERROR,
-                               true,
-                               0,
-                               Log_Feature::LAYER_INSPECTION);
-            return;
-        }
-
-        std::shared_ptr<gpu::vector> gpu_vector = nullptr;
-        auto storage_handle = _target_tensor->getStorage();
-        if (std::holds_alternative<std::shared_ptr<gpu::vector>>(storage_handle))
-        {
-            gpu_vector = std::get<std::shared_ptr<gpu::vector>>(storage_handle);
-        }
-
-        if (!gpu_vector || gpu_vector->isEmpty())
-        {
-            Logger::logMessage(Input_Format{"{}::logBufferAddress: GPU storage of target is empty or invalid", layer_name},
-                               Log_Level::LOG_ERROR,
-                               true,
-                               0,
-                               Log_Feature::LAYER_INSPECTION);
-            return;
-        }
-
-        Logger::logMessage(Input_Format{"{}::logBufferAddress: Buffer info at {}: Address: {:p}, Size: {}",
-                                       layer_name,
-                                       _tensor_name,
-                                       static_cast<const void *>(gpu_vector->getBuffer()),
-                                       gpu_vector->getSize()},
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::LAYER_INSPECTION);
-
-        const auto &host_data = _target_tensor->getData();
-        if (host_data.empty())
-        {
-            Logger::logMessage(Input_Format{"{}::logBufferAddress: {}: Data of target is empty", layer_name, _tensor_name},
-                               Log_Level::LOG_WARNING,
-                               true,
-                               0,
-                               Log_Feature::LAYER_INSPECTION);
-            return;
-        }
-
-        double sum_of_squares = 0.0;
-        for (float value : host_data)
-        {
-            sum_of_squares += static_cast<double>(value) * value;
-        }
-        float norm_value = static_cast<float>(std::sqrt(sum_of_squares));
-
-        size_t sample_size = std::min<size_t>(4, host_data.size());
-        std::string sample_string;
-        for (size_t i = 0; i < sample_size; ++i)
-        {
-            sample_string += std::format("{:.4e} ", host_data[i]);
-        }
-
-        Logger::logMessage(Input_Format{"{}::inspectGradient: {:<18}| Shape: {:>4}x{:<5} | ||G||: {:.6e} | Top: [{}]",
-                                       layer_name,
-                                       _tensor_name,
-                                       _target_tensor->getRows(),
-                                       _target_tensor->getColumns(),
-                                       norm_value,
-                                       sample_string},
-                           Log_Level::LOG_DEBUG,
-                           true,
-                           0,
-                           Log_Feature::LAYER_INSPECTION);
-    }
+    void logBufferAddress(const Tensor * , const std::string & ) const noexcept {}
 
     void logChangeExecutionTarget(Execution_Target new_target)
     {
-        Logger::logMessage(Input_Format{"ILayer::setExecutionTarget: Change target at layer {} from {} to {}", 
+        Logger::logMessage(Input_Format{"ILayer::setExecutionTarget: Change target at layer {} from {} to {}",
             getEnumString<Layer_Type>(getLayerType()),
-            getEnumString<Execution_Target>(getExecutionTarget()), 
+            getEnumString<Execution_Target>(getExecutionTarget()),
             getEnumString<Execution_Target>(new_target)},
             Log_Level::LOG_DEBUG, true, 0, Log_Feature::DEVICE_MANAGEMENT);
     }
 
+        ILayer() = default;
+    ILayer(const ILayer &other)
+        : hook_lifetime_token(std::make_shared<bool>(true)),
+          is_accumulated(other.is_accumulated),
+          is_mixed_precision_enabled(other.is_mixed_precision_enabled),
+          is_trainable(other.is_trainable)
+    {
+    }
+    ILayer &operator=(const ILayer &other)
+    {
+        if (this != &other)
+        {
+            is_accumulated = other.is_accumulated;
+            is_mixed_precision_enabled = other.is_mixed_precision_enabled;
+            is_trainable = other.is_trainable;
+        }
+        return *this;
+    }
+    ILayer(ILayer &&other)
+        : hook_lifetime_token(std::make_shared<bool>(true)),
+          is_accumulated(other.is_accumulated),
+          is_mixed_precision_enabled(other.is_mixed_precision_enabled),
+          is_trainable(other.is_trainable)
+    {
+    }
+    ILayer &operator=(ILayer &&other) noexcept
+    {
+        if (this != &other)
+        {
+            is_accumulated = other.is_accumulated;
+            is_mixed_precision_enabled = other.is_mixed_precision_enabled;
+            is_trainable = other.is_trainable;
+        }
+        return *this;
+    }
+
     virtual ~ILayer() noexcept = default;
 
-    virtual Tensor forward(const Tensor &_input_tensor) { return Tensor{}; }
+    virtual Tensor forward(const Tensor &_input_tensor) = 0;
     virtual Tensor backward(const Tensor &_output_gradient) = 0;
+    virtual Tensor backward(const Tensor &_output_gradient, bool _compute_input_gradient)
+    {
+        (void)_compute_input_gradient;
+        return backward(_output_gradient);
+    }
 
     virtual bool hasParameters() const { return false; }
     virtual bool supportsPopulationBatch() const { return false; }
+    virtual bool supportsStaticGraph() const noexcept { return true; }
     virtual void resetGradient() {}
+    virtual void resetForwardState() { resetGradient(); }
     virtual void resetGradients() { resetGradient(); }
 
-    virtual Tensor forward(const Tensor& _batched_input, const std::vector<Tensor>& _batched_params) const
+    virtual Tensor forward(const Tensor &, const std::vector<Tensor> &) const
     {
         throw std::logic_error(std::format("{} does not support population-batched forward",
             getEnumString<Layer_Type>(getLayerType())));
     }
 
-    virtual std::function<float(std::mt19937&)> getPopulationParameterInitializer(size_t param_index) const
+    virtual std::function<float(std::mt19937&)> getPopulationParameterInitializer(size_t) const
     {
-        return [](std::mt19937&) { return 0.0f; }; 
+        return [](std::mt19937&) { return 0.0f; };
     }
 
-    virtual std::unique_ptr<ILayer> clone() const = 0; 
+    virtual std::unique_ptr<ILayer> clone() const = 0;
 
     virtual void saveConfiguration(std::ofstream &_output_file_stream) const = 0;
-    virtual void saveConfig(std::ofstream &_output_file_stream) const { saveConfiguration(_output_file_stream); }
 
     virtual void saveInference(std::ofstream &_output_file_stream) const = 0;
     virtual void loadInference(std::ifstream &_input_file_stream) = 0;
@@ -201,23 +177,29 @@ public:
     virtual const Tensor &getInput() const { return emptyTensor(); }
     virtual const Tensor &getOutput() const { return emptyTensor(); }
     virtual std::vector<std::pair<Tensor *, Tensor *>> getParametersAndGradients() { return {}; }
-    virtual std::vector<std::pair<Tensor *, Tensor *>> getParamsAndGrads() { return getParametersAndGradients(); }
     virtual std::vector<const Tensor *> getNoDecayParameters() const { return {}; }
     virtual std::vector<Shape> getPopulationParameterDims() const { return {}; }
     virtual std::vector<bool> getPopulationParameterIsEvolvable() const { return std::vector<bool>(getPopulationParameterDims().size(), true); }
-    virtual std::vector<float> getPopulationParameter(size_t param_index) const { return {}; }
+    virtual std::vector<float> getPopulationParameter(size_t) const { return {}; }
     virtual Execution_Target getExecutionTarget() const = 0;
     virtual Layer_Type getLayerType() const = 0;
     virtual bool isAccumulated() const noexcept { return is_accumulated; }
 
-    virtual void setPopulationParameter(size_t param_index, std::vector<float> flat_data) {}
+    virtual void setPopulationParameter(size_t, std::vector<float>) {}
     virtual void setExecutionTarget(Execution_Target _execution_target) = 0;
-    virtual void setTarget(Execution_Target _execution_target) { setExecutionTarget(_execution_target); }
     virtual void setAccumulated(bool _is_accumulated) noexcept { is_accumulated = _is_accumulated; }
-    virtual void setTrainingMode(bool _is_training) {}
+    virtual void setTrainingMode(bool) {}
     virtual void setMixedPrecision(bool _enable) noexcept { is_mixed_precision_enabled = _enable; }
     virtual bool isMixedPrecisionEnabled() const noexcept { return is_mixed_precision_enabled; }
+    virtual void setTrainable(bool _trainable) noexcept { is_trainable = _trainable; }
+    virtual bool isTrainable() const noexcept { return is_trainable; }
     virtual void invalidateWeightCache() noexcept {}
+    virtual void prepareInference() {}
+    virtual void quantizeToTernary() {}
+    virtual void dequantizeFromTernary() {}
+    virtual bool isTernary() const noexcept { return false; }
+    virtual void snapshotNonTrainableState(std::vector<std::vector<float>> &) const {}
+    virtual void restoreNonTrainableState(const std::vector<std::vector<float>> &, size_t &) {}
 
 public:
 
@@ -234,7 +216,7 @@ private:
     std::vector<Hook_Entry> forward_hooks;
     std::vector<Hook_Entry> pre_backward_hooks;
     std::vector<Hook_Entry> post_backward_hooks;
-    inline static std::atomic<uint64_t> global_next_hook_id{1};
+    static uint64_t nextHookId() noexcept;
 
 public:
     bool hasForwardHooks() const noexcept { return !forward_hooks.empty(); }
@@ -243,8 +225,13 @@ public:
 
     Tensor applyForwardHooks(Tensor tensor) const
     {
-        for (const auto &entry : forward_hooks)
+        const auto hooks_snapshot = forward_hooks;
+        for (const auto &entry : hooks_snapshot)
         {
+            if (!entry.callback)
+            {
+                continue;
+            }
             Tensor result = entry.callback(tensor);
             if (!result.isEmpty())
             {
@@ -256,8 +243,13 @@ public:
 
     Tensor applyPreBackwardHooks(Tensor tensor) const
     {
-        for (const auto &entry : pre_backward_hooks)
+        const auto hooks_snapshot = pre_backward_hooks;
+        for (const auto &entry : hooks_snapshot)
         {
+            if (!entry.callback)
+            {
+                continue;
+            }
             Tensor result = entry.callback(tensor);
             if (!result.isEmpty())
             {
@@ -269,8 +261,13 @@ public:
 
     Tensor applyPostBackwardHooks(Tensor tensor) const
     {
-        for (const auto &entry : post_backward_hooks)
+        const auto hooks_snapshot = post_backward_hooks;
+        for (const auto &entry : hooks_snapshot)
         {
+            if (!entry.callback)
+            {
+                continue;
+            }
             Tensor result = entry.callback(tensor);
             if (!result.isEmpty())
             {
@@ -315,12 +312,19 @@ public:
         ILayer *layer = nullptr;
         uint64_t hook_id = 0;
         Hook_Type hook_type = Hook_Type::FORWARD;
+        std::weak_ptr<bool> lifetime_token;
+        bool has_lifetime_token = false;
 
     public:
         Scoped_Hook() noexcept = default;
 
         Scoped_Hook(ILayer *target_layer, uint64_t id, Hook_Type type) noexcept
             : layer(target_layer), hook_id(id), hook_type(type)
+        {
+        }
+
+        Scoped_Hook(ILayer *target_layer, uint64_t id, Hook_Type type, std::weak_ptr<bool> token) noexcept
+            : layer(target_layer), hook_id(id), hook_type(type), lifetime_token(std::move(token)), has_lifetime_token(true)
         {
         }
 
@@ -333,10 +337,16 @@ public:
         Scoped_Hook &operator=(const Scoped_Hook &) = delete;
 
         Scoped_Hook(Scoped_Hook &&other) noexcept
-            : layer(other.layer), hook_id(other.hook_id), hook_type(other.hook_type)
+            : layer(other.layer),
+              hook_id(other.hook_id),
+              hook_type(other.hook_type),
+              lifetime_token(std::move(other.lifetime_token)),
+              has_lifetime_token(other.has_lifetime_token)
         {
             other.layer = nullptr;
             other.hook_id = 0;
+            other.lifetime_token.reset();
+            other.has_lifetime_token = false;
         }
 
         Scoped_Hook &operator=(Scoped_Hook &&other) noexcept
@@ -347,8 +357,12 @@ public:
                 layer = other.layer;
                 hook_id = other.hook_id;
                 hook_type = other.hook_type;
+                lifetime_token = std::move(other.lifetime_token);
+                has_lifetime_token = other.has_lifetime_token;
                 other.layer = nullptr;
                 other.hook_id = 0;
+                other.lifetime_token.reset();
+                other.has_lifetime_token = false;
             }
             return *this;
         }
@@ -357,20 +371,20 @@ public:
         {
             if (layer && hook_id != 0)
             {
-                layer->removeHook(hook_id, hook_type);
+                if (!has_lifetime_token || !lifetime_token.expired())
+                {
+                    layer->removeHook(hook_id, hook_type);
+                }
                 layer = nullptr;
                 hook_id = 0;
+                lifetime_token.reset();
+                has_lifetime_token = false;
             }
-        }
-
-        void unregister()
-        {
-            release();
         }
 
         bool isActive() const noexcept
         {
-            return layer != nullptr && hook_id != 0;
+            return layer != nullptr && hook_id != 0 && (!has_lifetime_token || !lifetime_token.expired());
         }
 
         uint64_t getId() const noexcept
@@ -390,31 +404,19 @@ public:
     };
 
     template <typename Callback_T>
-        requires std::is_invocable_v<Callback_T, const Tensor &>
+        requires std::is_invocable_v<Callback_T, const Tensor &> &&
+                 (std::is_void_v<std::invoke_result_t<Callback_T, const Tensor &>> ||
+                  std::convertible_to<std::invoke_result_t<Callback_T, const Tensor &>, Tensor>)
     Scoped_Hook registerForwardHook(Callback_T &&callback)
     {
         using Ret_T = std::invoke_result_t<Callback_T, const Tensor &>;
-        uint64_t id = global_next_hook_id.fetch_add(1);
-        if constexpr (std::is_void_v<Ret_T>)
+        if constexpr (std::is_constructible_v<bool, const std::remove_reference_t<Callback_T> &>)
         {
-            forward_hooks.push_back(Hook_Entry{id, [fn = std::forward<Callback_T>(callback)](const Tensor &t) -> Tensor {
-                fn(t);
-                return Tensor{};
-            }});
+            if (!callback)
+            {
+                throw std::invalid_argument("ILayer::registerForwardHook: callback must not be empty");
+            }
         }
-        else
-        {
-            forward_hooks.push_back(Hook_Entry{id, Hook_Fn(std::forward<Callback_T>(callback))});
-        }
-        return Scoped_Hook(this, id, Hook_Type::FORWARD);
-    }
-
-    template <typename Callback_T>
-        requires std::is_invocable_v<Callback_T, const Tensor &>
-    Scoped_Hook registerBackwardHook(Callback_T &&callback, Hook_Type type = Hook_Type::PRE_BACKWARD)
-    {
-        using Ret_T = std::invoke_result_t<Callback_T, const Tensor &>;
-        uint64_t id = global_next_hook_id.fetch_add(1);
         Hook_Fn fn_target;
         if constexpr (std::is_void_v<Ret_T>)
         {
@@ -426,8 +428,51 @@ public:
         else
         {
             fn_target = Hook_Fn(std::forward<Callback_T>(callback));
+            if (!fn_target)
+            {
+                throw std::invalid_argument("ILayer::registerForwardHook: callback must not be empty");
+            }
         }
+        const uint64_t id = nextHookId();
+        forward_hooks.push_back(Hook_Entry{id, std::move(fn_target)});
+        return Scoped_Hook(this, id, Hook_Type::FORWARD, hook_lifetime_token);
+    }
 
+    template <typename Callback_T>
+        requires std::is_invocable_v<Callback_T, const Tensor &> &&
+                 (std::is_void_v<std::invoke_result_t<Callback_T, const Tensor &>> ||
+                  std::convertible_to<std::invoke_result_t<Callback_T, const Tensor &>, Tensor>)
+    Scoped_Hook registerBackwardHook(Callback_T &&callback, Hook_Type type = Hook_Type::PRE_BACKWARD)
+    {
+        if (type != Hook_Type::PRE_BACKWARD && type != Hook_Type::POST_BACKWARD)
+        {
+            throw std::invalid_argument("ILayer::registerBackwardHook: type must be PRE_BACKWARD or POST_BACKWARD");
+        }
+        using Ret_T = std::invoke_result_t<Callback_T, const Tensor &>;
+        if constexpr (std::is_constructible_v<bool, const std::remove_reference_t<Callback_T> &>)
+        {
+            if (!callback)
+            {
+                throw std::invalid_argument("ILayer::registerBackwardHook: callback must not be empty");
+            }
+        }
+        Hook_Fn fn_target;
+        if constexpr (std::is_void_v<Ret_T>)
+        {
+            fn_target = [fn = std::forward<Callback_T>(callback)](const Tensor &t) -> Tensor {
+                fn(t);
+                return Tensor{};
+            };
+        }
+        else
+        {
+            fn_target = Hook_Fn(std::forward<Callback_T>(callback));
+            if (!fn_target)
+            {
+                throw std::invalid_argument("ILayer::registerBackwardHook: callback must not be empty");
+            }
+        }
+        const uint64_t id = nextHookId();
         if (type == Hook_Type::PRE_BACKWARD)
         {
             pre_backward_hooks.push_back(Hook_Entry{id, std::move(fn_target)});
@@ -436,21 +481,7 @@ public:
         {
             post_backward_hooks.push_back(Hook_Entry{id, std::move(fn_target)});
         }
-        return Scoped_Hook(this, id, type);
-    }
-
-    template <typename Callback_T>
-        requires std::is_invocable_v<Callback_T, const Tensor &>
-    Scoped_Hook registerPreBackwardHook(Callback_T &&callback)
-    {
-        return registerBackwardHook(std::forward<Callback_T>(callback), Hook_Type::PRE_BACKWARD);
-    }
-
-    template <typename Callback_T>
-        requires std::is_invocable_v<Callback_T, const Tensor &>
-    Scoped_Hook registerPostBackwardHook(Callback_T &&callback)
-    {
-        return registerBackwardHook(std::forward<Callback_T>(callback), Hook_Type::POST_BACKWARD);
+        return Scoped_Hook(this, id, type, hook_lifetime_token);
     }
 };
 

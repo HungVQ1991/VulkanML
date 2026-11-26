@@ -19,10 +19,10 @@ void instanceNorm2dBackward(const Tensor &output_gradient, const Tensor &normali
                             uint32_t input_height, uint32_t input_width, uint32_t input_channels,
                             float epsilon);
 
-} // namespace ops::normalization
+}
 
 namespace ops::norm
 {
 using ops::normalization::instanceNorm2dForward;
 using ops::normalization::instanceNorm2dBackward;
-} // namespace ops::norm
+}

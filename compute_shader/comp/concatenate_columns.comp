@@ -1,17 +1,24 @@
 #version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#define BUF_T float16_t
+#else
+#define BUF_T float
+#endif
 
-layout(local_size_x = 16, local_size_y = 16) in;
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
 layout(std430, set = 0, binding = 0) readonly buffer MatrixA {
-    float data_a[];
+    BUF_T data_a[];
 };
 
 layout(std430, set = 0, binding = 1) readonly buffer MatrixB {
-    float data_b[];
+    BUF_T data_b[];
 };
 
 layout(std430, set = 0, binding = 2) writeonly buffer MatrixOut {
-    float data_out[];
+    BUF_T data_out[];
 };
 
 layout(push_constant) uniform Uniform_Params {
@@ -21,18 +28,21 @@ layout(push_constant) uniform Uniform_Params {
 } params;
 
 void main() {
-    uint col = gl_GlobalInvocationID.x;
-    uint row = gl_GlobalInvocationID.y;
+    uint idx = (gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 256u + gl_LocalInvocationID.x;
     uint total_cols = params.columns_a + params.columns_b;
-
-    if (row >= params.rows || col >= total_cols) {
+    if (params.rows == 0u || total_cols == 0u) {
+        return;
+    }
+    uint total_elements = params.rows * total_cols;
+    if (idx >= total_elements) {
         return;
     }
 
-    uint out_index = row * total_cols + col;
+    uint row = idx / total_cols;
+    uint col = idx - row * total_cols;
     if (col < params.columns_a) {
-        data_out[out_index] = data_a[row * params.columns_a + col];
+        data_out[idx] = data_a[row * params.columns_a + col];
     } else {
-        data_out[out_index] = data_b[row * params.columns_b + (col - params.columns_a)];
+        data_out[idx] = data_b[row * params.columns_b + (col - params.columns_a)];
     }
 }

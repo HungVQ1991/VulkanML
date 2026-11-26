@@ -41,7 +41,7 @@ public:
     void saveCheckpoint(std::ofstream &_output_file_stream) const override;
     void loadCheckpoint(std::ifstream &_input_file_stream) override;
 
-    std::function<float(std::mt19937&)> getPopulationParameterInitializer(size_t param_index) const override { return [](std::mt19937&) { return 0.0f; }; }
+    std::function<float(std::mt19937&)> getPopulationParameterInitializer(size_t) const override { return [](std::mt19937&) { return 0.0f; }; }
     std::vector<Shape> getPopulationParameterDims() const override { return {}; }
     std::vector<bool> getPopulationParameterIsEvolvable() const override { return {}; }
 
@@ -54,7 +54,7 @@ public:
     bool isForwardCompleted() const noexcept { return is_forward_completed; }
     bool hasParameters() const noexcept override { return false; }
     float getNegativeSlope() const noexcept { return negative_slope; }
-    void setNegativeSlope(float _negative_slope) noexcept { negative_slope = _negative_slope; }
+    void setNegativeSlope(float _negative_slope);
 
     void setPopulationParameter(size_t param_index, std::vector<float> flat_data) override;
     void setInputGradient(const Tensor &_tensor) { input_gradient_tensor = _tensor; }

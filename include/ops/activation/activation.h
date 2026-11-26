@@ -21,4 +21,4 @@ void softmaxBackward(const Tensor &output, const Tensor &output_gradient, Tensor
 void sigmoid(const Tensor &input, Tensor &output);
 void sigmoidBackward(const Tensor &output, const Tensor &output_gradient, Tensor &input_gradient);
 
-} // namespace ops::activation
+}

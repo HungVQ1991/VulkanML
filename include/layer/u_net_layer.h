@@ -1,6 +1,5 @@
 #pragma once
 
-#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
@@ -31,40 +30,33 @@ private:
     uint32_t base_channels = 32;
 
     Execution_Target execution_target = Execution_Target::CPU;
+    Data_Type data_type = Data_Type::FLOAT32;
     bool is_forward_completed = false;
     bool is_training = true;
-    bool is_accumulated = false;
 
-    // Các tầng Encoder & Pool
-    std::vector<std::unique_ptr<ILayer>> enc1_layers; // in_channels -> base (Conv-BN-GELU x2)
-    std::unique_ptr<Max_Pool_2d_Layer> pool1;         // 320 -> 160
+    std::vector<std::unique_ptr<ILayer>> enc1_layers;
+    std::unique_ptr<Max_Pool_2d_Layer> pool1;
 
-    std::vector<std::unique_ptr<ILayer>> enc2_layers; // base -> base*2 (Conv-BN-GELU x2)
-    std::unique_ptr<Max_Pool_2d_Layer> pool2;         // 160 -> 80
+    std::vector<std::unique_ptr<ILayer>> enc2_layers;
+    std::unique_ptr<Max_Pool_2d_Layer> pool2;
 
-    std::vector<std::unique_ptr<ILayer>> enc3_layers; // base*2 -> base*4 (Conv-BN-GELU x2)
-    std::unique_ptr<Max_Pool_2d_Layer> pool3;         // 80 -> 40
+    std::vector<std::unique_ptr<ILayer>> enc3_layers;
+    std::unique_ptr<Max_Pool_2d_Layer> pool3;
 
-    // Bottleneck
-    std::vector<std::unique_ptr<ILayer>> bottleneck_layers; // base*4 -> base*8 (Conv-BN-GELU x2)
+    std::vector<std::unique_ptr<ILayer>> bottleneck_layers;
 
-    // Decoder 3: 40 -> 80
     std::unique_ptr<Up_Sample_2d_Layer> up3;
-    std::vector<std::unique_ptr<ILayer>> dec3_layers; // (base*8 + base*4) -> base*4
+    std::vector<std::unique_ptr<ILayer>> dec3_layers;
 
-    // Decoder 2: 80 -> 160
     std::unique_ptr<Up_Sample_2d_Layer> up2;
-    std::vector<std::unique_ptr<ILayer>> dec2_layers; // (base*4 + base*2) -> base*2
+    std::vector<std::unique_ptr<ILayer>> dec2_layers;
 
-    // Decoder 1: 160 -> 320
     std::unique_ptr<Up_Sample_2d_Layer> up1;
-    std::vector<std::unique_ptr<ILayer>> dec1_layers; // (base*2 + base) -> base
+    std::vector<std::unique_ptr<ILayer>> dec1_layers;
 
-    // Head
-    std::unique_ptr<Conv2d_Layer> final_conv;         // base -> out_channels (1x1 conv)
+    std::unique_ptr<Conv2d_Layer> final_conv;
     std::unique_ptr<Sigmoid_Layer> final_sigmoid;
 
-    // Cache cho activations phục vụ Backward pass
     Tensor input_tensor;
     Tensor output_tensor;
     Tensor input_gradient_tensor;
@@ -75,6 +67,30 @@ private:
     Tensor dec3_concat;
     Tensor dec2_concat;
     Tensor dec1_concat;
+
+    Tensor in_nhwc_scratch;
+    Tensor out_nchw_scratch;
+    Tensor grad_nhwc_scratch;
+    Tensor in_grad_nchw_scratch;
+    Tensor up3_cast_scratch;
+    Tensor up2_cast_scratch;
+    Tensor up1_cast_scratch;
+    Tensor dec3_concat_2d_scratch;
+    Tensor dec2_concat_2d_scratch;
+    Tensor dec1_concat_2d_scratch;
+    Tensor sig_grad_cast_scratch;
+    Tensor d_up1_scratch;
+    Tensor d_skip1_scratch;
+    Tensor d_skip1_cast_scratch;
+    Tensor enc1_grad_sum;
+    Tensor d_up2_scratch;
+    Tensor d_skip2_scratch;
+    Tensor d_skip2_cast_scratch;
+    Tensor enc2_grad_sum;
+    Tensor d_up3_scratch;
+    Tensor d_skip3_scratch;
+    Tensor d_skip3_cast_scratch;
+    Tensor enc3_grad_sum;
 
     void buildNetwork();
 
@@ -87,7 +103,8 @@ public:
         uint32_t _in_channels = 1,
         uint32_t _out_channels = 1,
         uint32_t _base_channels = 32,
-        Execution_Target _execution_target = Execution_Target::CPU);
+        Execution_Target _execution_target = Execution_Target::CPU,
+        Data_Type _data_type = Data_Type::FLOAT32);
 
     ~U_Net_Layer() noexcept override = default;
 
@@ -96,6 +113,32 @@ public:
     Tensor backward(const Tensor &_output_gradient) override;
     void resetGradient() override;
     void resetGradients() override;
+    bool supportsStaticGraph() const noexcept override
+    {
+        auto ok_vec = [](const auto &vec) noexcept {
+            for (const auto &l : vec)
+            {
+                if (l && !l->supportsStaticGraph()) return false;
+            }
+            return true;
+        };
+        auto ok = [](const auto &ptr) noexcept { return !ptr || ptr->supportsStaticGraph(); };
+        return ok_vec(enc1_layers) && ok(pool1) &&
+               ok_vec(enc2_layers) && ok(pool2) &&
+               ok_vec(enc3_layers) && ok(pool3) &&
+               ok_vec(bottleneck_layers) &&
+               ok(up3) && ok_vec(dec3_layers) &&
+               ok(up2) && ok_vec(dec2_layers) &&
+               ok(up1) && ok_vec(dec1_layers) &&
+               ok(final_conv) && ok(final_sigmoid);
+    }
+    void prepareInference() override;
+    void quantizeToTernary() override;
+    void dequantizeFromTernary() override;
+    [[nodiscard]] bool isTernary() const noexcept override { return data_type == Data_Type::TERNARY_INT2; }
+    [[nodiscard]] Data_Type getDataType() const noexcept { return data_type; }
+    void snapshotNonTrainableState(std::vector<std::vector<float>> &_out) const override;
+    void restoreNonTrainableState(const std::vector<std::vector<float>> &_in, size_t &_cursor) override;
 
     void saveConfiguration(std::ofstream &_output_file_stream) const override;
     void saveInference(std::ofstream &_output_file_stream) const override;
@@ -103,11 +146,12 @@ public:
     void saveCheckpoint(std::ofstream &_output_file_stream) const override;
     void loadCheckpoint(std::ifstream &_input_file_stream) override;
 
-    std::function<float(std::mt19937&)> getPopulationParameterInitializer(size_t) const override 
-    { 
-        return [](std::mt19937&) { return 0.0f; }; 
+    std::function<float(std::mt19937&)> getPopulationParameterInitializer(size_t) const override
+    {
+        return [](std::mt19937&) { return 0.0f; };
     }
     std::vector<std::pair<Tensor *, Tensor *>> getParametersAndGradients() override;
+    std::vector<const Tensor *> getNoDecayParameters() const override;
     std::vector<float> getPopulationParameter(size_t) const override { return {}; }
     void setPopulationParameter(size_t, std::vector<float>) override {}
 
@@ -127,6 +171,9 @@ public:
     void resetRunningStats();
     void resetHeadBias(float bias = -2.0f);
     Layer_Type getLayerType() const noexcept override { return Layer_Type::U_NET; }
+    uint32_t getHeight() const noexcept { return input_height; }
+    uint32_t getWidth() const noexcept { return input_width; }
+    uint32_t getOutChannels() const noexcept { return out_channels; }
     bool isForwardCompleted() const noexcept { return is_forward_completed; }
     bool hasParameters() const noexcept override { return true; }
 };

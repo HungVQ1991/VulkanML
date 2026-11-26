@@ -27,3 +27,4 @@
 #include "layer/avg_pool2d_layer.h"
 #include "layer/multi_scale_resnet18_balanced_layer.h"
 #include "layer/ternary_linear_layer.h"
+#include "layer/lora_linear_layer.h"

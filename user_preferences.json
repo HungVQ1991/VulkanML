@@ -18,9 +18,22 @@
   "logging": {
     "enable_logging": true,
     "level": "LOG_INFO",
+    "console_enabled": true,
+    "console_level": "LOG_DEBUG",
+    "file_enabled": false,
+    "file_level": "LOG_DEBUG",
+    "log_directory": "logs",
+    "color_mode": "auto",
+    "quiet_mode": false,
+    "errors_to_stderr": false,
+    "filter_info_by_feature": false,
+    "include_timestamp_ms": false,
+    "include_thread_id": false,
+    "include_source_location": false,
     "features": [
       "DEVICE_MANAGEMENT",
       "FP16_METRICS",
+      "TERNARY_METRICS",
       "SYNCHRONIZATION"
     ]
   }

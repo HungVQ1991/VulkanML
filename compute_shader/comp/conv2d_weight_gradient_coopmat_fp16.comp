@@ -44,7 +44,7 @@ void main() {
         bool is_k_aligned = (k + TILE_K <= dims.cols_a);
 
         coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> matA;
-        if (is_m_aligned && is_k_aligned) {
+        if (is_m_aligned && is_k_aligned && ((dims.cols_a & 7u) == 0u)) {
             coopMatLoad(matA, data_a, tile_row * dims.cols_a + k, dims.cols_a, gl_CooperativeMatrixLayoutRowMajor);
         } else {
             for (uint i = 0; i < 8; ++i) {
@@ -61,7 +61,7 @@ void main() {
         }
 
         coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> matB;
-        if (is_k_aligned && is_n_aligned) {
+        if (is_k_aligned && is_n_aligned && ((dims.cols_b & 7u) == 0u)) {
             coopMatLoad(matB, data_b, k * dims.cols_b + tile_col, dims.cols_b, gl_CooperativeMatrixLayoutRowMajor);
         } else {
             for (uint i = 0; i < 8; ++i) {
@@ -92,8 +92,6 @@ void main() {
             float val = smem_c[idx];
             if (isnan(val) || isinf(val)) {
                 val = 0.0f;
-            } else {
-                val = clamp(val, -10000.0f, 10000.0f);
             }
             data_c[gr * dims.cols_b + gc] = val;
         }

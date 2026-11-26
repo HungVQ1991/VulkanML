@@ -1,332 +1,373 @@
-// #include "helper/training_profiler.h"
+#include "helper/training_profiler.h"
+#include "helper/magic_enum.hpp"
 
-// #include <algorithm>
-// #include <iomanip>
-// #include <iostream>
+#include <algorithm>
+#include <format>
+#include <iostream>
+#include <sstream>
+#include <string>
+#include <utility>
 
-// Step_Timings& Step_Timings::getInstance()
-// {
-//     static Step_Timings instance;
-//     return instance;
-// }
+Step_Timings& Step_Timings::getInstance()
+{
+    static Step_Timings instance;
+    return instance;
+}
 
-// void Step_Timings::syncAliases()
-// {
-//     if (fwd_loss_gpu_submit_ms > 0.0 || fwd_loss_fence_wait_ms > 0.0)
-//     {
-//         fwd_loss_exec_ms = fwd_loss_gpu_submit_ms + fwd_loss_fence_wait_ms;
-//     }
-//     else if (fwd_loss_exec_ms == 0.0 && fwd_gpu_ms != 0.0)
-//     {
-//         fwd_loss_exec_ms = fwd_gpu_ms;
-//     }
-//     fwd_gpu_ms = fwd_loss_exec_ms;
+void Step_Timings::recordDuration(Timing_Stage stage, double ms)
+{
+    std::lock_guard<std::mutex> lock(profiler_mutex);
+    timings.at(std::to_underlying(stage)) += ms;
+}
 
-//     if (fwd_loss_gpu_nodes == 0 && fwd_gpu_nodes != 0) fwd_loss_gpu_nodes = fwd_gpu_nodes;
-//     fwd_gpu_nodes = fwd_loss_gpu_nodes;
+double Step_Timings::getDuration(Timing_Stage stage) const
+{
+    std::lock_guard<std::mutex> lock(profiler_mutex);
+    return timings.at(std::to_underlying(stage));
+}
 
-//     if (loss_readback_ms == 0.0 && loss_read_ms != 0.0) loss_readback_ms = loss_read_ms;
-//     loss_read_ms = loss_readback_ms;
+void Step_Timings::setDuration(Timing_Stage stage, double ms)
+{
+    std::lock_guard<std::mutex> lock(profiler_mutex);
+    timings.at(std::to_underlying(stage)) = ms;
+}
 
-//     if (bwd_gpu_submit_ms > 0.0 || bwd_fence_wait_ms > 0.0)
-//     {
-//         bwd_exec_ms = bwd_gpu_submit_ms + bwd_fence_wait_ms;
-//     }
-//     else if (bwd_exec_ms == 0.0 && bwd_gpu_ms != 0.0)
-//     {
-//         bwd_exec_ms = bwd_gpu_ms;
-//     }
-//     bwd_gpu_ms = bwd_exec_ms;
+void Step_Timings::setNodeCount(Node_Stage stage, size_t count)
+{
+    std::lock_guard<std::mutex> lock(profiler_mutex);
+    node_counts.at(std::to_underlying(stage)) = count;
+}
 
-//     if (opt_gpu_submit_ms > 0.0 || opt_fence_wait_ms > 0.0)
-//     {
-//         opt_exec_ms = opt_gpu_submit_ms + opt_fence_wait_ms;
-//     }
-//     else if (opt_exec_ms == 0.0 && opt_gpu_ms != 0.0)
-//     {
-//         opt_exec_ms = opt_gpu_ms;
-//     }
-//     opt_gpu_ms = opt_exec_ms;
+size_t Step_Timings::getNodeCount(Node_Stage stage) const
+{
+    std::lock_guard<std::mutex> lock(profiler_mutex);
+    return node_counts.at(std::to_underlying(stage));
+}
 
-//     // Apply measured inter-stage fence shifts caused by double-buffering
-//     if (bwd_waited_in_opt_ms > 0.0)
-//     {
-//         fwd_loss_bwd_ms += bwd_waited_in_opt_ms;
-//         opt_step_ms = std::max(0.0, opt_step_ms - bwd_waited_in_opt_ms);
-//         bwd_waited_in_opt_ms = 0.0;
-//     }
+void Step_Timings::setChainedBwdOpt(bool chained)
+{
+    std::lock_guard<std::mutex> lock(profiler_mutex);
+    is_chained_bwd_opt = chained;
+}
 
-//     if (opt_waited_in_fwd_ms > 0.0)
-//     {
-//         opt_step_ms += opt_waited_in_fwd_ms;
-//         fwd_loss_bwd_ms = std::max(0.0, fwd_loss_bwd_ms - opt_waited_in_fwd_ms);
-//         opt_waited_in_fwd_ms = 0.0;
-//     }
+bool Step_Timings::isChainedBwdOpt() const
+{
+    std::lock_guard<std::mutex> lock(profiler_mutex);
+    return is_chained_bwd_opt;
+}
 
-//     // Structural invariance guarantees:
-//     // A major stage must be at least the sum of its measured sub-operations
-//     double fwd_bwd_sub_sum = fwd_record_ms + fwd_loss_exec_ms + loss_readback_ms + mul_scalar_ms + bwd_record_ms + bwd_exec_ms;
-//     if (fwd_loss_bwd_ms < fwd_bwd_sub_sum)
-//     {
-//         double phase_shift = fwd_bwd_sub_sum - fwd_loss_bwd_ms;
-//         fwd_loss_bwd_ms = fwd_bwd_sub_sum;
-//         double opt_sub_sum = opt_record_ms + opt_exec_ms;
-//         if (opt_step_ms > opt_sub_sum)
-//         {
-//             double excess = opt_step_ms - opt_sub_sum;
-//             opt_step_ms -= std::min(excess, phase_shift);
-//         }
-//     }
+void Step_Timings::reset()
+{
+    std::lock_guard<std::mutex> lock(profiler_mutex);
+    timings.fill(0.0);
+    node_counts.fill(0);
+    is_chained_bwd_opt = false;
+}
 
-//     double opt_sub_sum = opt_record_ms + opt_exec_ms;
-//     if (opt_step_ms < opt_sub_sum && opt_sub_sum > 0.0)
-//     {
-//         opt_step_ms = opt_sub_sum;
-//     }
+void Step_Timings::add(const Step_Timings& other)
+{
+    if (this == &other)
+    {
+        std::lock_guard<std::mutex> lock(profiler_mutex);
+        for (size_t i = 0; i < NUM_TIMING_STAGES; ++i)
+        {
+            timings[i] += timings[i];
+        }
+        return;
+    }
 
-//     double major_stages_sum = data_prep_ms + reset_grad_ms + fwd_loss_bwd_ms + opt_step_ms + sched_step_ms;
-//     if (total_batch_ms < major_stages_sum)
-//     {
-//         total_batch_ms = major_stages_sum;
-//     }
-//     total_ms = total_batch_ms;
-// }
+    std::scoped_lock lock(profiler_mutex, other.profiler_mutex);
+    for (size_t i = 0; i < NUM_TIMING_STAGES; ++i)
+    {
+        timings[i] += other.timings[i];
+    }
+    for (size_t i = 0; i < NUM_NODE_STAGES; ++i)
+    {
+        if (other.node_counts[i] > 0)
+        {
+            node_counts[i] = other.node_counts[i];
+        }
+    }
+    is_chained_bwd_opt = is_chained_bwd_opt || other.is_chained_bwd_opt;
+}
 
-// void Step_Timings::reset()
-// {
-//     data_prep_ms = 0.0;
-//     reset_grad_ms = 0.0;
-//     fwd_loss_bwd_ms = 0.0;
-//     opt_step_ms = 0.0;
-//     sched_step_ms = 0.0;
-//     total_batch_ms = 0.0;
-//     total_ms = 0.0;
+void Step_Timings::scale(double factor)
+{
+    std::lock_guard<std::mutex> lock(profiler_mutex);
+    for (double& val : timings)
+    {
+        val *= factor;
+    }
+}
 
-//     fwd_record_ms = 0.0;
-//     fwd_loss_exec_ms = 0.0;
-//     fwd_gpu_ms = 0.0;
-//     fwd_loss_gpu_submit_ms = 0.0;
-//     fwd_loss_fence_wait_ms = 0.0;
-//     fwd_loss_gpu_nodes = 0;
-//     fwd_gpu_nodes = 0;
+std::string Step_Timings::formatTable(size_t batch_idx, size_t total_batches, double throughput, size_t count, std::string_view unit) const
+{
+    std::ostringstream oss;
+    printTable(batch_idx, total_batches, throughput, count, unit, oss);
+    return oss.str();
+}
 
-//     loss_readback_ms = 0.0;
-//     loss_read_ms = 0.0;
-//     mul_scalar_ms = 0.0;
+void Step_Timings::logTable(size_t batch_idx, size_t total_batches, double throughput, size_t count, std::string_view unit, Log_Level level, bool print_to_console) const
+{
+    if (!Logger::shouldLog(level, Log_Feature::PROFILER))
+    {
+        return;
+    }
+    std::string table = formatTable(batch_idx, total_batches, throughput, count, unit);
+    while (!table.empty() && table.back() == '\n')
+    {
+        table.pop_back();
+    }
+    Logger::logMessage(table, level, print_to_console, 0, Log_Feature::PROFILER);
+}
 
-//     bwd_record_ms = 0.0;
-//     bwd_exec_ms = 0.0;
-//     bwd_gpu_ms = 0.0;
-//     bwd_gpu_submit_ms = 0.0;
-//     bwd_fence_wait_ms = 0.0;
-//     bwd_gpu_nodes = 0;
+void Step_Timings::printTable(size_t batch_idx, size_t total_batches, double throughput, size_t count, std::string_view unit) const
+{
+    logTable(batch_idx, total_batches, throughput, count, unit, Log_Level::LOG_INFO, true);
+}
 
-//     opt_record_ms = 0.0;
-//     opt_exec_ms = 0.0;
-//     opt_gpu_ms = 0.0;
-//     opt_gpu_submit_ms = 0.0;
-//     opt_fence_wait_ms = 0.0;
-//     opt_gpu_nodes = 0;
+void Step_Timings::printTable(size_t batch_idx, size_t total_batches, double throughput, size_t count, std::string_view unit, std::ostream& os) const
+{
+    std::lock_guard<std::mutex> lock(profiler_mutex);
+    const double divisor = (count > 0) ? static_cast<double>(count) : 1.0;
+    double total_time = timings[std::to_underlying(Timing_Stage::TOTAL_BATCH)] / divisor;
+    if (total_time <= 0.0) total_time = 1e-6;
 
-//     bwd_waited_in_opt_ms = 0.0;
-//     opt_waited_in_fwd_ms = 0.0;
-//     is_chained_bwd_opt = false;
-// }
+    auto get = [&](Timing_Stage s) { return timings[std::to_underlying(s)] / divisor; };
 
-// void Step_Timings::add(const Step_Timings& other)
-// {
-//     data_prep_ms += other.data_prep_ms;
-//     reset_grad_ms += other.reset_grad_ms;
-//     fwd_loss_bwd_ms += other.fwd_loss_bwd_ms;
-//     opt_step_ms += other.opt_step_ms;
-//     sched_step_ms += other.sched_step_ms;
-//     total_batch_ms += other.total_batch_ms;
+    double v_data_prep    = get(Timing_Stage::DATA_PREP);
+    double v_reset_grad   = get(Timing_Stage::RESET_GRAD);
+    double v_fwd_record   = get(Timing_Stage::FWD_RECORD);
+    double v_fwd_submit   = get(Timing_Stage::FWD_LOSS_GPU_SUBMIT);
+    double v_fwd_fence    = get(Timing_Stage::FWD_LOSS_FENCE_WAIT);
+    double v_fwd_exec     = get(Timing_Stage::FWD_LOSS_EXEC);
+    if (v_fwd_exec <= 0.0 && (v_fwd_submit > 0.0 || v_fwd_fence > 0.0))
+    {
+        v_fwd_exec = v_fwd_submit + v_fwd_fence;
+    }
+    double v_opt_waited_in_fwd = get(Timing_Stage::OPT_WAITED_IN_FWD);
+    double v_loss_read    = get(Timing_Stage::LOSS_READBACK);
+    double v_mul_scalar   = get(Timing_Stage::MUL_SCALAR);
 
-//     fwd_record_ms += other.fwd_record_ms;
-//     fwd_loss_exec_ms += other.fwd_loss_exec_ms;
-//     fwd_loss_gpu_submit_ms += other.fwd_loss_gpu_submit_ms;
-//     fwd_loss_fence_wait_ms += other.fwd_loss_fence_wait_ms;
-//     fwd_loss_gpu_nodes = other.fwd_loss_gpu_nodes;
+    double v_bwd_record   = get(Timing_Stage::BWD_RECORD);
+    double v_bwd_submit   = get(Timing_Stage::BWD_GPU_SUBMIT);
+    double v_bwd_fence    = get(Timing_Stage::BWD_FENCE_WAIT);
+    double v_bwd_exec     = get(Timing_Stage::BWD_EXEC);
+    if (v_bwd_exec <= 0.0 && (v_bwd_submit > 0.0 || v_bwd_fence > 0.0))
+    {
+        v_bwd_exec = v_bwd_submit + v_bwd_fence;
+    }
 
-//     loss_readback_ms += other.loss_readback_ms;
-//     mul_scalar_ms += other.mul_scalar_ms;
+    double v_opt_record   = get(Timing_Stage::OPT_RECORD);
+    double v_opt_submit   = get(Timing_Stage::OPT_GPU_SUBMIT);
+    double v_opt_fence    = get(Timing_Stage::OPT_FENCE_WAIT);
+    double v_opt_exec     = get(Timing_Stage::OPT_EXEC);
+    double v_bwd_waited_in_opt = get(Timing_Stage::BWD_WAITED_IN_OPT);
+    double v_sched_step   = get(Timing_Stage::SCHED_STEP);
 
-//     bwd_record_ms += other.bwd_record_ms;
-//     bwd_exec_ms += other.bwd_exec_ms;
-//     bwd_gpu_submit_ms += other.bwd_gpu_submit_ms;
-//     bwd_fence_wait_ms += other.bwd_fence_wait_ms;
-//     bwd_gpu_nodes = other.bwd_gpu_nodes;
+    auto print_major = [&](std::string_view name, double ms) {
+        double pct = (total_time > 0.0) ? (ms / total_time) * 100.0 : 0.0;
+        os << std::format("| {:<35} | {:>10.3f} | {:>7.1f}% |\n", name, ms, pct);
+    };
 
-//     opt_record_ms += other.opt_record_ms;
-//     opt_exec_ms += other.opt_exec_ms;
-//     opt_gpu_submit_ms += other.opt_gpu_submit_ms;
-//     opt_fence_wait_ms += other.opt_fence_wait_ms;
-//     opt_gpu_nodes = other.opt_gpu_nodes;
+    auto print_sub = [&](std::string_view name, double ms) {
+        double pct = (total_time > 0.0) ? (ms / total_time) * 100.0 : 0.0;
+        os << std::format("| {:<35} | {:>10.3f} | {:>8} |\n", name, ms, std::format("({:.1f}%)", pct));
+    };
 
-//     bwd_waited_in_opt_ms += other.bwd_waited_in_opt_ms;
-//     opt_waited_in_fwd_ms += other.opt_waited_in_fwd_ms;
-//     is_chained_bwd_opt = is_chained_bwd_opt || other.is_chained_bwd_opt;
+    const std::string line61(61, '-');
+    const std::string line37(37, '-');
+    const std::string line12(12, '-');
+    const std::string line10(10, '-');
 
-//     syncAliases();
-// }
+    os << std::format("\n+{}+\n", line61);
+    std::string header_str = std::format("Batch [{}/{}] | Throughput: {:.2f} {}", batch_idx, total_batches, throughput, unit);
+    os << std::format("| {:<59} |\n", header_str);
+    os << std::format("+{}+{}+{}+\n", line37, line12, line10);
+    os << std::format("| {:<35} | {:>10} | {:>8} |\n", "Stage / Sub-operation", "Time (ms)", "%");
+    os << std::format("+{}+{}+{}+\n", line37, line12, line10);
 
-// void Step_Timings::scale(double factor)
-// {
-//     data_prep_ms *= factor;
-//     reset_grad_ms *= factor;
-//     fwd_loss_bwd_ms *= factor;
-//     opt_step_ms *= factor;
-//     sched_step_ms *= factor;
-//     total_batch_ms *= factor;
+    size_t stage_num = 1;
+    double sum_major = 0.0;
 
-//     fwd_record_ms *= factor;
-//     fwd_loss_exec_ms *= factor;
-//     fwd_loss_gpu_submit_ms *= factor;
-//     fwd_loss_fence_wait_ms *= factor;
+    if (v_data_prep > 0.0001)
+    {
+        print_major(std::format("[{}] DATA_PREP", stage_num++), v_data_prep);
+        sum_major += v_data_prep;
+    }
 
-//     loss_readback_ms *= factor;
-//     mul_scalar_ms *= factor;
+    if (v_reset_grad > 0.0001)
+    {
+        print_major(std::format("[{}] RESET_GRAD", stage_num++), v_reset_grad);
+        sum_major += v_reset_grad;
+    }
 
-//     bwd_record_ms *= factor;
-//     bwd_exec_ms *= factor;
-//     bwd_gpu_submit_ms *= factor;
-//     bwd_fence_wait_ms *= factor;
+    bool has_fwd_loss = (v_fwd_record > 0.0001 || v_fwd_exec > 0.0001 || v_loss_read > 0.0001 || v_mul_scalar > 0.0001 || v_opt_waited_in_fwd > 0.0001);
+    if (has_fwd_loss)
+    {
+        double fwd_stage_ms = v_fwd_record + v_fwd_exec + v_loss_read + v_mul_scalar;
+        print_major(std::format("[{}] FORWARD & LOSS", stage_num++), fwd_stage_ms);
+        sum_major += fwd_stage_ms;
 
-//     opt_record_ms *= factor;
-//     opt_exec_ms *= factor;
-//     opt_gpu_submit_ms *= factor;
-//     opt_fence_wait_ms *= factor;
+        if (v_fwd_record > 0.0001)
+        {
+            print_sub("  |- FWD_RECORD (CPU)", v_fwd_record);
+        }
+        if (v_fwd_exec > 0.0001)
+        {
+            bool has_sub = (v_fwd_submit > 0.0001 || v_fwd_fence > 0.0001);
+            std::string_view prefix = (v_loss_read > 0.0001 || v_mul_scalar > 0.0001 || v_opt_waited_in_fwd > 0.0001) ? "  |- " : "  `- ";
+            print_sub(std::format("{}FWD_LOSS_EXEC (GPU)", prefix), v_fwd_exec);
+            if (has_sub)
+            {
+                std::string_view sub_p = (v_loss_read > 0.0001 || v_mul_scalar > 0.0001 || v_opt_waited_in_fwd > 0.0001) ? "  |   -> " : "      -> ";
+                if (v_fwd_submit > 0.0001) print_sub(std::format("{}GPU Submit", sub_p), v_fwd_submit);
+                if (v_fwd_fence > 0.0001)  print_sub(std::format("{}Fence Wait", sub_p), v_fwd_fence);
+            }
+        }
+        if (v_opt_waited_in_fwd > 0.0001)
+        {
+            std::string_view prefix = (v_loss_read > 0.0001 || v_mul_scalar > 0.0001) ? "  |- " : "  `- ";
+            print_sub(std::format("{}OPT_WAITED_IN_FWD", prefix), v_opt_waited_in_fwd);
+        }
+        if (v_loss_read > 0.0001)
+        {
+            std::string_view prefix = (v_mul_scalar > 0.0001) ? "  |- " : "  `- ";
+            print_sub(std::format("{}LOSS_READBACK", prefix), v_loss_read);
+        }
+        if (v_mul_scalar > 0.0001)
+        {
+            print_sub("  `- MUL_SCALAR", v_mul_scalar);
+        }
+    }
 
-//     bwd_waited_in_opt_ms *= factor;
-//     opt_waited_in_fwd_ms *= factor;
+    if (is_chained_bwd_opt)
+    {
+        double chained_gpu_ms = v_bwd_submit + v_bwd_fence;
+        if (chained_gpu_ms <= 0.0) chained_gpu_ms = v_bwd_exec;
 
-//     syncAliases();
-// }
+        double host_overhead = std::max(0.0, v_opt_exec - chained_gpu_ms - v_opt_record);
+        double chained_stage_ms = v_bwd_record + v_opt_record + chained_gpu_ms + host_overhead;
+        print_major(std::format("[{}] CHAINED BWD + OPT", stage_num++), chained_stage_ms);
+        sum_major += chained_stage_ms;
 
-// void Step_Timings::printTable(size_t batch_idx, size_t total_batches, double tok_s, size_t count)
-// {
-//     syncAliases();
+        if (v_bwd_record > 0.0001)
+        {
+            print_sub("  |- BWD_RECORD (CPU)", v_bwd_record);
+        }
+        if (v_opt_record > 0.0001)
+        {
+            print_sub("  |- OPT_RECORD (CPU)", v_opt_record);
+        }
+        if (chained_gpu_ms > 0.0001)
+        {
+            bool has_sub = (v_bwd_submit > 0.0001 || v_bwd_fence > 0.0001);
+            std::string_view prefix = (host_overhead > 0.0001 || v_bwd_waited_in_opt > 0.0001) ? "  |- " : "  `- ";
+            print_sub(std::format("{}BWD+OPT GPU EXEC", prefix), chained_gpu_ms);
+            if (has_sub)
+            {
+                std::string_view sub_p = (host_overhead > 0.0001 || v_bwd_waited_in_opt > 0.0001) ? "  |   -> " : "      -> ";
+                if (v_bwd_submit > 0.0001) print_sub(std::format("{}GPU Submit", sub_p), v_bwd_submit);
+                if (v_bwd_fence > 0.0001)  print_sub(std::format("{}Fence Wait", sub_p), v_bwd_fence);
+            }
+        }
+        if (v_bwd_waited_in_opt > 0.0001)
+        {
+            std::string_view prefix = (host_overhead > 0.0001) ? "  |- " : "  `- ";
+            print_sub(std::format("{}BWD_WAITED_IN_OPT", prefix), v_bwd_waited_in_opt);
+        }
+        if (host_overhead > 0.0001)
+        {
+            print_sub("  `- Host Overhead (Sync/Clip)", host_overhead);
+        }
+    }
+    else
+    {
+        bool has_bwd = (v_bwd_record > 0.0001 || v_bwd_exec > 0.0001);
+        if (has_bwd)
+        {
+            double bwd_stage_ms = v_bwd_record + v_bwd_exec;
+            print_major(std::format("[{}] BACKWARD PASS", stage_num++), bwd_stage_ms);
+            sum_major += bwd_stage_ms;
 
-//     double factor = (count > 0) ? (1.0 / static_cast<double>(count)) : 1.0;
-//     double total = total_batch_ms * factor;
-//     if (total <= 0.0) total = 1e-6;
+            if (v_bwd_record > 0.0001)
+            {
+                std::string_view prefix = (v_bwd_exec > 0.0001) ? "  |- " : "  `- ";
+                print_sub(std::format("{}BWD_RECORD (CPU)", prefix), v_bwd_record);
+            }
+            if (v_bwd_exec > 0.0001)
+            {
+                print_sub("  `- BWD GPU EXEC", v_bwd_exec);
+                if (v_bwd_submit > 0.0001) print_sub("      -> GPU Submit", v_bwd_submit);
+                if (v_bwd_fence > 0.0001)  print_sub("      -> Fence Wait", v_bwd_fence);
+            }
+        }
 
-//     auto calc = [factor](double val) { return val * factor; };
+        double opt_gpu = (v_opt_submit + v_opt_fence > 0.0) ? (v_opt_submit + v_opt_fence) : 0.0;
+        double opt_host = std::max(0.0, v_opt_exec - opt_gpu - v_opt_record);
+        double opt_stage_ms = v_opt_record + opt_gpu + opt_host;
+        if (opt_stage_ms <= 0.0 && v_opt_exec > 0.0) opt_stage_ms = v_opt_exec;
 
-//     double v_data_prep = calc(data_prep_ms);
-//     double v_reset_grad = calc(reset_grad_ms);
-//     double v_fwd_loss_bwd = calc(fwd_loss_bwd_ms);
-//     double v_fwd_record = calc(fwd_record_ms);
-//     double v_fwd_exec = calc(fwd_loss_exec_ms);
-//     double v_fwd_submit = calc(fwd_loss_gpu_submit_ms);
-//     double v_fwd_fence = calc(fwd_loss_fence_wait_ms);
-//     double v_loss_read = calc(loss_readback_ms);
-//     double v_mul_scalar = calc(mul_scalar_ms);
-//     double v_bwd_record = calc(bwd_record_ms);
-//     double v_bwd_exec = calc(bwd_exec_ms);
-//     double v_bwd_submit = calc(bwd_gpu_submit_ms);
-//     double v_bwd_fence = calc(bwd_fence_wait_ms);
+        if (opt_stage_ms > 0.0001 || v_bwd_waited_in_opt > 0.0001)
+        {
+            print_major(std::format("[{}] OPTIMIZER STEP", stage_num++), opt_stage_ms);
+            sum_major += opt_stage_ms;
 
-//     double fwd_bwd_sub_sum = v_fwd_record + v_fwd_exec + v_loss_read + v_mul_scalar + v_bwd_record + v_bwd_exec;
-//     double fwd_bwd_overhead = std::max(0.0, v_fwd_loss_bwd - fwd_bwd_sub_sum);
+            if (v_opt_record > 0.0001)
+            {
+                std::string_view prefix = (opt_gpu > 0.0001 || v_bwd_waited_in_opt > 0.0001 || opt_host > 0.0001) ? "  |- " : "  `- ";
+                print_sub(std::format("{}OPT_RECORD (CPU)", prefix), v_opt_record);
+            }
+            if (opt_gpu > 0.0001)
+            {
+                std::string_view prefix = (v_bwd_waited_in_opt > 0.0001 || opt_host > 0.0001) ? "  |- " : "  `- ";
+                print_sub(std::format("{}OPT GPU EXEC", prefix), opt_gpu);
+                std::string_view sub_p = (v_bwd_waited_in_opt > 0.0001 || opt_host > 0.0001) ? "  |   -> " : "      -> ";
+                if (v_opt_submit > 0.0001) print_sub(std::format("{}GPU Submit", sub_p), v_opt_submit);
+                if (v_opt_fence > 0.0001)  print_sub(std::format("{}Fence Wait", sub_p), v_opt_fence);
+            }
+            if (v_bwd_waited_in_opt > 0.0001)
+            {
+                std::string_view prefix = (opt_host > 0.0001) ? "  |- " : "  `- ";
+                print_sub(std::format("{}BWD_WAITED_IN_OPT", prefix), v_bwd_waited_in_opt);
+            }
+            if (opt_host > 0.0001)
+            {
+                print_sub("  `- Host Overhead (Sync/Clip)", opt_host);
+            }
+        }
+    }
 
-//     double v_opt_step = calc(opt_step_ms);
-//     double v_opt_record = calc(opt_record_ms);
-//     double v_opt_exec = calc(opt_exec_ms);
-//     double v_opt_submit = calc(opt_gpu_submit_ms);
-//     double v_opt_fence = calc(opt_fence_wait_ms);
-//     double opt_sub_sum = v_opt_record + v_opt_exec;
-//     double opt_overhead = std::max(0.0, v_opt_step - opt_sub_sum);
+    if (!has_fwd_loss && !is_chained_bwd_opt && (total_time > sum_major + v_sched_step + 0.001))
+    {
+        double step_exec = total_time - (sum_major + v_sched_step);
+        print_major(std::format("[{}] MODEL_TRAIN_STEP", stage_num++), step_exec);
+        sum_major += step_exec;
+    }
 
-//     double v_sched_step = calc(sched_step_ms);
+    if (v_sched_step > 0.0001)
+    {
+        print_major(std::format("[{}] SCHED_STEP", stage_num++), v_sched_step);
+        sum_major += v_sched_step;
+    }
 
-//     double major_stages_sum = v_data_prep + v_reset_grad + v_fwd_loss_bwd + v_opt_step + v_sched_step;
-//     double batch_loop_overhead = std::max(0.0, total - major_stages_sum);
+    if (total_time > sum_major + 0.001)
+    {
+        double overhead = total_time - sum_major;
+        print_major(std::format("[{}] LOOP_OVERHEAD", stage_num++), overhead);
+    }
 
-//     std::cout << "\n  +----------------- [Training Step Profiler: Batch " << batch_idx << "/" << total_batches << "] -----------------+\n";
-//     std::cout << "  | Major Stage / Sub-operation   |   Time (ms)   |  Ratio (%) | Note / Breakdown          |\n";
-//     std::cout << "  +-------------------------------+---------------+------------+---------------------------+\n";
-//     std::cout << std::fixed << std::setprecision(2);
+    os << std::format("+{}+{}+{}+\n", line37, line12, line10);
+    print_major("TOTAL_BATCH", total_time);
 
-//     // [1] Data Prep
-//     std::cout << "  | [1] Data Prep & Upload        | " << std::setw(10) << v_data_prep << " ms | " << std::setw(8) << (v_data_prep / total * 100.0) << " % | CPU tokens + setData()    |\n";
-
-//     // [2] Reset Gradients
-//     std::cout << "  | [2] Reset Gradients           | " << std::setw(10) << v_reset_grad << " ms | " << std::setw(8) << (v_reset_grad / total * 100.0) << " % | Gradient buffer reset     |\n";
-
-//     // [3] Forward + Loss + Backward
-//     std::cout << "  | [3] Forward + Loss + Backward | " << std::setw(10) << v_fwd_loss_bwd << " ms | " << std::setw(8) << (v_fwd_loss_bwd / total * 100.0) << " % | Complete FWD + BWD        |\n";
-//     std::cout << "  |   - Fwd Graph Record (CPU)    | " << std::setw(10) << v_fwd_record << " ms | " << std::setw(8) << (v_fwd_record / total * 100.0) << " % | CPU layer graph build     |\n";
-//     std::cout << "  |   - Fwd + Loss GPU Execute    | " << std::setw(10) << v_fwd_exec << " ms | " << std::setw(8) << (v_fwd_exec / total * 100.0) << " % | (" << std::setw(3) << fwd_loss_gpu_nodes << " nodes)               |\n";
-//     if (v_fwd_submit > 0.001 || v_fwd_fence > 0.001)
-//     {
-//         std::cout << "  |       * CPU Submit to Queue   | " << std::setw(10) << v_fwd_submit << " ms | " << std::setw(8) << (v_fwd_submit / total * 100.0) << " % | Compile & vkQueueSubmit   |\n";
-//         std::cout << "  |       * GPU Fence Wait        | " << std::setw(10) << v_fwd_fence << " ms | " << std::setw(8) << (v_fwd_fence / total * 100.0) << " % | vkWaitForFences (GPU work)|\n";
-//     }
-//     std::cout << "  |   - Loss Buffer Readback      | " << std::setw(10) << v_loss_read << " ms | " << std::setw(8) << (v_loss_read / total * 100.0) << " % | Read loss scalar from GPU |\n";
-//     if (v_mul_scalar > 0.001)
-//     {
-//         std::cout << "  |   - mulScalar Gradient Scale  | " << std::setw(10) << v_mul_scalar << " ms | " << std::setw(8) << (v_mul_scalar / total * 100.0) << " % | d_logits mulScalar        |\n";
-//     }
-//     std::cout << "  |   - Bwd Graph Record (CPU)    | " << std::setw(10) << v_bwd_record << " ms | " << std::setw(8) << (v_bwd_record / total * 100.0) << " % | CPU backward graph build  |\n";
-//     if (is_chained_bwd_opt)
-//     {
-//         std::cout << "  |   - Bwd + Adam GPU Execute    | " << std::setw(10) << v_bwd_exec << " ms | " << std::setw(8) << (v_bwd_exec / total * 100.0) << " % | (" << std::setw(3) << bwd_gpu_nodes << " nodes incl. Adam)    |\n";
-//     }
-//     else
-//     {
-//         std::cout << "  |   - Bwd GPU Execute           | " << std::setw(10) << v_bwd_exec << " ms | " << std::setw(8) << (v_bwd_exec / total * 100.0) << " % | (" << std::setw(3) << bwd_gpu_nodes << " nodes)               |\n";
-//     }
-//     if (v_bwd_submit > 0.001 || v_bwd_fence > 0.001)
-//     {
-//         std::cout << "  |       * CPU Submit to Queue   | " << std::setw(10) << v_bwd_submit << " ms | " << std::setw(8) << (v_bwd_submit / total * 100.0) << " % | Compile & vkQueueSubmit   |\n";
-//         std::cout << "  |       * GPU Fence Wait        | " << std::setw(10) << v_bwd_fence << " ms | " << std::setw(8) << (v_bwd_fence / total * 100.0) << " % | vkWaitForFences (GPU work)|\n";
-//     }
-//     if (fwd_bwd_overhead > 0.01)
-//     {
-//         std::cout << "  |   - FWD/BWD Pipeline Overhead | " << std::setw(10) << fwd_bwd_overhead << " ms | " << std::setw(8) << (fwd_bwd_overhead / total * 100.0) << " % | Unmeasured dispatch/alloc |\n";
-//     }
-
-//     // [4] Optimizer Step
-//     if (is_chained_bwd_opt)
-//     {
-//         std::cout << "  | [4] Optimizer Step (Chained)  | " << std::setw(10) << v_opt_step << " ms | " << std::setw(8) << (v_opt_step / total * 100.0) << " % | Chained with BWD (0 GPU wait) |\n";
-//         std::cout << "  |   - Adam Graph Record (CPU)   | " << std::setw(10) << v_opt_record << " ms | " << std::setw(8) << (v_opt_record / total * 100.0) << " % | CPU Adam node build       |\n";
-//         std::cout << "  |   - Adam GPU Execute          | " << std::setw(10) << 0.00 << " ms | " << std::setw(8) << 0.00 << " % | (Fused in BWD Chained)    |\n";
-//         if (opt_overhead > 0.01)
-//         {
-//             std::cout << "  |   - Optimizer Step Overhead   | " << std::setw(10) << opt_overhead << " ms | " << std::setw(8) << (opt_overhead / total * 100.0) << " % | Clipping/scaling overhead |\n";
-//         }
-//     }
-//     else
-//     {
-//         std::cout << "  | [4] Optimizer Step            | " << std::setw(10) << v_opt_step << " ms | " << std::setw(8) << (v_opt_step / total * 100.0) << " % | Adam update pipeline      |\n";
-//         std::cout << "  |   - Adam Graph Record (CPU)   | " << std::setw(10) << v_opt_record << " ms | " << std::setw(8) << (v_opt_record / total * 100.0) << " % | CPU Adam node build       |\n";
-//         std::cout << "  |   - Adam GPU Execute          | " << std::setw(10) << v_opt_exec << " ms | " << std::setw(8) << (v_opt_exec / total * 100.0) << " % | (" << std::setw(3) << opt_gpu_nodes << " nodes)               |\n";
-//         if (v_opt_submit > 0.001 || v_opt_fence > 0.001)
-//         {
-//             std::cout << "  |       * CPU Submit to Queue   | " << std::setw(10) << v_opt_submit << " ms | " << std::setw(8) << (v_opt_submit / total * 100.0) << " % | Compile & vkQueueSubmit   |\n";
-//             std::cout << "  |       * GPU Fence Wait        | " << std::setw(10) << v_opt_fence << " ms | " << std::setw(8) << (v_opt_fence / total * 100.0) << " % | vkWaitForFences (GPU work)|\n";
-//         }
-//         if (opt_overhead > 0.01)
-//         {
-//             std::cout << "  |   - Optimizer Step Overhead   | " << std::setw(10) << opt_overhead << " ms | " << std::setw(8) << (opt_overhead / total * 100.0) << " % | Clipping/scaling overhead |\n";
-//         }
-//     }
-
-//     // [5] LR Scheduler Step
-//     if (v_sched_step > 0.001)
-//     {
-//         std::cout << "  | [5] LR Scheduler Step         | " << std::setw(10) << v_sched_step << " ms | " << std::setw(8) << (v_sched_step / total * 100.0) << " % | Learning rate update      |\n";
-//     }
-
-//     // [6] Batch Loop Level Overhead
-//     if (batch_loop_overhead > 0.01)
-//     {
-//         std::cout << "  | [6] Loop Level Overhead / Sync| " << std::setw(10) << batch_loop_overhead << " ms | " << std::setw(8) << (batch_loop_overhead / total * 100.0) << " % | CPU loop/idle/sync gap    |\n";
-//     }
-
-//     std::cout << "  +-------------------------------+---------------+------------+---------------------------+\n";
-//     std::cout << "  | Total Measured Batch Latency  | " << std::setw(10) << total << " ms |   100.00 % | Speed: " << std::setprecision(0) << tok_s << " tok/s       |\n";
-//     std::cout << "  +-----------------------------------------------------------------------------------+\n\n";
-// }
+    os << std::format("+{}+\n", line61);
+    os << std::format("| {:<59} |\n", "GPU Dispatch Node Counts:");
+    for (Node_Stage node_stage : magic_enum::enum_values<Node_Stage>())
+    {
+        std::string_view name = magic_enum::enum_name(node_stage);
+        size_t nodes = node_counts[std::to_underlying(node_stage)];
+        std::string node_line = std::format("  - {:<28} : {}", name, nodes);
+        os << std::format("| {:<59} |\n", node_line);
+    }
+    os << std::format("+{}+\n", line61);
+}

@@ -22,7 +22,7 @@ void main() {
 
     uint j = idx % pcs.dim;
     float norm_val = (data[idx] - mean_data[j]) / sqrt(var_data[j] + pcs.epsilon);
-    
+
     x_hat[idx] = norm_val;
     out_data[idx] = gamma_data[j] * norm_val + beta_data[j];
 }

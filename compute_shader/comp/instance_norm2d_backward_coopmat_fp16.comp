@@ -186,7 +186,7 @@ void main() {
         }
         barrier();
 
-        if ((m + TILE_M <= M) && (tile_c + TILE_N <= C)) {
+        if ((m + TILE_M <= M) && (tile_c + TILE_N <= C) && ((C & 7u) == 0u)) {
             coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> res;
             coopMatLoad(res, smem_in, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
             coopMatStore(res, dX, batch_offset + m * C + tile_c, C, gl_CooperativeMatrixLayoutRowMajor);

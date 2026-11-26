@@ -12,10 +12,8 @@ layout(push_constant) uniform Cast_Dimensions {
 } dims;
 
 void main() {
-    uint elem_idx = gl_GlobalInvocationID.x;
+    uint elem_idx = (gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 256u + gl_LocalInvocationID.x;
     if (elem_idx < dims.total_elements) {
-        float val = data_a[elem_idx];
-        if (isnan(val) || isinf(val)) val = 0.0;
-        data_c[elem_idx] = float16_t(clamp(val, -65504.0, 65504.0));
+        data_c[elem_idx] = float16_t(data_a[elem_idx]);
     }
 }

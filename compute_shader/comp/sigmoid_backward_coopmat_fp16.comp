@@ -29,7 +29,7 @@ shared float16_t smem_out[TILE_M * TILE_N];
 
 void main() {
     uint lane_id = gl_LocalInvocationID.x;
-    uint tile_base = gl_WorkGroupID.x * (TILE_M * TILE_N);
+    uint tile_base = (gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * (TILE_M * TILE_N);
 
     if (tile_base >= pc.total_elements) return;
 

@@ -1,0 +1,101 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer GradOutBuffer  { float16_t grad_out[]; };
+layout(std430, binding = 0) readonly buffer GradOutBuffer4 { f16vec4   grad_out4[]; };
+layout(std430, binding = 1) readonly buffer InBuffer       { float16_t in_data[]; };
+layout(std430, binding = 1) readonly buffer InBuffer4      { f16vec4   in_data4[]; };
+layout(std430, binding = 2) readonly buffer GammaBuffer    { float16_t gamma_data[]; };
+layout(std430, binding = 2) readonly buffer GammaBuffer4   { f16vec4   gamma4[]; };
+layout(std430, binding = 3) readonly buffer InvRmsBuffer   { float inv_rms_data[]; };
+layout(std430, binding = 4) readonly buffer ResGradBuffer  { float16_t res_grad[]; };
+layout(std430, binding = 4) readonly buffer ResGradBuffer4 { f16vec4   res_grad4[]; };
+layout(std430, binding = 5) writeonly buffer OutSumBuffer    { float16_t out_sum[]; };
+layout(std430, binding = 5) writeonly buffer OutSumBuffer4   { f16vec4   out_sum4[]; };
+layout(std430, binding = 6) writeonly buffer OutScaledBuffer { float16_t out_scaled[]; };
+layout(std430, binding = 6) writeonly buffer OutScaledBuffer4{ f16vec4   out_scaled4[]; };
+
+layout(push_constant) uniform Constants {
+    uint batch_size;
+    uint dim;
+    float scale;
+    uint write_scaled;
+} pcs;
+
+shared float s_wave_sums[16];
+
+float blockReduceSum(float val) {
+    val = subgroupAdd(val);
+    if (gl_SubgroupInvocationID == 0u) {
+        s_wave_sums[gl_SubgroupID] = val;
+    }
+    barrier();
+    float total = 0.0;
+    for (uint i = 0u; i < gl_NumSubgroups; ++i) {
+        total += s_wave_sums[i];
+    }
+    return total;
+}
+
+void main() {
+    uint dim = pcs.dim;
+    if (dim == 0u || pcs.batch_size == 0u) return;
+    uint row = gl_WorkGroupID.x;
+    if (row >= pcs.batch_size) return;
+
+    uint lid = gl_LocalInvocationID.x;
+    float inv_rms = inv_rms_data[row];
+    float inv_dim = 1.0 / float(dim);
+
+    if (dim <= 256u && (dim & 3u) == 0u) {
+        uint vec_count = dim >> 2u;
+        uint rbase4 = row * vec_count;
+        vec4 dy_g = vec4(0.0);
+        vec4 xh   = vec4(0.0);
+        float local_sum = 0.0;
+
+        if (lid < vec_count) {
+            uint vidx = rbase4 + lid;
+            dy_g = vec4(grad_out4[vidx]) * vec4(gamma4[lid]);
+            xh   = vec4(in_data4[vidx]) * inv_rms;
+            local_sum = dot(dy_g, xh);
+        }
+
+        float coeff = blockReduceSum(local_sum) * inv_dim;
+
+        if (lid < vec_count) {
+            uint vidx = rbase4 + lid;
+            vec4 dx = inv_rms * fma(-xh, vec4(coeff), dy_g);
+            vec4 s  = clamp(vec4(res_grad4[vidx]) + dx, vec4(-65504.0), vec4(65504.0));
+            out_sum4[vidx] = f16vec4(s);
+            if (pcs.write_scaled != 0u) {
+                out_scaled4[vidx] = f16vec4(clamp(s * pcs.scale, vec4(-65504.0), vec4(65504.0)));
+            }
+        }
+    } else {
+        uint row_offset = row * dim;
+        float local_sum = 0.0;
+        for (uint c = lid; c < dim; c += 64u) {
+            float dy_g = float(grad_out[row_offset + c]) * float(gamma_data[c]);
+            float xh   = float(in_data[row_offset + c]) * inv_rms;
+            local_sum  = fma(dy_g, xh, local_sum);
+        }
+
+        float coeff = blockReduceSum(local_sum) * inv_dim;
+
+        for (uint c = lid; c < dim; c += 64u) {
+            float dy_g = float(grad_out[row_offset + c]) * float(gamma_data[c]);
+            float xh   = float(in_data[row_offset + c]) * inv_rms;
+            float dx   = inv_rms * fma(-xh, coeff, dy_g);
+            float s    = clamp(float(res_grad[row_offset + c]) + dx, -65504.0, 65504.0);
+            out_sum[row_offset + c] = float16_t(s);
+            if (pcs.write_scaled != 0u) {
+                out_scaled[row_offset + c] = float16_t(clamp(s * pcs.scale, -65504.0, 65504.0));
+            }
+        }
+    }
+}

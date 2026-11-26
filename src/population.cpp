@@ -78,10 +78,20 @@ Population::Population(size_t _population_size,
       state_dimension(_state_dimension),
       action_space_size(_action_dimension),
       execution_target(_execution_target),
-      random_engine(_seed)
+      random_engine(_seed),
+      is_mixed_precision_enabled(_template_net.isMixedPrecisionEnabled())
 {
+    if (_population_size == 0 || _state_dimension == 0 || _action_dimension == 0)
+    {
+        throw std::invalid_argument("Population dimensions must be greater than zero");
+    }
+
     for (const auto &layer_ptr : _template_net.getLayers())
     {
+        if (!layer_ptr)
+        {
+            throw std::invalid_argument("Population: Null layer in template network");
+        }
         if (!layer_ptr->supportsPopulationBatch())
         {
             throw std::invalid_argument(std::format("Layer {} not supported in population mode",
@@ -89,7 +99,15 @@ Population::Population(size_t _population_size,
         }
 
         Population_Layer_Adapter adapter;
-        adapter.template_layer = layer_ptr.get();
+        auto cloned_template = layer_ptr->clone();
+        if (!cloned_template)
+        {
+            throw std::runtime_error("Population: Failed to clone template layer");
+        }
+        cloned_template->setExecutionTarget(_execution_target);
+        cloned_template->setTrainingMode(false);
+        cloned_template->setMixedPrecision(is_mixed_precision_enabled);
+        adapter.template_layer = std::shared_ptr<const ILayer>(std::move(cloned_template));
         adapter.param_shapes = layer_ptr->getPopulationParameterDims();
         adapter.param_evolvable = layer_ptr->getPopulationParameterIsEvolvable();
 
@@ -114,6 +132,10 @@ Population::Population(size_t _population_size,
     }
 
     batched_input_tensor = Tensor(Shape{_population_size, 1, _state_dimension}, _execution_target);
+    if (is_mixed_precision_enabled && _execution_target == Execution_Target::VULKAN_GPU)
+    {
+        batched_input_tensor.setDataType(Data_Type::FLOAT16);
+    }
     batched_input_host.assign(_population_size * _state_dimension, 0.0f);
 
     initializeWeights();
@@ -130,12 +152,19 @@ size_t Population::selectAction(size_t individual_index, const float *state_data
     {
         throw std::out_of_range("Individual index out of range in selectAction");
     }
+    if (!state_data)
+    {
+        throw std::invalid_argument("Population::selectAction: Null state_data pointer");
+    }
 
-    Neural_Network individual_net = getIndividual(individual_index);
+    Neural_Network individual_net = is_mixed_precision_enabled
+        ? getIndividual(individual_index)
+        : buildCpuIndividual(individual_index);
+    const Execution_Target infer_target = individual_net.getExecutionTarget();
     std::vector<float> input_vector(state_data, state_data + state_dimension);
-    Tensor input_tensor(1, state_dimension, std::move(input_vector), execution_target);
+    Tensor input_tensor(1, state_dimension, std::move(input_vector), infer_target);
     Tensor output_tensor = individual_net.forward(input_tensor);
-    if (execution_target == Execution_Target::VULKAN_GPU)
+    if (infer_target == Execution_Target::VULKAN_GPU)
     {
         Execution_Engine::getInstance().executeGraph();
     }
@@ -157,9 +186,13 @@ size_t Population::selectAction(size_t individual_index, const Tensor &state_ten
         throw std::out_of_range("Individual index out of range in selectAction");
     }
 
-    Neural_Network individual_net = getIndividual(individual_index);
+    const bool use_cpu_fast_path = !is_mixed_precision_enabled &&
+                                   state_tensor.getExecutionTarget() == Execution_Target::CPU;
+    Neural_Network individual_net = use_cpu_fast_path
+        ? buildCpuIndividual(individual_index)
+        : getIndividual(individual_index);
     Tensor output_tensor = individual_net.forward(state_tensor);
-    if (execution_target == Execution_Target::VULKAN_GPU)
+    if (individual_net.getExecutionTarget() == Execution_Target::VULKAN_GPU)
     {
         Execution_Engine::getInstance().executeGraph();
     }
@@ -184,6 +217,16 @@ void Population::selectBatchActions(const float *states_flat,
         return;
     }
 
+    if (!states_flat || !actions_out)
+    {
+        throw std::invalid_argument("Population::selectBatchActions: Null pointer passed for states_flat or actions_out");
+    }
+
+    if (!active_indices && active_count > population_size)
+    {
+        throw std::out_of_range("Population::selectBatchActions: active_count exceeds population_size");
+    }
+
     if (batched_input_host.size() != population_size * state_dimension)
     {
         batched_input_host.assign(population_size * state_dimension, 0.0f);
@@ -198,12 +241,13 @@ void Population::selectBatchActions(const float *states_flat,
         for (size_t i = 0; i < active_count; ++i)
         {
             size_t agent_idx = active_indices ? active_indices[i] : i;
-            if (agent_idx < population_size)
+            if (agent_idx >= population_size)
             {
-                const float *src = states_flat + (i * state_dimension);
-                float *dst = batched_input_host.data() + (agent_idx * state_dimension);
-                std::copy(src, src + state_dimension, dst);
+                throw std::out_of_range("Population::selectBatchActions: active agent index out of range");
             }
+            const float *src = states_flat + (i * state_dimension);
+            float *dst = batched_input_host.data() + (agent_idx * state_dimension);
+            std::copy(src, src + state_dimension, dst);
         }
     }
 
@@ -228,7 +272,15 @@ void Population::selectBatchActions(const float *states_flat,
     for (size_t i = 0; i < active_count; ++i)
     {
         size_t agent_idx = active_indices ? active_indices[i] : i;
+        if (agent_idx >= population_size)
+        {
+            throw std::out_of_range("Population::selectBatchActions: active agent index out of range");
+        }
         size_t offset = agent_idx * action_space_size;
+        if (offset + action_space_size > action_values.size())
+        {
+            throw std::out_of_range("Population::selectBatchActions: action_values output size mismatch");
+        }
         size_t best_action = 0;
         float max_value = action_values[offset];
         for (size_t a = 1; a < action_space_size; ++a)
@@ -251,18 +303,50 @@ void Population::evolve(const float *fitness_scores,
                         size_t tournament_size,
                         size_t explicit_elite_count)
 {
+    if (population_size == 0)
+    {
+        return;
+    }
+    if (!fitness_scores)
+    {
+        throw std::invalid_argument("Population::evolve: fitness_scores is null");
+    }
+    if (!std::isfinite(elitism_ratio) || !std::isfinite(mutation_rate) ||
+        !std::isfinite(mutation_strength) || mutation_strength < 0.0f ||
+        !std::isfinite(crossover_rate))
+    {
+        throw std::invalid_argument("Population::evolve: Hyperparameters must be finite and mutation_strength >= 0");
+    }
+
+    auto scoreHigher = [fitness_scores](size_t a, size_t b) -> bool
+    {
+        const float fa = fitness_scores[a];
+        const float fb = fitness_scores[b];
+        const bool na = std::isnan(fa);
+        const bool nb = std::isnan(fb);
+        if (na != nb)
+        {
+            return !na;
+        }
+        if (na && nb)
+        {
+            return false;
+        }
+        return fa > fb;
+    };
+
     std::vector<size_t> indices(population_size);
     std::iota(indices.begin(), indices.end(), 0);
 
-    std::sort(indices.begin(), indices.end(), [fitness_scores](size_t a, size_t b)
-              { return fitness_scores[a] > fitness_scores[b]; });
+    std::sort(indices.begin(), indices.end(), scoreHigher);
 
+    const float clamped_elitism = std::clamp(elitism_ratio, 0.0f, 1.0f);
     size_t elite_count = (explicit_elite_count > 0)
         ? std::min(explicit_elite_count, population_size)
-        : std::max<size_t>(1, static_cast<size_t>(population_size * elitism_ratio));
+        : std::min(population_size, std::max<size_t>(1, static_cast<size_t>(population_size * clamped_elitism)));
 
     std::uniform_int_distribution<size_t> pop_dist(0, population_size - 1);
-    std::normal_distribution<float> norm_dist(0.0f, mutation_strength);
+    std::normal_distribution<float> norm_dist(0.0f, mutation_strength > 0.0f ? mutation_strength : 1.0f);
     std::uniform_real_distribution<float> prob_dist(0.0f, 1.0f);
 
     std::vector<std::vector<std::vector<float>>> prev_params;
@@ -278,13 +362,11 @@ void Population::evolve(const float *fitness_scores,
             return pop_dist(random_engine);
         }
         size_t best_cand = pop_dist(random_engine);
-        float best_fit = fitness_scores[best_cand];
         for (size_t t = 1; t < tournament_size; ++t)
         {
             size_t cand = pop_dist(random_engine);
-            if (fitness_scores[cand] > best_fit)
+            if (scoreHigher(cand, best_cand))
             {
-                best_fit = fitness_scores[cand];
                 best_cand = cand;
             }
         }
@@ -334,7 +416,7 @@ void Population::evolve(const float *fitness_scores,
                 for (size_t k = 0; k < len; ++k)
                 {
                     float val = (prob_dist(random_engine) < crossover_rate) ? prev[pb + k] : prev[pa + k];
-                    if (prob_dist(random_engine) < mutation_rate)
+                    if (mutation_strength > 0.0f && prob_dist(random_engine) < mutation_rate)
                     {
                         val += norm_dist(random_engine);
                     }
@@ -347,16 +429,11 @@ void Population::evolve(const float *fitness_scores,
     syncHostToDevice();
 }
 
-Neural_Network Population::getIndividual(size_t index) const
+Neural_Network Population::buildCpuIndividual(size_t index) const
 {
     if (index >= population_size)
     {
-        throw std::out_of_range("Individual index out of range in getIndividual");
-    }
-
-    if (execution_target == Execution_Target::VULKAN_GPU)
-    {
-        syncDeviceToHost();
+        throw std::out_of_range("Individual index out of range");
     }
 
     Neural_Network individual_net(Execution_Target::CPU);
@@ -372,7 +449,22 @@ Neural_Network Population::getIndividual(size_t index) const
         }
         individual_net.addLayer(std::move(layer_clone));
     }
+    individual_net.setTrainingMode(false);
+    individual_net.enableMixedPrecision(is_mixed_precision_enabled);
+    return individual_net;
+}
+
+Neural_Network Population::getIndividual(size_t index) const
+{
+    if (index >= population_size)
+    {
+        throw std::out_of_range("Individual index out of range in getIndividual");
+    }
+
+    Neural_Network individual_net = buildCpuIndividual(index);
     individual_net.setExecutionTarget(execution_target);
+    individual_net.setTrainingMode(false);
+    individual_net.enableMixedPrecision(is_mixed_precision_enabled);
     return individual_net;
 }
 
@@ -427,12 +519,19 @@ size_t Population::getBestIndividualIndex(const float *fitness_scores) const noe
     }
     size_t best_idx = 0;
     float max_fitness = fitness_scores[0];
+    bool best_is_nan = std::isnan(max_fitness);
     for (size_t i = 1; i < population_size; ++i)
     {
-        if (fitness_scores[i] > max_fitness)
+        float val = fitness_scores[i];
+        if (std::isnan(val))
         {
-            max_fitness = fitness_scores[i];
+            continue;
+        }
+        if (best_is_nan || val > max_fitness)
+        {
+            max_fitness = val;
             best_idx = i;
+            best_is_nan = false;
         }
     }
     return best_idx;
@@ -448,11 +547,6 @@ bool Population::saveIndividual(size_t individual_index, const std::string &file
     if (individual_index >= population_size)
     {
         return false;
-    }
-
-    if (execution_target == Execution_Target::VULKAN_GPU)
-    {
-        syncDeviceToHost();
     }
 
     std::ofstream out_file(file_path, std::ios::binary);
@@ -492,7 +586,8 @@ bool Population::saveIndividual(size_t individual_index, const std::string &file
         }
     }
 
-    return true;
+    out_file.flush();
+    return static_cast<bool>(out_file);
 }
 
 bool Population::saveBestIndividual(const std::string &file_path, const float *fitness_scores) const
@@ -508,7 +603,7 @@ bool Population::saveIndividualAsInference(size_t individual_index, const std::s
     }
     try
     {
-        Neural_Network individual_net = getIndividual(individual_index);
+        Neural_Network individual_net = buildCpuIndividual(individual_index);
         individual_net.saveInference(file_path);
         return true;
     }
@@ -540,16 +635,15 @@ bool Population::loadIndividual(size_t individual_index, const std::string &file
         return false;
     }
 
-    char magic_header[4];
-    in_file.read(magic_header, 4);
-    if (magic_header[0] != 'N' || magic_header[1] != 'N' || magic_header[2] != 'I' || magic_header[3] != 'K')
+    char magic_header[4] = {};
+    if (!in_file.read(magic_header, 4) ||
+        magic_header[0] != 'N' || magic_header[1] != 'N' || magic_header[2] != 'I' || magic_header[3] != 'K')
     {
         return false;
     }
 
     uint32_t file_version = 0;
-    in_file.read(reinterpret_cast<char *>(&file_version), sizeof(file_version));
-    if (file_version != 1)
+    if (!in_file.read(reinterpret_cast<char *>(&file_version), sizeof(file_version)) || file_version != 1)
     {
         return false;
     }
@@ -558,42 +652,68 @@ bool Population::loadIndividual(size_t individual_index, const std::string &file
     uint64_t action_dim_val = 0;
     uint64_t layer_count_val = 0;
 
-    in_file.read(reinterpret_cast<char *>(&state_dim_val), sizeof(state_dim_val));
-    in_file.read(reinterpret_cast<char *>(&action_dim_val), sizeof(action_dim_val));
-    in_file.read(reinterpret_cast<char *>(&layer_count_val), sizeof(layer_count_val));
+    if (!in_file.read(reinterpret_cast<char *>(&state_dim_val), sizeof(state_dim_val)) ||
+        !in_file.read(reinterpret_cast<char *>(&action_dim_val), sizeof(action_dim_val)) ||
+        !in_file.read(reinterpret_cast<char *>(&layer_count_val), sizeof(layer_count_val)))
+    {
+        return false;
+    }
 
     if (state_dim_val != state_dimension || action_dim_val != action_space_size || layer_count_val != layer_adapters.size())
     {
         return false;
     }
 
-    for (auto &adapter : layer_adapters)
+    std::vector<std::vector<std::vector<float>>> staging(layer_adapters.size());
+    for (size_t l = 0; l < layer_adapters.size(); ++l)
     {
-        Layer_Type layer_type;
-        in_file.read(reinterpret_cast<char *>(&layer_type), sizeof(layer_type));
-        if (layer_type != adapter.template_layer->getLayerType())
+        const auto &adapter = layer_adapters[l];
+        Layer_Type layer_type{};
+        if (!in_file.read(reinterpret_cast<char *>(&layer_type), sizeof(layer_type)) ||
+            layer_type != adapter.template_layer->getLayerType())
         {
             return false;
         }
 
         uint64_t param_count = 0;
-        in_file.read(reinterpret_cast<char *>(&param_count), sizeof(param_count));
-        if (param_count != adapter.param_shapes.size())
+        if (!in_file.read(reinterpret_cast<char *>(&param_count), sizeof(param_count)) ||
+            param_count != adapter.param_shapes.size())
         {
             return false;
         }
 
+        staging[l].resize(adapter.param_shapes.size());
         for (size_t p = 0; p < adapter.param_shapes.size(); ++p)
         {
             uint64_t len = 0;
-            in_file.read(reinterpret_cast<char *>(&len), sizeof(len));
-            if (len != adapter.param_numel[p])
+            if (!in_file.read(reinterpret_cast<char *>(&len), sizeof(len)) ||
+                len != adapter.param_numel[p])
             {
                 return false;
             }
 
-            float *ptr = adapter.host_params[p].data() + individual_index * len;
-            in_file.read(reinterpret_cast<char *>(ptr), len * sizeof(float));
+            if (len > 0)
+            {
+                staging[l][p].resize(static_cast<size_t>(len));
+                if (!in_file.read(reinterpret_cast<char *>(staging[l][p].data()),
+                                  static_cast<std::streamsize>(len * sizeof(float))))
+                {
+                    return false;
+                }
+            }
+        }
+    }
+
+    for (size_t l = 0; l < layer_adapters.size(); ++l)
+    {
+        auto &adapter = layer_adapters[l];
+        for (size_t p = 0; p < adapter.param_shapes.size(); ++p)
+        {
+            size_t len = adapter.param_numel[p];
+            if (len > 0)
+            {
+                std::copy_n(staging[l][p].data(), len, adapter.host_params[p].data() + individual_index * len);
+            }
         }
     }
 
@@ -608,11 +728,6 @@ bool Population::loadBestIndividual(const std::string &file_path)
 
 bool Population::saveCheckpoint(const std::string &file_path, uint64_t generation, const float *fitness_scores) const
 {
-    if (execution_target == Execution_Target::VULKAN_GPU)
-    {
-        syncDeviceToHost();
-    }
-
     std::ofstream out_file(file_path, std::ios::binary);
     if (!out_file.is_open())
     {
@@ -650,7 +765,7 @@ bool Population::saveCheckpoint(const std::string &file_path, uint64_t generatio
             uint64_t len = static_cast<uint64_t>(adapter.param_numel[p]);
             out_file.write(reinterpret_cast<const char *>(&len), sizeof(len));
             out_file.write(reinterpret_cast<const char *>(adapter.host_params[p].data()),
-                           adapter.host_params[p].size() * sizeof(float));
+                           static_cast<std::streamsize>(adapter.host_params[p].size() * sizeof(float)));
         }
     }
 
@@ -658,10 +773,12 @@ bool Population::saveCheckpoint(const std::string &file_path, uint64_t generatio
     out_file.write(reinterpret_cast<const char *>(&has_fitness), sizeof(has_fitness));
     if (has_fitness != 0)
     {
-        out_file.write(reinterpret_cast<const char *>(fitness_scores), population_size * sizeof(float));
+        out_file.write(reinterpret_cast<const char *>(fitness_scores),
+                       static_cast<std::streamsize>(population_size * sizeof(float)));
     }
 
-    return true;
+    out_file.flush();
+    return static_cast<bool>(out_file);
 }
 
 bool Population::loadCheckpoint(const std::string &file_path, uint64_t &generation, float *fitness_scores_out)
@@ -672,16 +789,15 @@ bool Population::loadCheckpoint(const std::string &file_path, uint64_t &generati
         return false;
     }
 
-    char magic_header[4];
-    in_file.read(magic_header, 4);
-    if (magic_header[0] != 'N' || magic_header[1] != 'N' || magic_header[2] != 'P' || magic_header[3] != 'K')
+    char magic_header[4] = {};
+    if (!in_file.read(magic_header, 4) ||
+        magic_header[0] != 'N' || magic_header[1] != 'N' || magic_header[2] != 'P' || magic_header[3] != 'K')
     {
         return false;
     }
 
     uint32_t file_version = 0;
-    in_file.read(reinterpret_cast<char *>(&file_version), sizeof(file_version));
-    if (file_version != 1)
+    if (!in_file.read(reinterpret_cast<char *>(&file_version), sizeof(file_version)) || file_version != 1)
     {
         return false;
     }
@@ -692,68 +808,128 @@ bool Population::loadCheckpoint(const std::string &file_path, uint64_t &generati
     uint64_t action_dim_val = 0;
     uint64_t layer_count_val = 0;
 
-    in_file.read(reinterpret_cast<char *>(&generation_val), sizeof(generation_val));
-    in_file.read(reinterpret_cast<char *>(&pop_size_val), sizeof(pop_size_val));
-    in_file.read(reinterpret_cast<char *>(&state_dim_val), sizeof(state_dim_val));
-    in_file.read(reinterpret_cast<char *>(&action_dim_val), sizeof(action_dim_val));
-    in_file.read(reinterpret_cast<char *>(&layer_count_val), sizeof(layer_count_val));
+    if (!in_file.read(reinterpret_cast<char *>(&generation_val), sizeof(generation_val)) ||
+        !in_file.read(reinterpret_cast<char *>(&pop_size_val), sizeof(pop_size_val)) ||
+        !in_file.read(reinterpret_cast<char *>(&state_dim_val), sizeof(state_dim_val)) ||
+        !in_file.read(reinterpret_cast<char *>(&action_dim_val), sizeof(action_dim_val)) ||
+        !in_file.read(reinterpret_cast<char *>(&layer_count_val), sizeof(layer_count_val)))
+    {
+        return false;
+    }
 
     if (pop_size_val != population_size || state_dim_val != state_dimension || action_dim_val != action_space_size || layer_count_val != layer_adapters.size())
     {
         return false;
     }
 
-    generation = generation_val;
-
-    for (auto &adapter : layer_adapters)
+    std::vector<std::vector<std::vector<float>>> staging(layer_adapters.size());
+    for (size_t l = 0; l < layer_adapters.size(); ++l)
     {
-        Layer_Type layer_type;
-        in_file.read(reinterpret_cast<char *>(&layer_type), sizeof(layer_type));
-        if (layer_type != adapter.template_layer->getLayerType())
+        const auto &adapter = layer_adapters[l];
+        Layer_Type layer_type{};
+        if (!in_file.read(reinterpret_cast<char *>(&layer_type), sizeof(layer_type)) ||
+            layer_type != adapter.template_layer->getLayerType())
         {
             return false;
         }
 
         uint64_t param_count = 0;
-        in_file.read(reinterpret_cast<char *>(&param_count), sizeof(param_count));
-        if (param_count != adapter.param_shapes.size())
+        if (!in_file.read(reinterpret_cast<char *>(&param_count), sizeof(param_count)) ||
+            param_count != adapter.param_shapes.size())
         {
             return false;
         }
 
+        staging[l].resize(adapter.param_shapes.size());
         for (size_t p = 0; p < adapter.param_shapes.size(); ++p)
         {
             uint64_t len = 0;
-            in_file.read(reinterpret_cast<char *>(&len), sizeof(len));
-            if (len != adapter.param_numel[p])
+            if (!in_file.read(reinterpret_cast<char *>(&len), sizeof(len)) ||
+                len != adapter.param_numel[p])
             {
                 return false;
             }
 
-            in_file.read(reinterpret_cast<char *>(adapter.host_params[p].data()),
-                         adapter.host_params[p].size() * sizeof(float));
+            size_t expected_count = adapter.host_params[p].size();
+            staging[l][p].resize(expected_count);
+            if (expected_count > 0 &&
+                !in_file.read(reinterpret_cast<char *>(staging[l][p].data()),
+                              static_cast<std::streamsize>(expected_count * sizeof(float))))
+            {
+                return false;
+            }
         }
     }
 
     std::uint8_t has_fitness = 0;
-    in_file.read(reinterpret_cast<char *>(&has_fitness), sizeof(has_fitness));
+    if (!in_file.read(reinterpret_cast<char *>(&has_fitness), sizeof(has_fitness)))
+    {
+        return false;
+    }
+
+    std::vector<float> staging_fitness;
     if (has_fitness != 0)
     {
-        if (fitness_scores_out != nullptr)
+        staging_fitness.resize(population_size, 0.0f);
+        if (population_size > 0 &&
+            !in_file.read(reinterpret_cast<char *>(staging_fitness.data()),
+                          static_cast<std::streamsize>(population_size * sizeof(float))))
         {
-            in_file.read(reinterpret_cast<char *>(fitness_scores_out), population_size * sizeof(float));
+            return false;
         }
-        else
-        {
-            in_file.seekg(population_size * sizeof(float), std::ios::cur);
-        }
+    }
+
+    generation = generation_val;
+    for (size_t l = 0; l < layer_adapters.size(); ++l)
+    {
+        layer_adapters[l].host_params = std::move(staging[l]);
+    }
+    if (has_fitness != 0 && fitness_scores_out != nullptr)
+    {
+        std::copy(staging_fitness.begin(), staging_fitness.end(), fitness_scores_out);
     }
 
     syncHostToDevice();
     return true;
 }
 
-void Population::setMixedPrecision(bool enable) noexcept
+void Population::setExecutionTarget(Execution_Target _target)
+{
+    if (execution_target == _target)
+    {
+        return;
+    }
+    execution_target = _target;
+    batched_input_tensor.setExecutionTarget(_target);
+    if (is_mixed_precision_enabled)
+    {
+        batched_input_tensor.setDataType(_target == Execution_Target::VULKAN_GPU ? Data_Type::FLOAT16 : Data_Type::FLOAT32);
+    }
+    for (auto &adapter : layer_adapters)
+    {
+        if (adapter.template_layer)
+        {
+            auto cloned = adapter.template_layer->clone();
+            if (!cloned)
+            {
+                throw std::runtime_error("Population::setExecutionTarget: Failed to clone template layer");
+            }
+            cloned->setExecutionTarget(_target);
+            adapter.template_layer = std::shared_ptr<const ILayer>(std::move(cloned));
+        }
+        for (auto &param : adapter.batched_params)
+        {
+            param.setExecutionTarget(_target);
+            if (!is_mixed_precision_enabled || _target != Execution_Target::VULKAN_GPU)
+            {
+                param.setDataType(Data_Type::FLOAT32);
+            }
+        }
+    }
+    syncHostToDevice();
+}
+
+void Population::enableMixedPrecision(bool enable)
 {
     is_mixed_precision_enabled = enable;
     if (execution_target == Execution_Target::VULKAN_GPU)
@@ -768,7 +944,7 @@ void Population::setMixedPrecision(bool enable) noexcept
         }
         syncHostToDevice();
     }
-    Logger::logMessage(Input_Format{"Population::setMixedPrecision: Mixed precision {} for population size = {}, target = {}",
+    Logger::logMessage(Input_Format{"Population::enableMixedPrecision: Mixed precision {} for population size = {}, target = {}",
                                     enable ? "ENABLED (FLOAT16)" : "DISABLED (FLOAT32)", population_size,
                                     execution_target == Execution_Target::VULKAN_GPU ? "VULKAN_GPU" : "CPU"},
                        Log_Level::LOG_INFO,

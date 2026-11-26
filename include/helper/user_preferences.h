@@ -31,9 +31,22 @@ struct Logging_Preferences
 {
     bool enable_logging = true;
     std::string level = "LOG_INFO";
+    bool console_enabled = true;
+    std::string console_level = "LOG_DEBUG";
+    bool file_enabled = false;
+    std::string file_level = "LOG_DEBUG";
+    std::string log_directory = "logs";
+    std::string color_mode = "auto";
+    bool quiet_mode = false;
+    bool errors_to_stderr = false;
+    bool filter_info_by_feature = false;
+    bool include_timestamp_ms = false;
+    bool include_thread_id = false;
+    bool include_source_location = false;
     std::vector<std::string> features = {
         "DEVICE_MANAGEMENT",
         "FP16_METRICS",
+        "TERNARY_METRICS",
         "SYNCHRONIZATION"
     };
 };
@@ -51,6 +64,7 @@ private:
     Logging_Preferences logging_prefs;
 
     User_Preferences();
+    bool saveUnlocked(const std::string &path) const;
 
 public:
     static User_Preferences &getInstance();
@@ -59,16 +73,69 @@ public:
     User_Preferences &operator=(const User_Preferences &) = delete;
 
     bool load(const std::string &path = "user_preferences.json");
-    bool save(const std::string &path = "user_preferences.json") const;
+    bool save() const;
+    bool save(const std::string &path) const;
 
-    const Device_Preferences &getDevicePreferences() const noexcept { return device_prefs; }
-    const Execution_Preferences &getExecutionPreferences() const noexcept { return execution_prefs; }
-    const Memory_Preferences &getMemoryPreferences() const noexcept { return memory_prefs; }
-    const Logging_Preferences &getLoggingPreferences() const noexcept { return logging_prefs; }
+    bool isLoaded() const
+    {
+        std::lock_guard lock(preferences_mutex);
+        return is_loaded;
+    }
+    std::string getConfigFilePath() const
+    {
+        std::lock_guard lock(preferences_mutex);
+        return config_file_path;
+    }
 
-    uint32_t getStagingPoolSizeMb() const noexcept { return memory_prefs.staging_pool_initial_size_mb; }
-    bool isTimelineSemaphoreEnabled() const noexcept { return memory_prefs.enable_timeline_semaphore; }
-    bool isPushDescriptorEnabled() const noexcept { return memory_prefs.enable_push_descriptor; }
-    bool isShaderFusionEnabled() const noexcept { return execution_prefs.enable_shader_fusion; }
-    bool isCooperativeMatrixEnabled() const noexcept { return execution_prefs.enable_cooperative_matrix; }
+    void setDevicePreferences(const Device_Preferences &prefs);
+    void setExecutionPreferences(const Execution_Preferences &prefs);
+    void setMemoryPreferences(const Memory_Preferences &prefs);
+    void setLoggingPreferences(const Logging_Preferences &prefs);
+
+    Device_Preferences getDevicePreferences() const
+    {
+        std::lock_guard lock(preferences_mutex);
+        return device_prefs;
+    }
+    Execution_Preferences getExecutionPreferences() const
+    {
+        std::lock_guard lock(preferences_mutex);
+        return execution_prefs;
+    }
+    Memory_Preferences getMemoryPreferences() const
+    {
+        std::lock_guard lock(preferences_mutex);
+        return memory_prefs;
+    }
+    Logging_Preferences getLoggingPreferences() const
+    {
+        std::lock_guard lock(preferences_mutex);
+        return logging_prefs;
+    }
+
+    uint32_t getStagingPoolSizeMb() const
+    {
+        std::lock_guard lock(preferences_mutex);
+        return memory_prefs.staging_pool_initial_size_mb;
+    }
+    bool isTimelineSemaphoreEnabled() const
+    {
+        std::lock_guard lock(preferences_mutex);
+        return memory_prefs.enable_timeline_semaphore;
+    }
+    bool isPushDescriptorEnabled() const
+    {
+        std::lock_guard lock(preferences_mutex);
+        return memory_prefs.enable_push_descriptor;
+    }
+    bool isShaderFusionEnabled() const
+    {
+        std::lock_guard lock(preferences_mutex);
+        return execution_prefs.enable_shader_fusion;
+    }
+    bool isCooperativeMatrixEnabled() const
+    {
+        std::lock_guard lock(preferences_mutex);
+        return execution_prefs.enable_cooperative_matrix;
+    }
 };

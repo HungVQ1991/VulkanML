@@ -1,34 +1,54 @@
 #version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#endif
 
 layout(local_size_x = 256) in;
 
+#ifdef USE_FP16
+layout(std430, binding = 0) readonly buffer DOut { float16_t dout_data[]; };
+#else
 layout(std430, binding = 0) readonly buffer DOut { float dout_data[]; };
+#endif
 layout(std430, binding = 1) readonly buffer XHat { float x_hat[]; };
 layout(std430, binding = 2) readonly buffer Gamma { float gamma_data[]; };
 layout(std430, binding = 3) readonly buffer DGamma { float dgamma_data[]; };
 layout(std430, binding = 4) readonly buffer DBeta { float dbeta_data[]; };
 layout(std430, binding = 5) readonly buffer Var { float var_data[]; };
+#ifdef USE_FP16
+layout(std430, binding = 6) writeonly buffer DIn { float16_t dx_data[]; };
+#else
 layout(std430, binding = 6) writeonly buffer DIn { float dx_data[]; };
+#endif
 
 layout(push_constant) uniform Constants {
     uint total_elements;
-    uint batch_size; 
+    uint batch_size;
     uint dim;
     float epsilon;
 } pcs;
 
 void main() {
+#ifdef USE_FP16
+    if (pcs.dim == 0u) return;
+#endif
     uint idx = gl_GlobalInvocationID.x;
     if (idx >= pcs.total_elements) return;
 
     uint j = idx % pcs.dim;
-    
+
     float std_inv = 1.0 / sqrt(var_data[j] + pcs.epsilon);
     float g_val = gamma_data[j];
 
-    // Evaluation mode (pcs.batch_size == 0): dy/dx = gamma / sqrt(running_var + eps)
     if (pcs.batch_size == 0) {
+#ifdef USE_FP16
+        float dx_val = g_val * std_inv * float(dout_data[idx]);
+        dx_val = clamp(dx_val, -65504.0, 65504.0);
+        dx_data[idx] = float16_t(dx_val);
+#else
         dx_data[idx] = g_val * std_inv * dout_data[idx];
+#endif
         return;
     }
 
@@ -37,6 +57,12 @@ void main() {
     float inv_n = 1.0 / float(pcs.batch_size);
 
     float coeff = g_val * std_inv * inv_n;
-    
+
+#ifdef USE_FP16
+    float dx_val = coeff * (float(pcs.batch_size) * float(dout_data[idx]) - db_val - x_hat[idx] * dg_val);
+    dx_val = clamp(dx_val, -65504.0, 65504.0);
+    dx_data[idx] = float16_t(dx_val);
+#else
     dx_data[idx] = coeff * (float(pcs.batch_size) * dout_data[idx] - db_val - x_hat[idx] * dg_val);
+#endif
 }

@@ -1,26 +1,20 @@
 # VulkanML
 
-> A high-performance, modular machine learning library built from scratch in modern C++23 with Vulkan Compute acceleration — supporting gradient-based deep learning (Vision CNNs, ResNets, Transformer LLMs), gradient-free neuroevolution, and reinforcement learning on any Vulkan-capable GPU.
+> A high-performance, modular machine learning library built from scratch in modern C++23 with Vulkan Compute acceleration — supporting gradient-based deep learning (Vision CNNs, U-Net Segmentation, Transformer LLMs), 1.58-bit ternary quantization, gradient-free neuroevolution, and reinforcement learning on any Vulkan-capable GPU.
 
 ![Language](https://img.shields.io/badge/C%2B%2B-23-blue.svg)
 ![API](https://img.shields.io/badge/Vulkan-1.3-red.svg)
 ![Platform](https://img.shields.io/badge/Platform-Windows-success.svg)
-![Architecture](https://img.shields.io/badge/Architecture-Modular%20Static%20Library-orange.svg)
+![Architecture](https://img.shields.io/badge/Architecture-Modular%20Shared%20Library-orange.svg)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 
 ---
 
 ## Overview
 
-VulkanML is a self-contained, educational and production-oriented machine learning library written entirely from scratch in C++23 with **Vulkan Compute** as the hardware accelerator. It does not depend on CUDA, ROCm, PyTorch, TensorFlow, or any external deep learning runtime.
+VulkanML is a self-contained, educational and production-oriented machine learning library written from scratch in C++23 with **Vulkan Compute** as the hardware accelerator. It does not depend on CUDA, ROCm, PyTorch, or TensorFlow.
 
-The primary goal is **education through implementation**: understanding how matrix operations, memory allocators, GPU compute pipelines, transformer attention mechanisms, and learning algorithms work from first principles by engineering every component from the ground up.
-
-The library features a cleanly decoupled **Header (`include/`) + Implementation (`src/`)** architecture compiled into the static library `vulkanml_core`, providing rapid incremental builds and modularity across three primary paradigms:
-
-- **Gradient-Based Deep Learning** — Supervised training via forward/backpropagation, supporting Vision CNNs, ResNets, and autoregressive Large Language Models (LLMs) with Adam/SGD optimizers and learning rate schedulers.
-- **Gradient-Free Neuroevolution** — High-throughput population-based neuroevolution (genetic algorithms) where entire generations are evaluated concurrently via batched GPU GEMM dispatches.
-- **Reinforcement Learning** — DQN and PPO agents with experience replay and environment simulation abstractions.
+The public API hides Vulkan SDK headers behind PIMPL abstractions (`Tensor`, `Neural_Network`, `Causal_LM`, `Runtime`, `LM_Trainer`, `Resource_Path`), linking `Vulkan::Vulkan` and `shaderc` as `PRIVATE` dependencies inside `vulkanml_core.dll`. User applications only need `#include "helper/vulkan_ml.h"` with zero direct Vulkan SDK include or link requirements.
 
 ---
 
@@ -28,25 +22,22 @@ The library features a cleanly decoupled **Header (`include/`) + Implementation 
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│                           APPLICATION & SUBSYSTEMS                       │
-│      Neural_Network · Population · RL (DQN, PPO) · Causal_LM (LLM)       │
-│         Tokenizers (BPE, Syllable, VN Phonetics) · Training_Context      │
+│                     PUBLIC FACADE (`include/helper/vulkan_ml.h`)         │
+│   Runtime · Neural_Network · Causal_LM · LM_Trainer · Population · RL   │
+│         Tokenizers · User_Preferences · Resource_Path · Logger           │
 ├──────────────────────────────────────────────────────────────────────────┤
-│                            LAYER SYSTEM                                  │
-│   ILayer ── Linear · Conv2D · BatchNorm · RMSNorm · GELU · ReLU · Softmax│
-│             SwiGLU · Embedding · MaxPool2D · GlobalAvgPool2D             │
-│             ResNet Block / ResNet-20 · Transformer_Block · Actor-Critic  │
+│                            LAYER SYSTEM (`include/layer/`)               │
+│   ILayer ── Linear · Ternary_Linear · Conv2D · BatchNorm · InstanceNorm  │
+│             RMSNorm · SwiGLU · Embedding · MaxPool2D · UpSample2D        │
+│             ResNet Block · U_Net · NN_UNet · Transformer_Block · PPO     │
 ├──────────────────────────────────────────────────────────────────────────┤
-│                      TENSOR ABSTRACTION  (math/)                         │
-│                     Tensor · Shape · Stride · Data_Type                  │
-│             Cpu_Tensor_Impl ◄──── PIMPL ────► Gpu_Tensor_Impl            │
+│                      TENSOR ABSTRACTION (`include/math/tensor.h`)        │
+│   Tensor · Shape · Stride · Data_Type (FLOAT32, FLOAT16, TERNARY_INT2)   │
 ├──────────────────────────────────────────────────────────────────────────┤
-│                       EXECUTION ENGINE  (engine/)                        │
-│  Vulkan_Context · Graph_Optimizer (JIT fusion) · Graph_Executor          │
-│  Shader_Generator · Pipeline_Cache · Sub-Allocator · Loss_Scaler (AMP)   │
-├──────────────────────────────────────────────────────────────────────────┤
-│                       STATIC CORE LIBRARY (`src/`)                       │
-│                     vulkanml_core (libvulkanml_core.a)                   │
+│                 PRIVATE VULKAN BACKEND (`src/engine/`, `src/ops/`)       │
+│   Vulkan_Context · Graph_Optimizer (JIT fusion) · Graph_Executor         │
+│   Vulkan_Network (207 SPIR-V pipelines) · Pipeline_Cache_Manager         │
+│   Vulkan_Sub_Allocator (Best-Fit + Empty-Chunk Reclamation)              │
 └──────────────────────────────────────────────────────────────────────────┘
                                       ▼
                        ┌────────────────────────────┐
@@ -61,472 +52,142 @@ The library features a cleanly decoupled **Header (`include/`) + Implementation 
 
 ## Features
 
-| Category                   | Details                                                                                                                                                                             |
-| :------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Architecture**           | Clean C++23 modular separation: public interface headers in `include/` and compiled implementation in `src/` packaged into `vulkanml_core` static library.                          |
-| **Tensor Engine**          | N-dimensional Tensor with dynamic/contiguous strides, broadcasting, slice/gather operations, and seamless zero-copy CPU↔GPU transfers.                                              |
-| **Neural Layers**          | Linear (Dense), Conv2D, BatchNorm 1D/2D, MaxPool2D, GlobalAvgPool2D, GELU, ReLU, Softmax, RMSNorm, SwiGLU, Embedding, ResNet Block, ResNet-20, PPO Actor-Critic, Transformer Block. |
-| **LLM & Attention**        | Autoregressive Decoder-only `Causal_LM`, `KV_Cache_Manager`, FlashAttention forward/backward, Rotary Position Embeddings (RoPE), and memory-mapped `Binary_Dataset`.                |
-| **Tokenization**           | Byte-Pair Encoding (`Bpe_Tokenizer`), `Syllable_Tokenizer`, and Vietnamese phonetics engine (`Vietnamese_Phonetics`) with tone analysis (Bằng/Trắc) and Lục Bát rhyme validation.   |
-| **Loss Functions**         | MSE, MAE, BCE, CCE, Huber, and GPU-fused Cross Entropy with logits (`Fused_Cce_Cost`).                                                                                              |
-| **Optimizers**             | Adam (with fused weight decay and gradient clipping), SGD (with momentum).                                                                                                          |
-| **LR Schedulers**          | Cosine Annealing, Step Decay, Multi-Step Decay, Exponential Decay, Polynomial Decay, Reduce on Plateau, Constant.                                                                   |
-| **Neuroevolution**         | Population-based evolutionary algorithms (Tournament Selection, Uniform Crossover, Gaussian Mutation, Elitism) with batched GPU inference across generations.                       |
-| **Reinforcement Learning** | Deep Q-Network (DQN) with Replay Buffer and target sync, Proximal Policy Optimization (PPO Actor-Critic), CartPole simulation environment.                                          |
-| **GPU Backend**            | Vulkan 1.3 Compute, JIT GLSL shader generation, operator fusion (GEMM + Bias + Activation), persistent pipeline caching, and sub-allocator memory pooling.                          |
-| **Cooperative Matrix**     | Auto-detected `VK_KHR_cooperative_matrix` extension for high-performance 16×16×16 subgroup hardware tensor cores.                                                                   |
-| **Mixed Precision (AMP)**  | True Native FP16 storage & compute pipeline (Zero-Cast), dynamic Loss Scaler for gradient underflow protection, FP32 master weights.                                                |
-| **Data Pipeline**          | Asynchronous double-buffered data pipeline overlapping CPU disk I/O with GPU training batches.                                                                                      |
-| **Serialization**          | Binary model format (inference `.nni` + checkpoint `.nnc` / `.nnck`) with complete topology auto-restoration.                                                                       |
+| Category | Details |
+| :--- | :--- |
+| **Zero-Vulkan Public API** | Public entry umbrella [`include/helper/vulkan_ml.h`](include/helper/vulkan_ml.h) exposes all high-level ML/LLM/RL/runtime types without leaking `<vulkan/vulkan.h>`. |
+| **Tensor Engine** | N-dimensional `Tensor` with dynamic/contiguous strides, broadcasting, zero-copy views, FP32/FP16/TERNARY_INT2 storage. |
+| **Neural Layers** | Linear, TernaryLinear, Conv2D, BatchNorm 1D/2D, InstanceNorm2D, RMSNorm, SwiGLU, Embedding, Pooling, UpSample2D, ResNet-18/20, U-Net, NN-UNet, Transformer Block, PPO Actor-Critic. |
+| **LLM & Attention** | Autoregressive Decoder-only [`Causal_LM`](include/llm/causal_lm.h), [`KV_Cache_Manager`](include/llm/kv_cache_manager.h), FlashAttention-2 forward/backward (BSHD & CoopMat FP16), RoPE, and [`Binary_Token_Dataset`](include/llm/binary_dataset.h). |
+| **Tokenization** | `Bpe_Tokenizer` (HuggingFace JSON, aliased as `Tokenizer`). |
+| **Loss Functions** | MSE, MAE, BCE, CCE, Huber, ASL, Dice, Dice+BCE, and GPU-fused Cross Entropy (`Fused_Cross_Entropy`). |
+| **Optimizers & LR** | AdamW (`Adam_Optimizer`), SGD, and schedulers (Cosine Annealing, Step, MultiStep, Exponential, Polynomial, Plateau, NoDecay). |
+| **GPU Backend** | Vulkan 1.3 Compute, JIT GLSL operator fusion, `VK_KHR_cooperative_matrix` 16x16x16, unified device/driver-keyed `VkPipelineCache`, empty VRAM chunk reclamation (`reclaimEmptyChunks`), and `VkQueryPool` hardware timestamp profiling. |
+| **Developer Experience** | RAII [`Runtime`](include/helper/runtime.h), [`LM_Trainer`](include/helper/trainer.h), [`Resource_Path`](include/helper/resource_path.h) layered path resolver, and feature-masked [`Logger`](include/helper/logger.h). |
 
 ---
 
-## LLM Setup & Training Guide
-
-VulkanML includes an end-to-end, hardware-accelerated **Decoder-only Transformer Large Language Model** subsystem (`Causal_LM`) inspired by modern architectures like LLaMA and Mistral.
-
-### 1. Architecture Overview
-
-```
-Token IDs ────────► [ Embedding Layer ] (vocab_size -> hidden_dim)
-                           │
-             ┌─────────────┴─────────────┐
-             │   Transformer Block × N   │
-             │  ┌─────────────────────┐  │
-             │  │ Pre-RMSNorm         │  │
-             │  │ Multi-Head Attention│  │ (RoPE + FlashAttention + KV Cache)
-             │  │ Residual Add        │  │
-             │  ├─────────────────────┤  │
-             │  │ Pre-RMSNorm         │  │
-             │  │ SwiGLU FFN          │  │ (hidden_dim -> intermediate_dim -> hidden_dim)
-             │  │ Residual Add        │  │
-             │  └─────────────────────┘  │
-             └─────────────┬─────────────┘
-                           ▼
-                  [ Final RMSNorm ]
-                           ▼
-                  [ Linear LM Head ] (hidden_dim -> vocab_size)
-                           ▼
-           [ Fused Cross-Entropy Loss / Logits ]
-```
-
-* **Position Encoding**: Rotary Position Embeddings (RoPE) applied to Query and Key projections.
-* **Attention Mechanism**: Causal Masked Multi-Head Attention accelerated with FlashAttention GPU dispatch.
-* **Feed-Forward**: SwiGLU (Swish-Gated Linear Unit) activation block.
-* **Normalization**: RMSNorm with learnable scaling factors before attention and MLP blocks.
-* **Inference Decoding**: $O(1)$ dynamic Key-Value Cache manager (`KV_Cache_Manager`).
-* **Loss Function**: `Fused_Cce_Cost` computing cross-entropy directly on GPU memory without allocating huge uncompressed logit tensors on CPU.
-
----
-
-### 2. Dataset Preparation & Tokenization
-
-VulkanML provides two tokenizer implementations and a high-throughput binary cache pipeline:
-
-1. **`Bpe_Tokenizer`**: Standard subword Byte-Pair Encoding tokenizer compatible with HuggingFace JSON exports.
-2. **`Syllable_Tokenizer`**: Dedicated syllable-level tokenizer designed for Vietnamese text, with built-in tonal decomposition (`Vietnamese_Phonetics`) and rhyme matching.
-
-#### Pre-tokenizing Text to Binary Cache (`Binary_Dataset`)
-
-Parsing raw text on every epoch introduces severe CPU bottlenecks. VulkanML uses `Binary_Dataset` to compile raw `.txt` files into indexed binary token files (`.bin`):
+## Quick Start — Public Facade (`Runtime` + `Neural_Network`)
 
 ```cpp
-#include "llm/binary_dataset.h"
-#include "tokenizer/bpe_tokenizer.h"
+#include "helper/vulkan_ml.h"
 
-// 1. Initialize and train/load tokenizer
-Bpe_Tokenizer tokenizer;
-tokenizer.load("tokenizer/bpe_tokenizer.json");
-
-// 2. Pre-tokenize text into binary cache
-// Format: Header + 32-bit token IDs sequence
-Binary_Dataset::createFromText(
-    "data/corpus.txt",           // Raw text corpus
-    "data/corpus.bin",           // Output binary file
-    tokenizer,
-    /*seq_len=*/128,             // Fixed sequence length
-    /*stride=*/64                // Overlap stride for sliding window
-);
-
-// 3. Load binary dataset into training pipeline
-Binary_Dataset dataset("data/corpus.bin");
-std::cout << "Loaded " << dataset.getSampleCount() << " training sequences.\n";
-```
-
----
-
-### 3. Model Configuration (`Causal_LM_Config`)
-
-The model architecture and training hyperparameters are defined using `Causal_LM_Config`:
-
-```cpp
-#include "llm/causal_lm.h"
-
-Causal_LM_Config config{
-    .vocab_size = 32000,                           // Vocabulary size
-    .hidden_dim = 256,                             // Hidden embedding dimension
-    .num_heads = 8,                                // Attention heads (head_dim = 256 / 8 = 32)
-    .intermediate_dim = 1024,                      // SwiGLU intermediate dimension (~4x hidden)
-    .num_layers = 6,                               // Number of Transformer blocks
-    .max_seq_len = 128,                            // Maximum context window length
-    .rms_norm_eps = 1e-5f,                         // RMSNorm epsilon
-    .rope_base = 10000.0f,                         // RoPE base frequency
-    .execution_target = Execution_Target::VULKAN_GPU,
-    .data_type = Data_Type::FLOAT16,               // Native FP16 mixed precision
-    .use_loss_scaler = true,                       // Dynamic Loss Scaler for FP16 AMP
-    .initial_loss_scale = 1024.0f,
-    .tokenizer_path = "tokenizer/tokenizer.json"
-};
-
-Causal_LM model(config);
-```
-
----
-
-### 4. Training Pipeline (`train_sllm`)
-
-VulkanML includes an end-to-end Small Language Model (sLLM) training pipeline in [`train_sllm.cpp`](file:///d:/Not%20Python%20Projects/llm%20-%20Copy/train_sllm.cpp).
-
-#### Training Loop Example
-
-```cpp
-#include "llm/causal_lm.h"
-#include "llm/binary_dataset.h"
-#include "optimizer/adam_optimizer.h"
-#include "learning_rate/cosine_annealing.h"
-
-// 1. Setup Optimizer & Scheduler
-Adam_Optimizer optimizer(
-    /*learning_rate=*/0.0004f,
-    /*beta1=*/0.9f,
-    /*beta2=*/0.95f,
-    /*epsilon=*/1e-8f,
-    /*max_gradient=*/1.0f,                          // Gradient clipping threshold
-    /*weight_decay=*/0.1f                          // Decoupled weight decay
-);
-
-Cosine_Annealing scheduler(
-    /*initial_lr=*/0.0004f,
-    /*min_lr=*/0.00004f,
-    /*max_epochs=*/40
-);
-
-// 2. Training Loop with Gradient Accumulation
-model.setTrainingMode(true);
-const size_t batch_size = 8;
-const size_t grad_accum_steps = 4;                 // Effective batch size = 32
-
-for (size_t epoch = 0; epoch < 40; ++epoch)
+int main(int argc, char *argv[])
 {
-    float epoch_loss = 0.0f;
-    size_t batch_count = 0;
+    Logger::applyCliArgs(argc, argv);
 
-    for (size_t i = 0; i < dataset.getSampleCount(); i += batch_size)
-    {
-        auto [input_batch, target_batch] = dataset.getBatch(i, batch_size);
+    Runtime_Config rt_cfg;
+    rt_cfg.enable_fp16 = true;
+    rt_cfg.enable_cooperative_matrix = true;
+    rt_cfg.enable_static_graph = true;
+    Runtime runtime(rt_cfg);
 
-        // Forward pass, loss computation, and backpropagation
-        float loss = model.trainStep(input_batch, target_batch, optimizer, /*max_grad_norm=*/1.0f);
-        epoch_loss += loss;
-        batch_count++;
-    }
-
-    scheduler.step();
-    std::cout << "Epoch " << epoch << " | Loss: " << (epoch_loss / batch_count) << "\n";
-
-    // Periodic Checkpointing
-    model.saveCheckpoint("output/checkpoint_latest.nnck");
-}
-```
-
-#### Compiling and Running the LLM Trainer
-
-```bash
-# Configure CMake with train_sllm as the active entry point
-cmake -B build -DACTIVE_FILE="train_sllm.cpp" -DCMAKE_BUILD_TYPE=Release
-
-# Build the executable
-cmake --build build --target train_sllm -j8
-
-# Run pre-training
-./train_sllm.exe
-```
-
----
-
-### 5. Autoregressive Text Generation with KV Caching
-
-Inference uses the persistent `KV_Cache_Manager` to store precomputed Key and Value projections, guaranteeing $O(1)$ compute per newly generated token:
-
-```cpp
-#include "llm/causal_lm.h"
-
-// Load trained model checkpoint
-Causal_LM model(config);
-model.loadInference("output/model.bin");
-model.setTrainingMode(false);
-
-// Stream tokens to console in real-time
-auto token_stream_callback = [](const std::string& token_text) {
-    std::cout << token_text << std::flush;
-};
-
-// Generate text with Top-P (Nucleus) and Top-K sampling
-std::string prompt = "Trăm năm trong cõi người ta\n";
-std::cout << prompt;
-
-std::string completion = model.generate(
-    prompt,
-    /*max_new_tokens=*/128,
-    /*temperature=*/0.7f,
-    /*top_p=*/0.9f,
-    /*eos_token_id=*/2,
-    /*skip_special=*/true,
-    /*token_callback=*/token_stream_callback,
-    /*repetition_penalty=*/1.15f,
-    /*top_k=*/40,
-    /*stop_sequences=*/{ "<|endoftext|>", "\n\n" }
-);
-```
-
----
-
-## Usage Example — Vision CNN Supervised Training
-
-```cpp
-#include "engine/execution_engine.h"
-#include "helper/layer.h"
-#include "learning_rate/cosine_annealing.h"
-#include "math/tensor.h"
-#include "neural_network.h"
-#include "optimizer/adam_optimizer.h"
-#include "cost_function/cce_cost.h"
-
-int main()
-{
-    Execution_Engine::getInstance()
-        .getPipelineCacheManager()
-        .initializePipelineCache("temp/pipeline_cache.bin");
-
-    Execution_Target target = Execution_Target::VULKAN_GPU;
-    Neural_Network net(target);
+    Neural_Network net(Execution_Target::VULKAN_GPU);
     net.setTrainingMode(true);
-
     net.setLearningRate<Cosine_Annealing>(0.001f, 1e-5f, 10);
-    net.setOptimizer<Adam_Optimizer>(net.getLearningRate(), 0.9f, 0.999f, 1e-8f, 1.0f);
+    net.setOptimizer<Adam_Optimizer>(net.getLearningRate());
     net.setCostFunction<Cce_Cost>();
 
-    // Vision CNN: 28x28 grayscale -> 10 classes
-    net.addLayer<Conv2d_Layer>(28, 28, 1, 16, 3, 1, 1, target);
-    net.addLayer<Batch_Norm_2d_Layer>(28, 28, 16, 1e-5f, 0.1f, target);
-    net.addLayer<Gelu_Layer>(target);
-    net.addLayer<Max_Pool_2d_Layer>(28, 28, 16, 2, 2, 0, target);
+    net.addLayer<Linear_Layer>(784, 128, Execution_Target::VULKAN_GPU);
+    net.addLayer<Gelu_Layer>(Execution_Target::VULKAN_GPU);
+    net.addLayer<Linear_Layer>(128, 10, Execution_Target::VULKAN_GPU);
+    net.addLayer<Softmax_Layer>(true, Execution_Target::VULKAN_GPU);
 
-    net.addLayer<Conv2d_Layer>(14, 14, 16, 32, 3, 1, 1, target);
-    net.addLayer<Batch_Norm_2d_Layer>(14, 14, 32, 1e-5f, 0.1f, target);
-    net.addLayer<Gelu_Layer>(target);
-    net.addLayer<Max_Pool_2d_Layer>(14, 14, 32, 2, 2, 0, target);
-
-    net.addLayer<Linear_Layer>(7 * 7 * 32, 128, target);
-    net.addLayer<Batch_Norm_Layer>(128, 1e-5f, 0.1f, target);
-    net.addLayer<Gelu_Layer>(target);
-    net.addLayer<Linear_Layer>(128, 10, target);
-    net.addLayer<Softmax_Layer>(true, target);
-
-    net.compileAndWarmup(512, 784, 10);
-
-    Tensor input(512, 784, target);
-    Tensor target_labels(512, 10, target);
-
-    net.trainStep(input, target_labels);
-    net.getLearningRate().step();
-
-    net.saveInference("output/mnist_model.bin");
+    net.compileAndWarmup(64, 784, 10);
     return 0;
 }
 ```
 
----
+## LLM Training & Generation (`Causal_LM` + `LM_Trainer`)
 
-## Usage Example — Population-Based Neuroevolution
-
-```cpp
-#include "population.h"
-#include "neural_network.h"
-#include "helper/layer.h"
-
-int main()
-{
-    Neural_Network template_net(Execution_Target::VULKAN_GPU);
-    template_net.addLayer<Linear_Layer>(128, 64, Execution_Target::VULKAN_GPU);
-    template_net.addLayer<Gelu_Layer>(Execution_Target::VULKAN_GPU);
-    template_net.addLayer<Linear_Layer>(64, 8, Execution_Target::VULKAN_GPU);
-
-    // 64 individuals evolved simultaneously via single batched GPU GEMM
-    Population population(template_net, 64);
-
-    std::vector<std::vector<float>> inputs(64, std::vector<float>(128, 0.0f));
-    auto actions = population.selectBatchActions(inputs);
-
-    std::vector<float> fitness(64, 0.0f);
-    // ... evaluate fitness ...
-    population.evolve(fitness);
-
-    return 0;
-}
-```
-
----
-
-## Benchmarks & Performance
-
-### FP16 vs FP32 Performance (MNIST CNN on AMD Radeon™ 860M)
-
-| Evaluation Metric              | FP32 Baseline | FP32 Optimized | FP16 Simulated (Cast-only) |     True Native FP16 (Zero-Cast)     |                  Impact / Speedup                  |
-| :----------------------------- | :-----------: | :------------: | :------------------------: | :----------------------------------: | :------------------------------------------------: |
-| **1-Epoch Training Time**      |    24.00 s    |    12.27 s     |          13.60 s           |              **8.78 s**              | **~28.5% faster than opt FP32, 2.73x vs baseline** |
-| **Per-Batch Graph Dispatch**   |   ~3.50 ms    |    ~1.55 ms    |          ~1.81 ms          |         **~1.32 - 1.38 ms**          |             **-60% latency reduction**             |
-| **Intermediate Cast Passes**   |       0       |       0        |      8 - 10 per batch      |      **0 (Zero-Cast Pipeline)**      |         **100% cast overhead eliminated**          |
-| **Fence Wait (CPU-GPU stall)** |   0.040 ms    |    0.001 ms    |          0.001 ms          |             **0.001 ms**             |       **Zero sync stall (Fully overlapped)**       |
-| **VRAM Buffer Allocation**     |    Dynamic    |   Persistent   |   Reallocated per batch    | **Persistent Pre-allocated Buffers** |        **Zero runtime allocation overhead**        |
-| **Test Accuracy (1 Epoch)**    |    98.60%     |     98.92%     |           98.60%           |         **97.76% - 98.90%**          |        **Retains classification accuracy**         |
-
-### Benchmark Results Summary
-
-* **MNIST (Supervised CNN)**: **99.51%** test accuracy in **~12.8s** (1 epoch / batch size 512) on AMD Radeon 860M iGPU.
-* **CIFAR-100 (Deep CNN)**: **67.51%** validation accuracy with data augmentations over 100 epochs.
-
-### FP16 vs FP32 Performance (MNIST CNN on AMD Radeon™ 860M)
-
-## Building & Installation
-
-### Requirements
-| Evaluation Metric              | FP32 Baseline | FP32 Optimized | FP16 Simulated (Cast-only) |     True Native FP16 (Zero-Cast)     |                  Impact / Speedup                  |
-| :----------------------------- | :-----------: | :------------: | :------------------------: | :----------------------------------: | :------------------------------------------------: |
-| **1-Epoch Training Time**      |    24.00 s    |    12.27 s     |          13.60 s           |              **8.78 s**              | **~28.5% faster than opt FP32, 2.73x vs baseline** |
-| **Per-Batch Graph Dispatch**   |   ~3.50 ms    |    ~1.55 ms    |          ~1.81 ms          |         **~1.32 - 1.38 ms**          |             **-60% latency reduction**             |
-| **Intermediate Cast Passes**   |       0       |       0        |      8 - 10 per batch      |      **0 (Zero-Cast Pipeline)**      |         **100% cast overhead eliminated**          |
-| **Fence Wait (CPU-GPU stall)** |   0.040 ms    |    0.001 ms    |          0.001 ms          |             **0.001 ms**             |       **Zero sync stall (Fully overlapped)**       |
-| **VRAM Buffer Allocation**     |    Dynamic    |   Persistent   |   Reallocated per batch    | **Persistent Pre-allocated Buffers** |        **Zero runtime allocation overhead**        |
-| **Test Accuracy (1 Epoch)**    |    98.60%     |     98.92%     |           98.60%           |         **97.76% - 98.90%**          |        **Retains classification accuracy**         |
-
-### Benchmark Results Summary
-
-* **MNIST (Supervised CNN)**: **99.51%** test accuracy in **~12.8s** (1 epoch / batch size 512) on AMD Radeon 860M iGPU.
-* **CIFAR-100 (Deep CNN)**: **67.51%** validation accuracy with data augmentations over 100 epochs.
-
-* **C++ Compiler**: Modern C++23 compliant compiler (MinGW GCC 13/14+, Clang 17+, MSVC 19.38+)
-* **Vulkan SDK**: Vulkan 1.3+ SDK with `glslc` / `shaderc` libraries installed
-* **Build System**: CMake 3.25+
-
-## Building & Installation
-
-### Requirements
-
-* **C++ Compiler**: Modern C++23 compliant compiler (MinGW GCC 13/14+, Clang 17+, MSVC 19.38+)
-* **Vulkan SDK**: Vulkan 1.3+ SDK with `glslc` / `shaderc` libraries installed
-* **Build System**: CMake 3.25+
-
-### Build Instructions
+See [`apps/train_sllm.cpp`](apps/train_sllm.cpp) for the complete interactive and CLI training/generation workflow:
 
 ```bash
-# Clone the repository
-git clone https://github.com/<username>/VulkanML.git
-cd VulkanML
+cmake --build build --target train_sllm -j 2
+./build/bin/train_sllm.exe --train -b 8 --coop --static-graph --fused-gemm-adam
+```
 
-# Configure CMake build
+---
+
+## Building, Shaders & Testing
+
+### Requirements
+
+* **C++ Compiler**: Modern C++23 compiler (MinGW-w64 UCRT64 GCC 13/14+, Clang 17+, or MSVC 19.38+)
+* **Vulkan SDK**: Vulkan 1.3+ SDK with `glslc` and `shaderc`
+* **Build System**: CMake 3.25+ and Python 3.11+ (for repository audit and shader tooling)
+
+### Configure & Build (Memory-Safe `-j 2`)
+
+All executables and `vulkanml_core.dll` are emitted to `build/bin/`:
+
+```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 
-# Build the core static library and the comprehensive test suite
-cmake --build build --target test -j8
+cmake --build build --target compile_shaders -j 2
 
-# Run test suite
-./test.exe
+cmake --build build --target vulkanml_tests -j 2
+
+cmake --build build --target train_sllm -j 2
+cmake --build build --target train_chexpert -j 2
+cmake --build build --target example -j 2
 ```
 
-### Building Application Targets
+> **Note**: On memory-constrained Windows hosts without a pagefile, always build with `-j 2`.
 
-The build system automatically compiles all source files in `src/` into the static library `vulkanml_core` and links it to any active executable:
+### Running Tests (CTest)
+
+The test suite in [`tests/`](tests) is partitioned into 10 isolated CTest suites returning non-zero exit codes on failure:
 
 ```bash
-# Build CIFAR-100 vision model training target
-cmake --build build --target cifar_train -j8
+ctest --test-dir build --output-on-failure
 
-# Build Small Language Model (sLLM) training target
-cmake --build build --target train_sllm -j8
+ctest --test-dir build -L heavy --output-on-failure
+ctest --test-dir build -LE heavy --output-on-failure
 
-# Build general usage example
-cmake --build build --target example -j8
+./build/bin/test.exe --list
+./build/bin/test.exe --suite dx_infra
 ```
+
+### Repository & Shader Verification
+
+```bash
+python scripts/generate_shaders.py
+python scripts/verify_repo.py --compile-shaders
+```
+
+### Resource & Cache Configuration
+
+`Resource_Path` resolves shader, preference, and pipeline cache locations automatically whether launched from the repository root, `build/bin/`, or an installed SDK (`vulkanml_sdk/bin/`), honoring explicit overrides (`VULKANML_ROOT`, `VULKANML_SHADER_DIR`, `VULKANML_SHADER_DICTIONARY`, `VULKANML_PREFERENCES_PATH`, `VULKANML_PIPELINE_CACHE_DIR`). Pipeline cache binaries default to `temp/pipeline_cache_<vendor>_<device>_d<driver>_<uuid>.bin`.
 
 ---
 
 ## Project Structure
 
-The codebase is organized in an orthogonal layout separating public header interfaces (`include/`) from compiled implementation units (`src/`):
-
 ```
-├── include/                          # Public header declarations and type interfaces
-│   ├── cost_function/                # ICost_Function, MSE, MAE, BCE, CCE, Huber, Fused_CCE
-│   ├── engine/                       # Vulkan_Context, Graph_Executor, Graph_Optimizer,
-│   │                                 # Shader_Compiler, Sub_Allocator, Pipeline_Cache, Loss_Scaler
-│   ├── helper/                       # Logger, User_Preferences, Training_Profiler, Facade headers
-│   ├── layer/                        # ILayer, Linear, Conv2D, BatchNorm, RMSNorm, SwiGLU,
-│   │                                 # Transformer_Block, Embedding, ResNet, PPO_Actor_Critic
-│   ├── learning_rate/                # ILearning_Rate, Cosine, Step, Exponential, Polynomial, Plateau
-│   ├── llm/                          # Causal_LM, KV_Cache_Manager, Binary_Dataset
-│   ├── math/                         # Tensor, Shape, Cpu_Tensor_Impl, Gpu_Tensor_Impl
-│   ├── optimizer/                    # IOptimizer, Adam_Optimizer, Sgd_Optimizer
-│   ├── rl/                           # DQN_Agent, PPO_Agent, Replay_Buffer, CartPole_Env
-│   ├── tokenizer/                    # BPE_Tokenizer, Syllable_Tokenizer, Vietnamese_Phonetics
-│   ├── neural_network.h              # High-level sequential neural network container
-│   ├── population.h                  # Neuroevolution population manager
-│   └── training_context.h            # Training hyperparameters, layer & loss factories
+├── include/                          # Public C++23 interface headers + private internal interfaces
+│   ├── helper/                       # Public umbrella (vulkan_ml.h), Runtime, LM_Trainer, Logger, Resource_Path
+│   ├── layer/, math/, llm/, cost_function/, optimizer/, learning_rate/, rl/, tokenizer/
+│   ├── chexlocalize/                 # Medical X-ray Grad-CAM extension headers
+│   ├── environment/                  # MuJoCo simulation headers
+│   ├── ops/, engine/                 # Compute operator & engine headers (excluded from public SDK install)
 │
-├── src/                              # Implementation sources compiled into libvulkanml_core.a
-│   ├── cost_function/                # Concrete cost function algorithms
-│   ├── engine/                       # Vulkan device dispatch, JIT GLSL fusion, async pipeline
-│   ├── helper/                       # Logging, profiling, and preferences implementations
-│   ├── layer/                        # Concrete layer forward/backward and GPU kernel dispatches
-│   ├── learning_rate/                # Learning rate scheduler step computations
-│   ├── llm/                          # LLM autoregressive generation and KV cache paging
-│   ├── math/                         # CPU & Vulkan GPU tensor algebra, FlashAttention, RoPE
-│   ├── optimizer/                    # Adam / SGD parameter updates with weight decay & AMP scaling
-│   ├── rl/                           # Reinforcement learning agents and replay memory algorithms
-│   ├── tokenizer/                    # BPE tokenization and Vietnamese phonetic analysis
-│   ├── neural_network.cpp            # Model training loops, forward/backward execution, checkpoints
-│   ├── population.cpp                # Evolutionary genetic operators and batched GPU inference
-│   └── training_context.cpp          # Serialization and reflection layer factories
-│
-├── test.cpp                          # Comprehensive unit & integration test suite (100% PASS)
-├── train_sllm.cpp                    # Small Language Model training entry point
-├── cifar_train.cpp                   # CIFAR vision model training entry point
-├── example.cpp                       # General API demonstration entry point
-└── CMakeLists.txt                    # Project build script and vulkanml_core target setup
+├── src/                              # Implementations compiled into vulkanml_core.dll & chexlocalize_ext
+├── apps/                             # Standalone training/inference/benchmark applications
+│   ├── chexpert/                     # Modular CheXpert & U-Net application (train_chexpert target)
+│   ├── train_sllm.cpp                # Small Language Model trainer & generator
+│   ├── train_cifar.cpp, train_emnist.cpp, example.cpp
+│   ├── validate_ternary_mnist.cpp, benchmark_ternary.cpp
+│   └── train_humanoid.cpp, train_mujoco.cpp, verify_humanoid.cpp
+├── tests/                            # Modular test suites registered as CTest targets
+├── compute_shader/
+│   ├── comp/                         # 141 GLSL compute shaders (.comp)
+│   ├── spv/                          # 207 compiled SPIR-V kernels (.spv)
+│   └── shader_dictionary.json        # Operator fusion snippet metadata
+├── scripts/                          # Shader compilation/audit & automated verification scripts
+├── cmake/                            # CMake package config template (Vulkan-free for downstream apps)
+├── CMakeLists.txt                    # Build configuration, compile_shaders, CTest, and SDK install rules
+└── ARCHITECTURE.md                   # Detailed architecture specification (Vietnamese)
 ```
-
----
-
-## Third-Party Credits
-
-| Library                                             | License | Usage                                                                |
-| :-------------------------------------------------- | :------ | :------------------------------------------------------------------- |
-| [nlohmann/json](https://github.com/nlohmann/json)   | MIT     | JSON configuration serialization and hyperparameter persistence      |
-| [magic_enum](https://github.com/Neargye/magic_enum) | MIT     | Compile-time enum-to-string reflection for logging and serialization |
-
----
-
-## Design Philosophy
-
-Rather than treating neural networks as black boxes, VulkanML focuses on understanding every computation involved in modern machine learning and systems engineering — from raw GPU memory allocations and SPIR-V / GLSL shader dispatches to FlashAttention kernels and genetic evolutionary algorithms.
-
-Every core component is implemented from scratch with high architectural rigor, adhering to modern C++23 RAII principles, zero-cast mixed-precision pipelines, and minimal external dependencies.
-
----
-
-## AI Usage
-
-AI is utilized in this project for architectural refactoring, performance profiling, and debugging; the foundational engine, math kernels, and execution pipelines are designed and verified through rigorous human pair-programming and automated test suites.
 
 ---
 

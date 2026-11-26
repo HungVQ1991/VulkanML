@@ -1,11 +1,20 @@
 #version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#endif
 
 #define WORKGROUP_SIZE 32
 
 layout(local_size_x = WORKGROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
 
+#ifdef USE_FP16
+layout(std430, binding = 0) readonly buffer Input_Buffer { float16_t in_data[]; };
+layout(std430, binding = 1) writeonly buffer Output_Buffer { float16_t out_data[]; };
+#else
 layout(std430, binding = 0) readonly buffer Input_Buffer { float in_data[]; };
 layout(std430, binding = 1) writeonly buffer Output_Buffer { float out_data[]; };
+#endif
 
 layout(push_constant) uniform Softmax_Dimensions {
     uint rows;
@@ -15,15 +24,23 @@ layout(push_constant) uniform Softmax_Dimensions {
 shared float shared_mem[WORKGROUP_SIZE];
 
 void main() {
-    uint row = gl_WorkGroupID.x;
+    uint row = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
     uint tid = gl_LocalInvocationID.x;
 
     if (row >= dims.rows) return;
     uint offset = row * dims.cols;
 
+#ifdef USE_FP16
+    float local_max = -65504.0;
+#else
     float local_max = -3.402823466e+38;
+#endif
     for (uint c = tid; c < dims.cols; c += WORKGROUP_SIZE) {
+#ifdef USE_FP16
+        local_max = max(local_max, float(in_data[offset + c]));
+#else
         local_max = max(local_max, in_data[offset + c]);
+#endif
     }
     shared_mem[tid] = local_max;
     barrier();
@@ -39,8 +56,11 @@ void main() {
 
     float local_sum = 0.0;
     for (uint c = tid; c < dims.cols; c += WORKGROUP_SIZE) {
+#ifdef USE_FP16
+        float exp_val = exp(float(in_data[offset + c]) - row_max);
+#else
         float exp_val = exp(in_data[offset + c] - row_max);
-        out_data[offset + c] = exp_val;
+#endif
         local_sum += exp_val;
     }
     shared_mem[tid] = local_sum;
@@ -55,8 +75,13 @@ void main() {
     float row_sum = shared_mem[0];
     barrier();
 
-    float inv_sum = 1.0 / row_sum;
+    float inv_sum = 1.0 / max(row_sum, 1e-12);
     for (uint c = tid; c < dims.cols; c += WORKGROUP_SIZE) {
-        out_data[offset + c] *= inv_sum;
+#ifdef USE_FP16
+        float exp_val = exp(float(in_data[offset + c]) - row_max);
+        out_data[offset + c] = float16_t(exp_val * inv_sum);
+#else
+        out_data[offset + c] = exp(in_data[offset + c] - row_max) * inv_sum;
+#endif
     }
 }

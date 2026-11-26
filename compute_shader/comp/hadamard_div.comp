@@ -1,10 +1,20 @@
 #version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#endif
 
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
+#ifdef USE_FP16
+layout(std430, binding = 0) readonly buffer Buffer_A { float16_t data_a[]; };
+layout(std430, binding = 1) readonly buffer Buffer_B { float16_t data_b[]; };
+layout(std430, binding = 2) writeonly buffer Buffer_C { float16_t data_c[]; };
+#else
 layout(std430, binding = 0) readonly buffer Buffer_A { float data_a[]; };
 layout(std430, binding = 1) readonly buffer Buffer_B { float data_b[]; };
 layout(std430, binding = 2) writeonly buffer Buffer_C { float data_c[]; };
+#endif
 
 layout(push_constant) uniform Elementwise_Dimensions {
     uint total_elements;
@@ -21,5 +31,15 @@ void main() {
     if (dims.is_broadcast != 0) {
         rhs_idx = elem_idx % dims.cols;
     }
+#ifdef USE_FP16
+    float a = float(data_a[elem_idx]);
+    float b = float(data_b[rhs_idx]);
+    if (isnan(a) || isinf(a)) a = 0.0;
+    if (isnan(b) || isinf(b) || abs(b) < 1e-8) b = 1e-8;
+    float res = a / b;
+    if (isnan(res) || isinf(res)) res = 0.0;
+    data_c[elem_idx] = float16_t(clamp(res, -65504.0, 65504.0));
+#else
     data_c[elem_idx] = data_a[elem_idx] / data_b[rhs_idx];
+#endif
 }

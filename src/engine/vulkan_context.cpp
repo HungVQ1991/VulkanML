@@ -1,6 +1,7 @@
 #include "engine/vulkan_context.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <format>
 #include <iostream>
@@ -11,10 +12,10 @@
 #include "helper/user_preferences.h"
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
-    VkDebugUtilsMessageSeverityFlagBitsEXT _message_severity,
-    VkDebugUtilsMessageTypeFlagsEXT _message_type,
+    VkDebugUtilsMessageSeverityFlagBitsEXT,
+    VkDebugUtilsMessageTypeFlagsEXT,
     const VkDebugUtilsMessengerCallbackDataEXT *_callback_data,
-    void *_user_data)
+    void *)
 {
     if (_callback_data && _callback_data->pMessage)
     {
@@ -50,7 +51,7 @@ void Vulkan_Context::initializeFences()
 
 void Vulkan_Context::initializeTimelineSemaphore()
 {
-    if (!User_Preferences::getInstance().isTimelineSemaphoreEnabled())
+    if (!User_Preferences::getInstance().isTimelineSemaphoreEnabled() || !is_timeline_semaphore_feature_enabled)
     {
         is_timeline_semaphore_supported = false;
         return;
@@ -101,6 +102,43 @@ void Vulkan_Context::initializeInstance()
     const char *validation_layers[] = {"VK_LAYER_KHRONOS_validation"};
     const char *instance_extensions[] = {VK_EXT_DEBUG_UTILS_EXTENSION_NAME};
 
+    bool enable_validation = IS_DEBUG_VALIDATION_ENABLED;
+    if (!enable_validation)
+    {
+        if (const char *env_val = std::getenv("VULKANML_VALIDATION"); env_val != nullptr && std::strcmp(env_val, "1") == 0)
+        {
+            enable_validation = true;
+        }
+    }
+    if (enable_validation)
+    {
+        uint32_t layer_count = 0;
+        vkEnumerateInstanceLayerProperties(&layer_count, nullptr);
+        std::vector<VkLayerProperties> available_layers(layer_count);
+        vkEnumerateInstanceLayerProperties(&layer_count, available_layers.data());
+        bool has_layer = std::any_of(available_layers.begin(), available_layers.end(),
+                                     [](const VkLayerProperties &lp)
+                                     { return std::strcmp(lp.layerName, "VK_LAYER_KHRONOS_validation") == 0; });
+
+        uint32_t ext_count = 0;
+        vkEnumerateInstanceExtensionProperties(nullptr, &ext_count, nullptr);
+        std::vector<VkExtensionProperties> available_exts(ext_count);
+        vkEnumerateInstanceExtensionProperties(nullptr, &ext_count, available_exts.data());
+        bool has_ext = std::any_of(available_exts.begin(), available_exts.end(),
+                                   [](const VkExtensionProperties &ep)
+                                   { return std::strcmp(ep.extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0; });
+
+        if (!has_layer || !has_ext)
+        {
+            Logger::logMessage("Vulkan_Context::initializeInstance: Requested validation layer or VK_EXT_debug_utils unavailable; continuing without validation",
+                               Log_Level::LOG_WARNING,
+                               true,
+                               0,
+                               Log_Feature::DEVICE_MANAGEMENT);
+            enable_validation = false;
+        }
+    }
+
     VkDebugUtilsMessengerCreateInfoEXT debug_create_information{
         .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
         .pNext = nullptr,
@@ -116,13 +154,13 @@ void Vulkan_Context::initializeInstance()
 
     VkInstanceCreateInfo create_information{
         .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
-        .pNext = IS_DEBUG_VALIDATION_ENABLED ? &debug_create_information : nullptr,
+        .pNext = enable_validation ? &debug_create_information : nullptr,
         .flags = 0,
         .pApplicationInfo = &application_information,
-        .enabledLayerCount = IS_DEBUG_VALIDATION_ENABLED ? 1u : 0u,
-        .ppEnabledLayerNames = IS_DEBUG_VALIDATION_ENABLED ? validation_layers : nullptr,
-        .enabledExtensionCount = IS_DEBUG_VALIDATION_ENABLED ? 1u : 0u,
-        .ppEnabledExtensionNames = IS_DEBUG_VALIDATION_ENABLED ? instance_extensions : nullptr};
+        .enabledLayerCount = enable_validation ? 1u : 0u,
+        .ppEnabledLayerNames = enable_validation ? validation_layers : nullptr,
+        .enabledExtensionCount = enable_validation ? 1u : 0u,
+        .ppEnabledExtensionNames = enable_validation ? instance_extensions : nullptr};
 
     if (vkCreateInstance(&create_information, nullptr, &instance) != VK_SUCCESS)
     {
@@ -132,6 +170,24 @@ void Vulkan_Context::initializeInstance()
                            0,
                            Log_Feature::DEVICE_MANAGEMENT);
         throw std::runtime_error("Failed to create Vulkan instance");
+    }
+
+    if (enable_validation)
+    {
+        auto create_fn = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
+            vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT"));
+        if (create_fn != nullptr)
+        {
+            if (create_fn(instance, &debug_create_information, nullptr, &debug_messenger) != VK_SUCCESS)
+            {
+                Logger::logMessage("Vulkan_Context::initializeInstance: Failed to register VkDebugUtilsMessengerEXT",
+                                   Log_Level::LOG_WARNING,
+                                   true,
+                                   0,
+                                   Log_Feature::DEVICE_MANAGEMENT);
+                debug_messenger = VK_NULL_HANDLE;
+            }
+        }
     }
 }
 
@@ -201,12 +257,18 @@ void Vulkan_Context::selectPhysicalDevice()
     {
         VkPhysicalDeviceProperties prop;
         vkGetPhysicalDeviceProperties(dev, &prop);
-        Logger::logMessage(static_cast<std::string>(prop.deviceName), Log_Level::LOG_INFO, true, 1);
+        Logger::logMessage(static_cast<std::string>(prop.deviceName), Log_Level::LOG_INFO, true, 1, Log_Feature::DEVICE_MANAGEMENT);
     }
-    constexpr std::array<size_t, 5> priority_order = {2, 1, 3, 4, 0};
-    VkPhysicalDevice best_device = VK_NULL_HANDLE;
-    uint32_t best_compute_family_index = 0;
-    size_t best_rank = priority_order.size();
+
+    struct Candidate_Device
+    {
+        VkPhysicalDevice device = VK_NULL_HANDLE;
+        VkPhysicalDeviceType type = VK_PHYSICAL_DEVICE_TYPE_OTHER;
+        uint32_t compute_family_index = 0;
+    };
+
+    std::vector<Candidate_Device> candidates;
+    candidates.reserve(devices.size());
 
     for (const auto &device_candidate : devices)
     {
@@ -224,27 +286,34 @@ void Vulkan_Context::selectPhysicalDevice()
         std::vector<VkQueueFamilyProperties> queue_families(queue_family_count);
         vkGetPhysicalDeviceQueueFamilyProperties(device_candidate, &queue_family_count, queue_families.data());
 
+        uint32_t selected_queue_family = UINT32_MAX;
         for (uint32_t i = 0; i < queue_family_count; ++i)
         {
-            if (queue_families[i].queueFlags & VK_QUEUE_COMPUTE_BIT)
+            if (queue_families[i].queueCount == 0 || !(queue_families[i].queueFlags & VK_QUEUE_COMPUTE_BIT))
             {
-                auto it = std::find(priority_order.begin(), priority_order.end(), static_cast<size_t>(device_properties.deviceType));
-                if (it != priority_order.end())
-                {
-                    size_t current_rank = static_cast<size_t>(std::distance(priority_order.begin(), it));
-                    if (current_rank < best_rank)
-                    {
-                        best_rank = current_rank;
-                        best_device = device_candidate;
-                        best_compute_family_index = i;
-                    }
-                }
+                continue;
+            }
+            if (!(queue_families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT))
+            {
+                selected_queue_family = i;
                 break;
             }
+            if (selected_queue_family == UINT32_MAX)
+            {
+                selected_queue_family = i;
+            }
+        }
+
+        if (selected_queue_family != UINT32_MAX)
+        {
+            candidates.push_back(Candidate_Device{
+                device_candidate,
+                device_properties.deviceType,
+                selected_queue_family});
         }
     }
 
-    if (best_device == VK_NULL_HANDLE)
+    if (candidates.empty())
     {
         Logger::logMessage("Vulkan_Context::selectPhysicalDevice: Failed to find a suitable GPU that satisfies all compute and resource limits",
                            Log_Level::LOG_ERROR,
@@ -253,11 +322,108 @@ void Vulkan_Context::selectPhysicalDevice()
                            Log_Feature::DEVICE_MANAGEMENT);
         throw std::runtime_error("Failed to find a suitable GPU");
     }
+
+    const Device_Preferences prefs = User_Preferences::getInstance().getDevicePreferences();
+    bool has_preferred_type = true;
+    VkPhysicalDeviceType preferred_vk_type = VK_PHYSICAL_DEVICE_TYPE_OTHER;
+    if (prefs.preferred_type == "DISCRETE_GPU")
+    {
+        preferred_vk_type = VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+    }
+    else if (prefs.preferred_type == "INTEGRATED_GPU")
+    {
+        preferred_vk_type = VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
+    }
+    else if (prefs.preferred_type == "VIRTUAL_GPU")
+    {
+        preferred_vk_type = VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU;
+    }
+    else if (prefs.preferred_type == "CPU")
+    {
+        preferred_vk_type = VK_PHYSICAL_DEVICE_TYPE_CPU;
+    }
+    else if (prefs.preferred_type == "OTHER")
+    {
+        preferred_vk_type = VK_PHYSICAL_DEVICE_TYPE_OTHER;
+    }
+    else
+    {
+        has_preferred_type = false;
+    }
+
+    Candidate_Device chosen{};
+    bool found = false;
+
+    if (has_preferred_type)
+    {
+        std::vector<Candidate_Device> preferred_matches;
+        for (const auto &c : candidates)
+        {
+            if (c.type == preferred_vk_type)
+            {
+                preferred_matches.push_back(c);
+            }
+        }
+        if (!preferred_matches.empty())
+        {
+            uint32_t idx = prefs.preferred_device_index;
+            if (idx >= preferred_matches.size())
+            {
+                Logger::logMessage(Input_Format{"Vulkan_Context::selectPhysicalDevice: preferred_device_index {} out of bounds for {} matching device(s); falling back to index 0",
+                                                idx, preferred_matches.size()},
+                                   Log_Level::LOG_WARNING,
+                                   true,
+                                   0,
+                                   Log_Feature::DEVICE_MANAGEMENT);
+                idx = 0;
+            }
+            chosen = preferred_matches[idx];
+            found = true;
+        }
+    }
+
+    if (!found)
+    {
+        constexpr std::array<VkPhysicalDeviceType, 5> priority_order = {
+            VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU,
+            VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU,
+            VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU,
+            VK_PHYSICAL_DEVICE_TYPE_CPU,
+            VK_PHYSICAL_DEVICE_TYPE_OTHER};
+        for (VkPhysicalDeviceType target_type : priority_order)
+        {
+            for (const auto &c : candidates)
+            {
+                if (c.type == target_type)
+                {
+                    chosen = c;
+                    found = true;
+                    break;
+                }
+            }
+            if (found)
+            {
+                break;
+            }
+        }
+    }
+
+    if (!found)
+    {
+        chosen = candidates.front();
+    }
+
     VkPhysicalDeviceProperties prop;
-    vkGetPhysicalDeviceProperties(best_device, &prop);
-    std::cout << static_cast<std::string>(magic_enum::enum_name<VkPhysicalDeviceType>(prop.deviceType)) << "\n";
-    physical_device = best_device;
-    compute_queue_family_index = best_compute_family_index;
+    vkGetPhysicalDeviceProperties(chosen.device, &prop);
+    Logger::logMessage(Input_Format{"Vulkan_Context::selectPhysicalDevice: Selected {} ({})",
+                                    prop.deviceName,
+                                    magic_enum::enum_name<VkPhysicalDeviceType>(prop.deviceType)},
+                       Log_Level::LOG_INFO,
+                       true,
+                       0,
+                       Log_Feature::DEVICE_MANAGEMENT);
+    physical_device = chosen.device;
+    compute_queue_family_index = chosen.compute_family_index;
 }
 
 void Vulkan_Context::createLogicalDevice()
@@ -270,6 +436,28 @@ void Vulkan_Context::createLogicalDevice()
         .queueFamilyIndex = compute_queue_family_index,
         .queueCount = 1,
         .pQueuePriorities = &queue_priority};
+
+    VkPhysicalDeviceProperties device_properties{};
+    vkGetPhysicalDeviceProperties(physical_device, &device_properties);
+    uint32_t device_api_version = device_properties.apiVersion;
+    max_compute_work_group_count[0] = std::max<uint32_t>(1u, device_properties.limits.maxComputeWorkGroupCount[0]);
+    max_compute_work_group_count[1] = std::max<uint32_t>(1u, device_properties.limits.maxComputeWorkGroupCount[1]);
+    max_compute_work_group_count[2] = std::max<uint32_t>(1u, device_properties.limits.maxComputeWorkGroupCount[2]);
+    timestamp_period_ns = device_properties.limits.timestampPeriod;
+    timestamp_valid_bits = 0;
+    {
+        uint32_t queue_family_count = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &queue_family_count, nullptr);
+        if (queue_family_count > 0)
+        {
+            std::vector<VkQueueFamilyProperties> queue_families(queue_family_count);
+            vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &queue_family_count, queue_families.data());
+            if (compute_queue_family_index < queue_families.size())
+            {
+                timestamp_valid_bits = queue_families[compute_queue_family_index].timestampValidBits;
+            }
+        }
+    }
 
     uint32_t extension_count = 0;
     vkEnumerateDeviceExtensionProperties(physical_device, nullptr, &extension_count, nullptr);
@@ -290,6 +478,84 @@ void Vulkan_Context::createLogicalDevice()
     bool has_coop_mat_ext = is_extension_available(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
     bool has_float16_ext = is_extension_available(VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME);
     bool has_storage16_ext = is_extension_available(VK_KHR_16BIT_STORAGE_EXTENSION_NAME);
+    bool has_timeline_ext = is_extension_available(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
+    bool has_subgroup_control_ext = is_extension_available(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
+    bool has_push_descriptor_ext = is_extension_available(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
+
+    VkPhysicalDeviceSubgroupProperties base_subgroup_props{};
+    base_subgroup_props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;
+    VkPhysicalDeviceSubgroupSizeControlProperties subgroup_props{};
+    subgroup_props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES;
+    VkPhysicalDevicePushDescriptorPropertiesKHR push_desc_props{};
+    push_desc_props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PUSH_DESCRIPTOR_PROPERTIES_KHR;
+
+    VkPhysicalDeviceProperties2 properties2{};
+    properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+
+    if (device_api_version >= VK_API_VERSION_1_1)
+    {
+        base_subgroup_props.pNext = properties2.pNext;
+        properties2.pNext = &base_subgroup_props;
+    }
+    if (has_subgroup_control_ext || device_api_version >= VK_API_VERSION_1_3)
+    {
+        subgroup_props.pNext = properties2.pNext;
+        properties2.pNext = &subgroup_props;
+    }
+    if (has_push_descriptor_ext)
+    {
+        push_desc_props.pNext = properties2.pNext;
+        properties2.pNext = &push_desc_props;
+    }
+    if (properties2.pNext != nullptr)
+    {
+        vkGetPhysicalDeviceProperties2(physical_device, &properties2);
+    }
+    default_subgroup_size = base_subgroup_props.subgroupSize;
+
+    VkPhysicalDevice16BitStorageFeatures supported_storage16{};
+    supported_storage16.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES;
+    VkPhysicalDeviceFloat16Int8FeaturesKHR supported_fp16{};
+    supported_fp16.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FLOAT16_INT8_FEATURES_KHR;
+    VkPhysicalDeviceCooperativeMatrixFeaturesKHR supported_coop{};
+    supported_coop.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR;
+    VkPhysicalDeviceTimelineSemaphoreFeatures supported_timeline{};
+    supported_timeline.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
+    VkPhysicalDeviceSubgroupSizeControlFeatures supported_subgroup{};
+    supported_subgroup.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES;
+
+    VkPhysicalDeviceFeatures2 supported_features2{};
+    supported_features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+
+    if (has_storage16_ext || device_api_version >= VK_API_VERSION_1_1)
+    {
+        supported_storage16.pNext = supported_features2.pNext;
+        supported_features2.pNext = &supported_storage16;
+    }
+    if (has_float16_ext || device_api_version >= VK_API_VERSION_1_2)
+    {
+        supported_fp16.pNext = supported_features2.pNext;
+        supported_features2.pNext = &supported_fp16;
+    }
+    if (has_coop_mat_ext)
+    {
+        supported_coop.pNext = supported_features2.pNext;
+        supported_features2.pNext = &supported_coop;
+    }
+    if (has_timeline_ext || device_api_version >= VK_API_VERSION_1_2)
+    {
+        supported_timeline.pNext = supported_features2.pNext;
+        supported_features2.pNext = &supported_timeline;
+    }
+    if (has_subgroup_control_ext || device_api_version >= VK_API_VERSION_1_3)
+    {
+        supported_subgroup.pNext = supported_features2.pNext;
+        supported_features2.pNext = &supported_subgroup;
+    }
+    if (supported_features2.pNext != nullptr)
+    {
+        vkGetPhysicalDeviceFeatures2(physical_device, &supported_features2);
+    }
 
     void *device_create_pnext = nullptr;
 
@@ -313,11 +579,26 @@ void Vulkan_Context::createLogicalDevice()
         .storagePushConstant16 = VK_FALSE,
         .storageInputOutput16 = VK_FALSE};
 
-    if (has_float16_ext && has_storage16_ext)
-    {
-        required_extensions.push_back(VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME);
-        required_extensions.push_back(VK_KHR_16BIT_STORAGE_EXTENSION_NAME);
+    is_float16_supported = false;
+    is_float16_enabled = false;
+    is_cooperative_matrix_supported = false;
+    is_cooperative_matrix_enabled = false;
 
+    if ((has_float16_ext || device_api_version >= VK_API_VERSION_1_2) &&
+        (has_storage16_ext || device_api_version >= VK_API_VERSION_1_1) &&
+        supported_fp16.shaderFloat16 == VK_TRUE &&
+        supported_storage16.storageBuffer16BitAccess == VK_TRUE)
+    {
+        if (has_float16_ext)
+        {
+            required_extensions.push_back(VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME);
+        }
+        if (has_storage16_ext)
+        {
+            required_extensions.push_back(VK_KHR_16BIT_STORAGE_EXTENSION_NAME);
+        }
+
+        float16_features.pNext = device_create_pnext;
         storage_16bit_features.pNext = &float16_features;
         device_create_pnext = &storage_16bit_features;
         is_float16_supported = true;
@@ -328,11 +609,33 @@ void Vulkan_Context::createLogicalDevice()
                            0,
                            Log_Feature::DEVICE_MANAGEMENT | Log_Feature::FP16_METRICS);
 
-        if (has_coop_mat_ext)
+        const bool will_enable_subgroup_control =
+            (has_subgroup_control_ext || device_api_version >= VK_API_VERSION_1_3) &&
+            supported_subgroup.subgroupSizeControl == VK_TRUE;
+        const bool can_guarantee_32 =
+            (default_subgroup_size == 32) ||
+            (will_enable_subgroup_control &&
+             ((subgroup_props.requiredSubgroupSizeStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0) &&
+             subgroup_props.minSubgroupSize <= 32 &&
+             subgroup_props.maxSubgroupSize >= 32);
+
+        if (has_coop_mat_ext && supported_coop.cooperativeMatrix == VK_TRUE)
         {
-            required_extensions.push_back(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
-            float16_features.pNext = &cooperative_matrix_features;
-            is_cooperative_matrix_supported = true;
+            if (can_guarantee_32)
+            {
+                required_extensions.push_back(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
+                cooperative_matrix_features.pNext = device_create_pnext;
+                device_create_pnext = &cooperative_matrix_features;
+                is_cooperative_matrix_supported = true;
+            }
+            else
+            {
+                Logger::logMessage(Input_Format{"Vulkan_Context::createLogicalDevice: Disabling Cooperative Matrix because device subgroup size ({}) cannot guarantee 32", default_subgroup_size},
+                                   Log_Level::LOG_WARNING,
+                                   true,
+                                   0,
+                                   Log_Feature::DEVICE_MANAGEMENT);
+            }
         }
     }
 
@@ -341,10 +644,18 @@ void Vulkan_Context::createLogicalDevice()
         .pNext = nullptr,
         .timelineSemaphore = VK_TRUE};
 
-    if (User_Preferences::getInstance().isTimelineSemaphoreEnabled())
+    is_timeline_semaphore_feature_enabled = false;
+    if (User_Preferences::getInstance().isTimelineSemaphoreEnabled() &&
+        (has_timeline_ext || device_api_version >= VK_API_VERSION_1_2) &&
+        supported_timeline.timelineSemaphore == VK_TRUE)
     {
+        if (device_api_version < VK_API_VERSION_1_2 && has_timeline_ext)
+        {
+            required_extensions.push_back(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
+        }
         timeline_semaphore_features.pNext = device_create_pnext;
         device_create_pnext = &timeline_semaphore_features;
+        is_timeline_semaphore_feature_enabled = true;
     }
 
     VkPhysicalDeviceFeatures enabled_features{};
@@ -353,56 +664,72 @@ void Vulkan_Context::createLogicalDevice()
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES,
         .pNext = nullptr,
         .subgroupSizeControl = VK_TRUE,
-        .computeFullSubgroups = VK_TRUE};
+        .computeFullSubgroups = VK_FALSE};
 
-    bool has_subgroup_control_ext = is_extension_available(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
-    if (has_subgroup_control_ext)
+    is_subgroup_size_control_supported = false;
+    is_subgroup_size_control_enabled = false;
+    is_compute_full_subgroups_supported = false;
+    min_subgroup_size = 0;
+    max_subgroup_size = 0;
+    required_subgroup_size_stages = 0;
+
+    if ((has_subgroup_control_ext || device_api_version >= VK_API_VERSION_1_3) &&
+        supported_subgroup.subgroupSizeControl == VK_TRUE)
     {
-        VkPhysicalDeviceSubgroupSizeControlFeatures check_features{
-            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES,
-            .pNext = nullptr,
-            .subgroupSizeControl = VK_FALSE,
-            .computeFullSubgroups = VK_FALSE};
-        VkPhysicalDeviceFeatures2 features2{
-            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
-            .pNext = &check_features};
-        vkGetPhysicalDeviceFeatures2(physical_device, &features2);
-
-        if (check_features.subgroupSizeControl == VK_TRUE)
+        if (has_subgroup_control_ext)
         {
             required_extensions.push_back(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
-            subgroup_size_control_features.subgroupSizeControl = VK_TRUE;
-            subgroup_size_control_features.computeFullSubgroups = check_features.computeFullSubgroups;
-            subgroup_size_control_features.pNext = device_create_pnext;
-            device_create_pnext = &subgroup_size_control_features;
-            is_subgroup_size_control_supported = true;
-            is_subgroup_size_control_enabled = true;
-            Logger::logMessage("Vulkan_Context::createLogicalDevice: Subgroup size control (VK_EXT_subgroup_size_control) enabled",
-                               Log_Level::LOG_INFO,
-                               true,
-                               0,
-                               Log_Feature::DEVICE_MANAGEMENT);
         }
+        subgroup_size_control_features.subgroupSizeControl = VK_TRUE;
+        subgroup_size_control_features.computeFullSubgroups = supported_subgroup.computeFullSubgroups;
+        subgroup_size_control_features.pNext = device_create_pnext;
+        device_create_pnext = &subgroup_size_control_features;
+
+        is_subgroup_size_control_supported = true;
+        is_subgroup_size_control_enabled = true;
+        is_compute_full_subgroups_supported = (supported_subgroup.computeFullSubgroups == VK_TRUE);
+        min_subgroup_size = subgroup_props.minSubgroupSize;
+        max_subgroup_size = subgroup_props.maxSubgroupSize;
+        required_subgroup_size_stages = subgroup_props.requiredSubgroupSizeStages;
+        Logger::logMessage(Input_Format{"Vulkan_Context::createLogicalDevice: Subgroup size control enabled (min={}, max={}, full={})",
+                                       min_subgroup_size, max_subgroup_size, is_compute_full_subgroups_supported},
+                           Log_Level::LOG_INFO,
+                           true,
+                           0,
+                           Log_Feature::DEVICE_MANAGEMENT);
     }
 
-    bool has_push_descriptor_ext = is_extension_available(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
+    is_push_descriptor_supported = false;
+    is_push_descriptor_enabled = false;
     if (has_push_descriptor_ext)
     {
-        is_push_descriptor_supported = true;
-        if (User_Preferences::getInstance().isPushDescriptorEnabled())
+        if (push_desc_props.maxPushDescriptors >= 32)
         {
-            required_extensions.push_back(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
-            is_push_descriptor_enabled = true;
-            Logger::logMessage("Vulkan_Context::createLogicalDevice: Push descriptors (VK_KHR_push_descriptor) enabled",
-                               Log_Level::LOG_INFO,
-                               true,
-                               0,
-                               Log_Feature::DEVICE_MANAGEMENT);
+            is_push_descriptor_supported = true;
+            if (User_Preferences::getInstance().isPushDescriptorEnabled())
+            {
+                required_extensions.push_back(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
+                is_push_descriptor_enabled = true;
+                Logger::logMessage("Vulkan_Context::createLogicalDevice: Push descriptors (VK_KHR_push_descriptor) enabled",
+                                   Log_Level::LOG_INFO,
+                                   true,
+                                   0,
+                                   Log_Feature::DEVICE_MANAGEMENT);
+            }
+            else
+            {
+                Logger::logMessage("Vulkan_Context::createLogicalDevice: Push descriptors supported but disabled by user preferences",
+                                   Log_Level::LOG_INFO,
+                                   true,
+                                   0,
+                                   Log_Feature::DEVICE_MANAGEMENT);
+            }
         }
         else
         {
-            Logger::logMessage("Vulkan_Context::createLogicalDevice: Push descriptors supported but disabled by user preferences",
-                               Log_Level::LOG_INFO,
+            Logger::logMessage(Input_Format{"Vulkan_Context::createLogicalDevice: Push descriptors disabled because maxPushDescriptors ({}) < 32",
+                                           push_desc_props.maxPushDescriptors},
+                               Log_Level::LOG_WARNING,
                                true,
                                0,
                                Log_Feature::DEVICE_MANAGEMENT);
@@ -559,31 +886,8 @@ void Vulkan_Context::createPipelineCache()
     }
 }
 
-Vulkan_Context::Vulkan_Context()
+void Vulkan_Context::cleanUp() noexcept
 {
-    Logger::logMessage("Vulkan_Context::Vulkan_Context: Initializing Vulkan Context",
-                       Log_Level::LOG_DEBUG,
-                       true,
-                       0,
-                       Log_Feature::DEVICE_MANAGEMENT);
-    initializeInstance();
-    selectPhysicalDevice();
-    createLogicalDevice();
-    queryCooperativeMatrixSupport();
-    createPipelineCache();
-    createCommandPool();
-    initializeFences();
-    initializeTimelineSemaphore();
-    allocator = std::make_unique<Vulkan_Sub_Allocator>(device, *this, physical_device);
-}
-
-Vulkan_Context::~Vulkan_Context()
-{
-    Logger::logMessage("Vulkan_Context::~Vulkan_Context: Destroying Vulkan Context",
-                       Log_Level::LOG_DEBUG,
-                       true,
-                       0,
-                       Log_Feature::DEVICE_MANAGEMENT);
     if (device != VK_NULL_HANDLE)
     {
         vkDeviceWaitIdle(device);
@@ -593,73 +897,136 @@ Vulkan_Context::~Vulkan_Context()
     {
         cleanGarbage(i);
 
-        if (fences[i] != VK_NULL_HANDLE)
+        if (device != VK_NULL_HANDLE && fences[i] != VK_NULL_HANDLE)
         {
             vkDestroyFence(device, fences[i], nullptr);
+            fences[i] = VK_NULL_HANDLE;
         }
 
-        if (staging_buffers[i] != VK_NULL_HANDLE)
+        if (device != VK_NULL_HANDLE && staging_buffers[i] != VK_NULL_HANDLE)
         {
             vkDestroyBuffer(device, staging_buffers[i], nullptr);
-            allocator->free(staging_allocations[i]);
+            staging_buffers[i] = VK_NULL_HANDLE;
+            if (allocator)
+            {
+                allocator->free(staging_allocations[i]);
+            }
+            staging_allocations[i] = Memory_Allocation{};
             staging_mapped_pointers[i] = nullptr;
+            staging_capacities[i] = 0;
+            current_offsets[i] = 0;
         }
     }
 
-    if (readback_staging_buffer != VK_NULL_HANDLE)
+    if (device != VK_NULL_HANDLE && readback_staging_buffer != VK_NULL_HANDLE)
     {
         vkDestroyBuffer(device, readback_staging_buffer, nullptr);
-        allocator->free(readback_staging_allocation);
+        if (allocator)
+        {
+            allocator->free(readback_staging_allocation);
+        }
+        readback_staging_allocation = Memory_Allocation{};
         readback_staging_buffer = VK_NULL_HANDLE;
         readback_mapped_pointer = nullptr;
         readback_staging_capacity = 0;
     }
 
-    if (timeline_semaphore != VK_NULL_HANDLE)
+    if (device != VK_NULL_HANDLE && timeline_semaphore != VK_NULL_HANDLE)
     {
         vkDestroySemaphore(device, timeline_semaphore, nullptr);
         timeline_semaphore = VK_NULL_HANDLE;
     }
+    is_timeline_semaphore_supported = false;
 
     allocator.reset();
 
-    if (transfer_command_buffer != VK_NULL_HANDLE)
+    if (device != VK_NULL_HANDLE && command_pool != VK_NULL_HANDLE && transfer_command_buffer != VK_NULL_HANDLE)
     {
         vkFreeCommandBuffers(device, command_pool, 1, &transfer_command_buffer);
         transfer_command_buffer = VK_NULL_HANDLE;
     }
 
-    if (immediate_copy_command_buffer != VK_NULL_HANDLE)
+    if (device != VK_NULL_HANDLE && command_pool != VK_NULL_HANDLE && immediate_copy_command_buffer != VK_NULL_HANDLE)
     {
         vkFreeCommandBuffers(device, command_pool, 1, &immediate_copy_command_buffer);
         immediate_copy_command_buffer = VK_NULL_HANDLE;
     }
 
-    if (immediate_copy_fence != VK_NULL_HANDLE)
+    if (device != VK_NULL_HANDLE && immediate_copy_fence != VK_NULL_HANDLE)
     {
         vkDestroyFence(device, immediate_copy_fence, nullptr);
         immediate_copy_fence = VK_NULL_HANDLE;
     }
 
-    if (command_pool != VK_NULL_HANDLE)
+    if (device != VK_NULL_HANDLE && command_pool != VK_NULL_HANDLE)
     {
         vkDestroyCommandPool(device, command_pool, nullptr);
+        command_pool = VK_NULL_HANDLE;
     }
 
-    if (pipeline_cache != VK_NULL_HANDLE)
+    if (device != VK_NULL_HANDLE && pipeline_cache != VK_NULL_HANDLE)
     {
         vkDestroyPipelineCache(device, pipeline_cache, nullptr);
+        pipeline_cache = VK_NULL_HANDLE;
     }
 
     if (device != VK_NULL_HANDLE)
     {
         vkDestroyDevice(device, nullptr);
+        device = VK_NULL_HANDLE;
     }
 
     if (instance != VK_NULL_HANDLE)
     {
+        if (debug_messenger != VK_NULL_HANDLE)
+        {
+            auto destroy_fn = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
+                vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT"));
+            if (destroy_fn != nullptr)
+            {
+                destroy_fn(instance, debug_messenger, nullptr);
+            }
+            debug_messenger = VK_NULL_HANDLE;
+        }
         vkDestroyInstance(instance, nullptr);
+        instance = VK_NULL_HANDLE;
     }
+}
+
+Vulkan_Context::Vulkan_Context()
+{
+    Logger::logMessage("Vulkan_Context::Vulkan_Context: Initializing Vulkan Context",
+                       Log_Level::LOG_DEBUG,
+                       true,
+                       0,
+                       Log_Feature::DEVICE_MANAGEMENT);
+    try
+    {
+        initializeInstance();
+        selectPhysicalDevice();
+        createLogicalDevice();
+        queryCooperativeMatrixSupport();
+        createPipelineCache();
+        createCommandPool();
+        initializeFences();
+        initializeTimelineSemaphore();
+        allocator = std::make_unique<Vulkan_Sub_Allocator>(device, *this, physical_device);
+    }
+    catch (...)
+    {
+        cleanUp();
+        throw;
+    }
+}
+
+Vulkan_Context::~Vulkan_Context()
+{
+    Logger::logMessage("Vulkan_Context::~Vulkan_Context: Destroying Vulkan Context",
+                       Log_Level::LOG_DEBUG,
+                       true,
+                       0,
+                       Log_Feature::DEVICE_MANAGEMENT);
+    cleanUp();
 }
 
 Memory_Allocation Vulkan_Context::allocateMemory(const VkMemoryRequirements &_memory_requirements, VkMemoryPropertyFlags _memory_properties) const
@@ -669,21 +1036,51 @@ Memory_Allocation Vulkan_Context::allocateMemory(const VkMemoryRequirements &_me
 
 void Vulkan_Context::deferDestruction(uint32_t _used_frame, VkBuffer _buffer, const Memory_Allocation &_allocation) const
 {
+    const uint32_t safe_frame = _used_frame % MAX_FRAMES_IN_FLIGHT;
+    deferDestructionMask(1u << safe_frame, _buffer, _allocation);
+}
+
+void Vulkan_Context::deferDestructionMask(uint32_t _used_frame_mask, VkBuffer _buffer, const Memory_Allocation &_allocation) const
+{
+    const uint32_t full_mask = (1u << MAX_FRAMES_IN_FLIGHT) - 1u;
+    uint32_t mask = _used_frame_mask & full_mask;
     if (_buffer != VK_NULL_HANDLE)
     {
-        removeTransferTasksForBuffer(_buffer);
+        std::lock_guard<std::recursive_mutex> lock(context_mutex);
+        const bool has_pending_source_transfer = std::any_of(
+            pending_transfer_tasks.begin(),
+            pending_transfer_tasks.end(),
+            [_buffer](const Buffer_Transfer_Task &task)
+            {
+                return task.source_buffer == _buffer;
+            });
+        if (has_pending_source_transfer)
+        {
+            const uint32_t active_frame = current_frame.load(std::memory_order_acquire) % MAX_FRAMES_IN_FLIGHT;
+            mask |= (1u << active_frame);
+        }
+        else
+        {
+            removeTransferTasksForBuffer(_buffer);
+        }
+    }
+
+    if (mask == 0)
+    {
+        mask = 1u << (current_frame.load(std::memory_order_acquire) % MAX_FRAMES_IN_FLIGHT);
     }
 
     if (_buffer != VK_NULL_HANDLE || _allocation.memory != VK_NULL_HANDLE)
     {
         std::lock_guard<std::mutex> lock(garbage_mutex);
-        garbage_bins[_used_frame].push_back(Resource_Garbage{
+        deferred_garbage.push_back(Resource_Garbage{
             .buffer = _buffer,
-            .allocation = _allocation});
+            .allocation = _allocation,
+            .pending_frame_mask = mask});
     }
     else
     {
-        Logger::logMessage("Vulkan_Context::deferDestruction: Both buffer and memory handle are null",
+        Logger::logMessage("Vulkan_Context::deferDestructionMask: Both buffer and memory handle are null",
                            Log_Level::LOG_WARNING,
                            false,
                            0,
@@ -712,6 +1109,8 @@ uint32_t Vulkan_Context::findMemoryType(uint32_t _type_filter, VkMemoryPropertyF
 
 void* Vulkan_Context::allocateStagingSpace(uint32_t _frame_index, VkDeviceSize _size, VkBuffer& _out_buffer, VkDeviceSize& _out_offset) const
 {
+    std::lock_guard<std::recursive_mutex> lock(context_mutex);
+
     if (_frame_index >= MAX_FRAMES_IN_FLIGHT)
     {
         Logger::logMessage(Input_Format{ "Vulkan_Context::allocateStagingSpace: frame_index out of bounds ({})", _frame_index },
@@ -722,32 +1121,45 @@ void* Vulkan_Context::allocateStagingSpace(uint32_t _frame_index, VkDeviceSize _
         _frame_index = _frame_index % MAX_FRAMES_IN_FLIGHT;
     }
 
-    if (!is_frame_ready[_frame_index])
+    if (!is_frame_ready[_frame_index].load(std::memory_order_acquire))
     {
-        const_cast<Vulkan_Context*>(this)->prepareFrame(_frame_index);
+        prepareFrame(_frame_index);
     }
-
-    std::lock_guard lock(context_mutex);
 
     constexpr VkDeviceSize ALIGNMENT = 256;
     VkDeviceSize aligned_size = (_size + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1);
 
     if (staging_buffers[_frame_index] == VK_NULL_HANDLE || current_offsets[_frame_index] + aligned_size > staging_capacities[_frame_index])
     {
-        if (staging_buffers[_frame_index] != VK_NULL_HANDLE && aligned_size <= staging_capacities[_frame_index])
+        bool staging_in_use_by_pending = false;
+        if (staging_buffers[_frame_index] != VK_NULL_HANDLE)
         {
-            executePendingTransfers();
-            if (!is_frame_ready[_frame_index])
+            staging_in_use_by_pending = std::any_of(
+                pending_transfer_tasks.begin(),
+                pending_transfer_tasks.end(),
+                [&](const Buffer_Transfer_Task &task)
+                {
+                    return task.source_buffer == staging_buffers[_frame_index];
+                });
+        }
+
+        if (staging_buffers[_frame_index] != VK_NULL_HANDLE && aligned_size <= staging_capacities[_frame_index] && !staging_in_use_by_pending)
+        {
+            if (!is_frame_ready[_frame_index].load(std::memory_order_acquire))
             {
-                const_cast<Vulkan_Context*>(this)->prepareFrame(_frame_index);
+                prepareFrame(_frame_index);
             }
             current_offsets[_frame_index] = 0;
         }
         else
         {
-            constexpr VkDeviceSize INITIAL_STAGING_CAPACITY = 32 * 1024 * 1024;
-            VkDeviceSize calculated_size = std::max(staging_capacities[_frame_index] * 2, current_offsets[_frame_index] + aligned_size + 1024 * 1024);
-            VkDeviceSize new_capacity = std::max(INITIAL_STAGING_CAPACITY, calculated_size);
+            VkDeviceSize initial_staging_capacity = static_cast<VkDeviceSize>(User_Preferences::getInstance().getStagingPoolSizeMb()) * 1024ULL * 1024ULL;
+            if (initial_staging_capacity == 0)
+            {
+                initial_staging_capacity = 32ULL * 1024ULL * 1024ULL;
+            }
+            VkDeviceSize calculated_size = std::max(staging_capacities[_frame_index] * 2, aligned_size + 1024 * 1024);
+            VkDeviceSize new_capacity = std::max(initial_staging_capacity, calculated_size);
 
             Logger::logMessage(Input_Format{ "Vulkan_Context::allocateStagingSpace: Reallocating staging buffer for frame {} to new capacity {} bytes", _frame_index, new_capacity },
                 Log_Level::LOG_WARNING,
@@ -808,28 +1220,16 @@ void* Vulkan_Context::allocateStagingSpace(uint32_t _frame_index, VkDeviceSize _
 
             if (staging_buffers[_frame_index] != VK_NULL_HANDLE)
             {
-                if (current_offsets[_frame_index] > 0)
-                {
-                    std::memcpy(new_mapped_pointer, staging_mapped_pointers[_frame_index], current_offsets[_frame_index]);
-                }
-
                 staging_garbages[_frame_index].push_back(Staging_Garbage{
                     .buffer = staging_buffers[_frame_index],
                     .allocation = staging_allocations[_frame_index] });
-
-                for (auto& task : pending_transfer_tasks)
-                {
-                    if (task.source_buffer == staging_buffers[_frame_index])
-                    {
-                        task.source_buffer = new_buffer;
-                    }
-                }
             }
 
             staging_buffers[_frame_index] = new_buffer;
             staging_allocations[_frame_index] = new_allocation;
             staging_mapped_pointers[_frame_index] = new_mapped_pointer;
             staging_capacities[_frame_index] = new_capacity;
+            current_offsets[_frame_index] = 0;
         }
     }
 
@@ -847,6 +1247,47 @@ void* Vulkan_Context::allocateStagingSpace(uint32_t _frame_index, VkDeviceSize _
     return target_pointer;
 }
 
+void Vulkan_Context::uploadToDevice(uint32_t _frame_index, const void* _source_data, VkDeviceSize _size, VkBuffer _destination_buffer, VkDeviceSize _destination_offset) const
+{
+    if (!_source_data || _size == 0 || _destination_buffer == VK_NULL_HANDLE)
+    {
+        return;
+    }
+
+    std::lock_guard<std::recursive_mutex> lock(context_mutex);
+    VkBuffer staging_buffer = VK_NULL_HANDLE;
+    VkDeviceSize staging_offset = 0;
+    void* mapped_pointer = allocateStagingSpace(_frame_index, _size, staging_buffer, staging_offset);
+    std::memcpy(mapped_pointer, _source_data, static_cast<size_t>(_size));
+
+    Buffer_Transfer_Task transfer_task{
+        .source_buffer = staging_buffer,
+        .source_offset = staging_offset,
+        .destination_buffer = _destination_buffer,
+        .destination_offset = _destination_offset,
+        .size = _size};
+    addTransferTask(transfer_task);
+}
+
+void Vulkan_Context::downloadFromDevice(VkBuffer _source_buffer, void* _destination_data, VkDeviceSize _copy_size, VkDeviceSize _buffer_size) const
+{
+    if (_source_buffer == VK_NULL_HANDLE || !_destination_data || _copy_size == 0 || _buffer_size == 0)
+    {
+        return;
+    }
+
+    flush();
+
+    std::lock_guard<std::recursive_mutex> lock(context_mutex);
+    executePendingTransfers();
+    VkBuffer staging_buffer = VK_NULL_HANDLE;
+    void* mapped_pointer = ensureReadbackStagingBuffer(_buffer_size, staging_buffer);
+    copyBufferImmediate(_source_buffer, staging_buffer, _buffer_size);
+
+    size_t copy_bytes = static_cast<size_t>(std::min(_copy_size, _buffer_size));
+    std::memcpy(_destination_data, mapped_pointer, copy_bytes);
+}
+
 void Vulkan_Context::resetFrameFence(uint32_t _frame_index) const
 {
     if (_frame_index >= MAX_FRAMES_IN_FLIGHT)
@@ -858,19 +1299,33 @@ void Vulkan_Context::resetFrameFence(uint32_t _frame_index) const
                            Log_Feature::SYNCHRONIZATION);
         return;
     }
-    vkResetFences(device, 1, &fences[_frame_index]);
+    std::lock_guard<std::recursive_mutex> lock(context_mutex);
+    if (vkResetFences(device, 1, &fences[_frame_index]) != VK_SUCCESS)
+    {
+        Logger::logMessage(Input_Format{"Vulkan_Context::resetFrameFence: Failed to reset fence for frame {}", _frame_index},
+                           Log_Level::LOG_ERROR,
+                           true,
+                           0,
+                           Log_Feature::SYNCHRONIZATION);
+        throw std::runtime_error("Vulkan_Context::resetFrameFence: Failed to reset fence");
+    }
 }
 
 void Vulkan_Context::flush(VkFence _fence) const
 {
-    if (flush_callback)
+    std::function<void(VkFence)> callback_copy;
+    {
+        std::lock_guard<std::recursive_mutex> lock(context_mutex);
+        callback_copy = flush_callback;
+    }
+    if (callback_copy)
     {
         Logger::logMessage("Vulkan_Context::flush: Executing flush callback",
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
                            Log_Feature::SYNCHRONIZATION);
-        flush_callback(_fence);
+        callback_copy(_fence);
     }
     else
     {
@@ -893,13 +1348,13 @@ void Vulkan_Context::resetStagingOffset(uint32_t _frame_index) const
                            Log_Feature::MEMORY_ALLOCATION | Log_Feature::MEMORY_TRANSFER);
         return;
     }
-    std::lock_guard lock(context_mutex);
+    std::lock_guard<std::recursive_mutex> lock(context_mutex);
     current_offsets[_frame_index] = 0;
 }
 
 void Vulkan_Context::addTransferTask(const Buffer_Transfer_Task &_task) const
 {
-    std::lock_guard lock(context_mutex);
+    std::lock_guard<std::recursive_mutex> lock(context_mutex);
     pending_transfer_tasks.push_back(_task);
 }
 
@@ -909,7 +1364,7 @@ void Vulkan_Context::removeTransferTasksForBuffer(VkBuffer _buffer) const
     {
         return;
     }
-    std::lock_guard lock(context_mutex);
+    std::lock_guard<std::recursive_mutex> lock(context_mutex);
     std::erase_if(pending_transfer_tasks, [_buffer](const Buffer_Transfer_Task &task) {
         return task.source_buffer == _buffer || task.destination_buffer == _buffer;
     });
@@ -917,22 +1372,33 @@ void Vulkan_Context::removeTransferTasksForBuffer(VkBuffer _buffer) const
 
 void Vulkan_Context::clearTransferTasks() const
 {
-    std::lock_guard lock(context_mutex);
+    std::lock_guard<std::recursive_mutex> lock(context_mutex);
     pending_transfer_tasks.clear();
+}
+
+bool Vulkan_Context::hasPendingTransfers() const
+{
+    std::lock_guard<std::recursive_mutex> lock(context_mutex);
+    return !pending_transfer_tasks.empty();
+}
+
+std::vector<Buffer_Transfer_Task> Vulkan_Context::takeTransferTasks() const
+{
+    std::lock_guard<std::recursive_mutex> lock(context_mutex);
+    std::vector<Buffer_Transfer_Task> tasks = std::move(pending_transfer_tasks);
+    pending_transfer_tasks.clear();
+    return tasks;
 }
 
 void Vulkan_Context::executePendingTransfers() const
 {
-    std::vector<Buffer_Transfer_Task> transfers_to_execute;
+    std::lock_guard<std::recursive_mutex> lock(context_mutex);
+    if (pending_transfer_tasks.empty())
     {
-        std::lock_guard lock(context_mutex);
-        if (pending_transfer_tasks.empty())
-        {
-            return;
-        }
-        transfers_to_execute = std::move(pending_transfer_tasks);
-        pending_transfer_tasks.clear();
+        return;
     }
+    std::vector<Buffer_Transfer_Task> transfers_to_execute = std::move(pending_transfer_tasks);
+    pending_transfer_tasks.clear();
 
     if (transfer_command_buffer == VK_NULL_HANDLE)
     {
@@ -973,14 +1439,20 @@ void Vulkan_Context::executePendingTransfers() const
     for (const auto &task : transfers_to_execute)
     {
         if (task.destination_buffer == VK_NULL_HANDLE || task.size == 0 ||
-            (task.source_buffer != VK_NULL_HANDLE && task.source_buffer == task.destination_buffer && task.source_offset == task.destination_offset))
+            (!task.is_fill && task.source_buffer != VK_NULL_HANDLE && task.source_buffer == task.destination_buffer && task.source_offset == task.destination_offset))
         {
             continue;
         }
 
-        if (task.source_buffer == VK_NULL_HANDLE)
+        if (task.is_fill || task.source_buffer == VK_NULL_HANDLE)
         {
-            vkCmdFillBuffer(transfer_command_buffer, task.destination_buffer, task.destination_offset, task.size, static_cast<uint32_t>(task.source_offset));
+            if ((task.destination_offset % 4) != 0 || (task.size != VK_WHOLE_SIZE && (task.size % 4) != 0))
+            {
+                vkEndCommandBuffer(transfer_command_buffer);
+                throw std::invalid_argument("Vulkan_Context::executePendingTransfers: fillBuffer offset and size must be multiples of 4 bytes");
+            }
+            const uint32_t pattern = task.is_fill ? task.fill_pattern : static_cast<uint32_t>(task.source_offset);
+            vkCmdFillBuffer(transfer_command_buffer, task.destination_buffer, task.destination_offset, task.size, pattern);
         }
         else
         {
@@ -996,7 +1468,7 @@ void Vulkan_Context::executePendingTransfers() const
             .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
             .pNext = nullptr,
             .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-            .dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT,
+            .dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .buffer = task.destination_buffer,
@@ -1040,7 +1512,15 @@ void Vulkan_Context::executePendingTransfers() const
         throw std::runtime_error("Failed to submit transfer queue");
     }
 
-    vkQueueWaitIdle(compute_queue);
+    if (vkQueueWaitIdle(compute_queue) != VK_SUCCESS)
+    {
+        Logger::logMessage("Vulkan_Context::executePendingTransfers: vkQueueWaitIdle failed",
+                           Log_Level::LOG_ERROR,
+                           true,
+                           0,
+                           Log_Feature::DEVICE_MANAGEMENT | Log_Feature::MEMORY_TRANSFER);
+        throw std::runtime_error("Vulkan_Context::executePendingTransfers: vkQueueWaitIdle failed");
+    }
 }
 
 void Vulkan_Context::cleanGarbage(uint32_t _frame_index) const
@@ -1064,9 +1544,12 @@ void Vulkan_Context::cleanGarbage(uint32_t _frame_index) const
                 std::erase_if(pending_transfer_tasks, [&](const Buffer_Transfer_Task &task) {
                     return task.source_buffer == staging_garbage_item.buffer || task.destination_buffer == staging_garbage_item.buffer;
                 });
-                vkDestroyBuffer(device, staging_garbage_item.buffer, nullptr);
+                if (device != VK_NULL_HANDLE)
+                {
+                    vkDestroyBuffer(device, staging_garbage_item.buffer, nullptr);
+                }
             }
-            if (staging_garbage_item.allocation.memory != VK_NULL_HANDLE)
+            if (staging_garbage_item.allocation.memory != VK_NULL_HANDLE && allocator)
             {
                 allocator->free(staging_garbage_item.allocation);
             }
@@ -1077,7 +1560,22 @@ void Vulkan_Context::cleanGarbage(uint32_t _frame_index) const
     std::vector<Resource_Garbage> local_bin;
     {
         std::lock_guard<std::mutex> lock(garbage_mutex);
-        local_bin.swap(garbage_bins[_frame_index]);
+        const uint32_t clear_bit = ~(1u << _frame_index);
+        std::vector<Resource_Garbage> remaining;
+        remaining.reserve(deferred_garbage.size());
+        for (auto &item : deferred_garbage)
+        {
+            item.pending_frame_mask &= clear_bit;
+            if (item.pending_frame_mask == 0)
+            {
+                local_bin.push_back(item);
+            }
+            else
+            {
+                remaining.push_back(item);
+            }
+        }
+        deferred_garbage.swap(remaining);
     }
 
     if (!local_bin.empty())
@@ -1094,24 +1592,29 @@ void Vulkan_Context::cleanGarbage(uint32_t _frame_index) const
         if (garbage_item.buffer != VK_NULL_HANDLE)
         {
             removeTransferTasksForBuffer(garbage_item.buffer);
-            vkDestroyBuffer(device, garbage_item.buffer, nullptr);
+            if (device != VK_NULL_HANDLE)
+            {
+                vkDestroyBuffer(device, garbage_item.buffer, nullptr);
+            }
         }
-        if (garbage_item.allocation.memory != VK_NULL_HANDLE)
+        if (garbage_item.allocation.memory != VK_NULL_HANDLE && allocator)
         {
             allocator->free(garbage_item.allocation);
         }
     }
 }
 
-void Vulkan_Context::prepareFrame(uint32_t _frame_index)
+void Vulkan_Context::prepareFrame(uint32_t _frame_index) const
 {
-    uint32_t target_frame = (_frame_index == UINT32_MAX) ? current_frame : _frame_index;
+    std::lock_guard<std::recursive_mutex> lock(context_mutex);
+
+    uint32_t target_frame = (_frame_index == UINT32_MAX) ? current_frame.load(std::memory_order_acquire) : _frame_index;
     if (target_frame >= MAX_FRAMES_IN_FLIGHT)
     {
         return;
     }
 
-    if (is_frame_ready[target_frame])
+    if (is_frame_ready[target_frame].load(std::memory_order_acquire))
     {
         return;
     }
@@ -1129,19 +1632,40 @@ void Vulkan_Context::prepareFrame(uint32_t _frame_index)
     VkResult fence_status = vkGetFenceStatus(device, fences[target_frame]);
     if (fence_status == VK_NOT_READY)
     {
-        vkWaitForFences(device, 1, &fences[target_frame], VK_TRUE, UINT64_MAX);
+        VkResult wait_res = vkWaitForFences(device, 1, &fences[target_frame], VK_TRUE, UINT64_MAX);
+        if (wait_res != VK_SUCCESS)
+        {
+            Logger::logMessage(Input_Format{"Vulkan_Context::prepareFrame: vkWaitForFences failed with code {}", static_cast<int>(wait_res)},
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::DEVICE_MANAGEMENT | Log_Feature::SYNCHRONIZATION);
+            throw std::runtime_error("Vulkan_Context::prepareFrame: vkWaitForFences failed");
+        }
+    }
+    else if (fence_status != VK_SUCCESS)
+    {
+        Logger::logMessage(Input_Format{"Vulkan_Context::prepareFrame: vkGetFenceStatus failed with code {}", static_cast<int>(fence_status)},
+                           Log_Level::LOG_ERROR,
+                           true,
+                           0,
+                           Log_Feature::DEVICE_MANAGEMENT | Log_Feature::SYNCHRONIZATION);
+        throw std::runtime_error("Vulkan_Context::prepareFrame: vkGetFenceStatus failed");
     }
 
     cleanGarbage(target_frame);
     resetStagingOffset(target_frame);
-    is_frame_ready[target_frame] = true;
+    is_frame_ready[target_frame].store(true, std::memory_order_release);
 }
 
 void Vulkan_Context::advanceFrame() const
 {
-    is_frame_ready[current_frame] = false;
-    current_frame = (current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
-    Logger::logMessage(Input_Format{"Vulkan_Context::advanceFrame: Advanced current frame to {}", current_frame},
+    std::lock_guard<std::recursive_mutex> lock(context_mutex);
+    uint32_t cur = current_frame.load(std::memory_order_acquire);
+    is_frame_ready[cur].store(false, std::memory_order_release);
+    uint32_t next = (cur + 1) % MAX_FRAMES_IN_FLIGHT;
+    current_frame.store(next, std::memory_order_release);
+    Logger::logMessage(Input_Format{"Vulkan_Context::advanceFrame: Advanced current frame to {}", next},
                        Log_Level::LOG_DEBUG,
                        true,
                        0,
@@ -1181,7 +1705,9 @@ void Vulkan_Context::copyBuffer(VkBuffer _source_buffer,
 
 void Vulkan_Context::copyBufferImmediate(VkBuffer _source_buffer,
                                         VkBuffer _destination_buffer,
-                                        VkDeviceSize _size) const
+                                        VkDeviceSize _size,
+                                        VkDeviceSize _source_offset,
+                                        VkDeviceSize _destination_offset) const
 {
     if (_source_buffer == VK_NULL_HANDLE || _destination_buffer == VK_NULL_HANDLE || _size == 0)
     {
@@ -1226,9 +1752,27 @@ void Vulkan_Context::copyBufferImmediate(VkBuffer _source_buffer,
         throw std::runtime_error("Failed to begin command buffer");
     }
 
+    VkMemoryBarrier pre_copy_barrier{
+        .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+        .pNext = nullptr,
+        .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT};
+
+    vkCmdPipelineBarrier(
+        immediate_copy_command_buffer,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0,
+        1,
+        &pre_copy_barrier,
+        0,
+        nullptr,
+        0,
+        nullptr);
+
     VkBufferCopy copy_region{
-        .srcOffset = 0,
-        .dstOffset = 0,
+        .srcOffset = _source_offset,
+        .dstOffset = _destination_offset,
         .size = _size};
     vkCmdCopyBuffer(immediate_copy_command_buffer, _source_buffer, _destination_buffer, 1, &copy_region);
 
@@ -1299,7 +1843,15 @@ void Vulkan_Context::copyBufferImmediate(VkBuffer _source_buffer,
         }
         else
         {
-            vkResetFences(device, 1, &immediate_copy_fence);
+            if (vkResetFences(device, 1, &immediate_copy_fence) != VK_SUCCESS)
+            {
+                Logger::logMessage("Vulkan_Context::copyBufferImmediate: Failed to reset immediate copy fence",
+                                   Log_Level::LOG_ERROR,
+                                   true,
+                                   0,
+                                   Log_Feature::SYNCHRONIZATION);
+                throw std::runtime_error("Failed to reset immediate copy fence");
+            }
         }
 
         VkSubmitInfo submit_information{
@@ -1323,7 +1875,15 @@ void Vulkan_Context::copyBufferImmediate(VkBuffer _source_buffer,
             throw std::runtime_error("Failed to submit copy command");
         }
 
-        vkWaitForFences(device, 1, &immediate_copy_fence, VK_TRUE, UINT64_MAX);
+        if (vkWaitForFences(device, 1, &immediate_copy_fence, VK_TRUE, UINT64_MAX) != VK_SUCCESS)
+        {
+            Logger::logMessage("Vulkan_Context::copyBufferImmediate: Failed to wait for immediate copy fence",
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::SYNCHRONIZATION);
+            throw std::runtime_error("Failed to wait for immediate copy fence");
+        }
     }
 }
 
@@ -1342,12 +1902,24 @@ void Vulkan_Context::fillBuffer(VkBuffer _destination_buffer,
         return;
     }
 
+    if ((_destination_offset % 4) != 0 || (_size != VK_WHOLE_SIZE && (_size % 4) != 0))
+    {
+        Logger::logMessage(Input_Format{"Vulkan_Context::fillBuffer: Unaligned offset ({}) or size ({}) for vkCmdFillBuffer", _destination_offset, _size},
+                           Log_Level::LOG_ERROR,
+                           true,
+                           0,
+                           Log_Feature::MEMORY_TRANSFER);
+        throw std::invalid_argument("Vulkan_Context::fillBuffer: offset and size must be multiples of 4 bytes");
+    }
+
     Buffer_Transfer_Task transfer_task{
         .source_buffer = VK_NULL_HANDLE,
-        .source_offset = static_cast<VkDeviceSize>(_pattern),
+        .source_offset = 0,
         .destination_buffer = _destination_buffer,
         .destination_offset = _destination_offset,
-        .size = _size};
+        .size = _size,
+        .is_fill = true,
+        .fill_pattern = _pattern};
 
     addTransferTask(transfer_task);
     Logger::logMessage(Input_Format{"Vulkan_Context::fillBuffer: Enqueued fill task of size {} bytes, pattern 0x{:08x}", _size, _pattern},
@@ -1363,7 +1935,15 @@ void Vulkan_Context::waitTimelineSemaphore(uint64_t target_value, uint64_t timeo
     {
         if (device != VK_NULL_HANDLE && compute_queue != VK_NULL_HANDLE)
         {
-            vkQueueWaitIdle(compute_queue);
+            if (vkQueueWaitIdle(compute_queue) != VK_SUCCESS)
+            {
+                Logger::logMessage("Vulkan_Context::waitTimelineSemaphore: vkQueueWaitIdle failed",
+                                   Log_Level::LOG_ERROR,
+                                   true,
+                                   0,
+                                   Log_Feature::SYNCHRONIZATION);
+                throw std::runtime_error("Vulkan_Context::waitTimelineSemaphore: vkQueueWaitIdle failed");
+            }
         }
         return;
     }
@@ -1385,6 +1965,7 @@ void Vulkan_Context::waitTimelineSemaphore(uint64_t target_value, uint64_t timeo
                            true,
                            0,
                            Log_Feature::SYNCHRONIZATION);
+        throw std::runtime_error("Vulkan_Context::waitTimelineSemaphore: vkWaitSemaphores failed");
     }
 }
 

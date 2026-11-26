@@ -24,16 +24,10 @@ public:
                 float _backoff_factor = 0.5f,
                 uint32_t _growth_interval = 2000,
                 bool _enabled = true,
-                float _max_scale = 1024.0f);
+                float _max_scale = 1024.0f,
+                float _min_scale = 1.0f);
 
-    float scaleLoss(float loss_value) const noexcept
-    {
-        if (!is_enabled)
-        {
-            return loss_value;
-        }
-        return loss_value * scale_factor;
-    }
+    float scaleLoss(float loss_value) const noexcept;
 
     void scaleGradient(Tensor &gradient) const;
     void unscaleGradient(Tensor &gradient) const;
@@ -55,12 +49,12 @@ public:
     float getMaxScale() const noexcept { return max_scale; }
     bool isEnabled() const noexcept { return is_enabled; }
 
-    void setGrowthInterval(uint32_t _growth_interval) noexcept { growth_interval = _growth_interval; }
-    void setBackoffFactor(float _backoff_factor) noexcept { backoff_factor = _backoff_factor; }
-    void setGrowthFactor(float _growth_factor) noexcept { growth_factor = _growth_factor; }
-    void setScaleFactor(float _scale_factor) noexcept { scale_factor = _scale_factor; }
+    void setGrowthInterval(uint32_t _growth_interval) noexcept;
+    void setBackoffFactor(float _backoff_factor) noexcept;
+    void setGrowthFactor(float _growth_factor) noexcept;
+    void setScaleFactor(float _scale_factor) noexcept;
     void setGoodSteps(uint32_t _steps) noexcept { good_steps = _steps; }
-    void setMinScale(float _min_scale) noexcept { min_scale = _min_scale; }
-    void setMaxScale(float _max_scale) noexcept { max_scale = _max_scale; }
+    void setMinScale(float _min_scale) noexcept;
+    void setMaxScale(float _max_scale) noexcept;
     void setEnabled(bool _enabled) noexcept { is_enabled = _enabled; }
 };

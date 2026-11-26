@@ -52,6 +52,7 @@ struct Virtual_Block
     VkDeviceSize offset = 0;
     VkDeviceSize size = 0;
     uint32_t free_after_node_index = 0;
+    std::vector<std::pair<uint32_t, uint32_t>> occupied_intervals;
 };
 
 class Memory_Planner
@@ -89,6 +90,18 @@ public:
     void setTotalAllocatedSize(VkDeviceSize _size) noexcept { total_allocated_size = _size; }
 };
 
+struct Allocator_Stats
+{
+    uint64_t total_allocated_bytes = 0;
+    uint64_t total_used_bytes = 0;
+    uint64_t total_free_bytes = 0;
+    uint64_t dedicated_arena_bytes = 0;
+    size_t active_chunk_count = 0;
+    size_t empty_chunk_count = 0;
+    size_t reclaimed_chunk_count = 0;
+    uint64_t reclaimed_bytes = 0;
+};
+
 class Vulkan_Sub_Allocator
 {
 private:
@@ -99,6 +112,8 @@ private:
     std::vector<Memory_Chunk> memory_chunks;
     VkDeviceSize default_chunk_size = 64 * 1024 * 1024;
     size_t arena_chunk_index = std::numeric_limits<size_t>::max();
+    size_t total_reclaimed_chunks = 0;
+    uint64_t total_reclaimed_bytes = 0;
     mutable std::recursive_mutex allocator_mutex;
     Memory_Planner memory_planner;
 
@@ -112,20 +127,53 @@ public:
 
     void free(const Memory_Allocation &_allocation);
     Memory_Allocation allocate(const VkMemoryRequirements &_memory_requirements, VkMemoryPropertyFlags _memory_properties, VkPhysicalDevice _target_physical_device = VK_NULL_HANDLE);
+    size_t allocateDedicatedArena(VkDeviceSize _total_size, uint32_t _memory_type_bits, VkMemoryPropertyFlags _memory_properties);
+    Memory_Allocation getArenaAllocation(size_t _chunk_index, VkDeviceSize _offset, VkDeviceSize _size) const;
+    void releaseDedicatedArena(size_t _chunk_index);
+    uint64_t reclaimEmptyChunks(bool _keep_one_default_chunk_per_type = false);
+    Allocator_Stats getStats() const;
 
     const Vulkan_Context &getContext() const noexcept { return context; }
     const Memory_Planner &getMemoryPlanner() const noexcept { return memory_planner; }
     Memory_Planner &getMemoryPlanner() noexcept { return memory_planner; }
     const Memory_Planner &getPlanner() const noexcept { return memory_planner; }
     Memory_Planner &getPlanner() noexcept { return memory_planner; }
-    const std::vector<Memory_Chunk> &getMemoryChunks() const noexcept { return memory_chunks; }
-    size_t getMemoryChunkCount() const noexcept { return memory_chunks.size(); }
-    size_t getArenaChunkIndex() const noexcept { return arena_chunk_index; }
-    VkDeviceSize getDefaultChunkSize() const noexcept { return default_chunk_size; }
+    std::vector<Memory_Chunk> getMemoryChunks() const
+    {
+        std::lock_guard<std::recursive_mutex> lock(allocator_mutex);
+        return memory_chunks;
+    }
+    size_t getMemoryChunkCount() const
+    {
+        std::lock_guard<std::recursive_mutex> lock(allocator_mutex);
+        return memory_chunks.size();
+    }
+    size_t getArenaChunkIndex() const
+    {
+        std::lock_guard<std::recursive_mutex> lock(allocator_mutex);
+        return arena_chunk_index;
+    }
+    VkDeviceSize getDefaultChunkSize() const
+    {
+        std::lock_guard<std::recursive_mutex> lock(allocator_mutex);
+        return default_chunk_size;
+    }
     VkPhysicalDevice getPhysicalDevice() const noexcept { return physical_device; }
     VkDevice getDevice() const noexcept { return device; }
-    bool hasArenaChunk() const noexcept { return arena_chunk_index != std::numeric_limits<size_t>::max(); }
+    bool hasArenaChunk() const
+    {
+        std::lock_guard<std::recursive_mutex> lock(allocator_mutex);
+        return arena_chunk_index != std::numeric_limits<size_t>::max();
+    }
 
-    void setDefaultChunkSize(VkDeviceSize _size) noexcept { default_chunk_size = _size; }
-    void setArenaChunkIndex(size_t _index) noexcept { arena_chunk_index = _index; }
+    void setDefaultChunkSize(VkDeviceSize _size)
+    {
+        std::lock_guard<std::recursive_mutex> lock(allocator_mutex);
+        default_chunk_size = _size;
+    }
+    void setArenaChunkIndex(size_t _index)
+    {
+        std::lock_guard<std::recursive_mutex> lock(allocator_mutex);
+        arena_chunk_index = _index;
+    }
 };

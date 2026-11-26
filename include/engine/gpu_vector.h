@@ -3,6 +3,8 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <mutex>
 #include <vector>
 #include <vulkan/vulkan.h>
 
@@ -13,10 +15,22 @@ class Vulkan_Context;
 
 namespace gpu
 {
+    class vector;
+
+    struct Fp16_Shadow_Cache
+    {
+        mutable std::mutex mutex;
+        std::shared_ptr<vector> fp16_storage;
+        std::atomic<uint64_t> storage_version{1};
+        uint64_t cached_version = 0;
+        size_t valid_elements = 0;
+    };
+
     class vector
     {
     private:
         static inline std::atomic<uint64_t> global_vector_counter{0};
+        static inline std::atomic<uint64_t> global_buffer_mutation_epoch{1};
 
         const Vulkan_Context &context;
         VkBuffer buffer = VK_NULL_HANDLE;
@@ -25,9 +39,11 @@ namespace gpu
         size_t element_count = 0;
         Data_Type data_type = Data_Type::FLOAT32;
         uint32_t used_frame_index = 0;
+        uint32_t used_frame_mask = 0;
         uint64_t vector_id = 0;
         void *host_mapped_pointer = nullptr;
         bool is_host_mapped = false;
+        std::shared_ptr<Fp16_Shadow_Cache> fp16_shadow_cache;
 
         void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage_flags, VkMemoryPropertyFlags memory_properties);
         void copyBuffer(VkBuffer source_buffer, VkBuffer destination_buffer, VkDeviceSize size) const;
@@ -46,10 +62,11 @@ namespace gpu
         vector &operator=(vector &&other) noexcept;
 
         void allocateMemory(size_t _element_count, Data_Type _type = Data_Type::FLOAT32);
+        void allocateMemory(const Shape &_shape, Data_Type _type = Data_Type::FLOAT32);
         void allocateMemoryByBytes(size_t _byte_size, Data_Type _type = Data_Type::FLOAT32, size_t _logical_elements = 0);
         void freeMemory();
 
-        void allocateHostVisible(size_t _byte_size);
+        void allocateHostVisible(size_t _byte_size, Data_Type _type = Data_Type::FLOAT32);
         void writeHostDirect(const void *_source_pointer, size_t _size_in_bytes);
 
         void *getHostMappedPointer() noexcept { return host_mapped_pointer; }
@@ -68,31 +85,44 @@ namespace gpu
 
         const Vulkan_Context &getContext() const noexcept { return context; }
         const Memory_Allocation &getAllocation() const noexcept { return allocation; }
-        size_t getElementCount() const noexcept
+        size_t getBufferSizeInBytes() const noexcept { return buffer_size_in_bytes; }
+        size_t getSize() const noexcept
         {
             if (element_count > 0) return element_count;
-            if (data_type == Data_Type::TERNARY_INT2) return (buffer_size_in_bytes / sizeof(uint32_t)) * 16;
-            return buffer_size_in_bytes / getDataTypeSize(data_type);
+            if (buffer_size_in_bytes == 0 || data_type == Data_Type::TERNARY_INT2) return 0;
+            return getElementCountFromStorageBytes(data_type, buffer_size_in_bytes);
         }
-        size_t getBufferSizeInBytes() const noexcept { return buffer_size_in_bytes; }
-        size_t getSize() const noexcept { return getElementCount(); }
         size_t getSizeBytes() const noexcept { return buffer_size_in_bytes; }
         size_t getByteSize() const noexcept { return buffer_size_in_bytes; }
         VkDevice getDevice() const noexcept;
+        static uint64_t getGlobalBufferMutationEpoch() noexcept { return global_buffer_mutation_epoch.load(std::memory_order_acquire); }
         uint64_t getVectorId() const noexcept { return vector_id; }
         uint64_t getId() const noexcept { return vector_id; }
         VkBuffer getBuffer() const noexcept { return buffer; }
         Data_Type getDataType() const noexcept { return data_type; }
         uint32_t getUsedFrameIndex() const noexcept { return used_frame_index; }
+        uint32_t getUsedFrameMask() const noexcept { return used_frame_mask; }
         bool isEmpty() const noexcept { return buffer_size_in_bytes == 0 || buffer == VK_NULL_HANDLE; }
 
-        void setAllocation(const Memory_Allocation &_allocation) noexcept { allocation = _allocation; }
-        void setBufferSizeInBytes(size_t _bytes) noexcept { buffer_size_in_bytes = _bytes; }
-        void setElementCount(size_t _count) noexcept { element_count = _count; }
-        void setVectorId(uint64_t _vector_id) noexcept { vector_id = _vector_id; }
-        void setBuffer(VkBuffer _buffer) noexcept { buffer = _buffer; }
-        void setDataType(Data_Type _type) noexcept { data_type = _type; }
-        void markAsUsedInFrame(uint32_t frame_index) noexcept { used_frame_index = frame_index; }
-        void setUsedFrameIndex(uint32_t _frame_index) noexcept { used_frame_index = _frame_index; }
+        void setDataType(Data_Type _type) noexcept;
+        void markAsUsedInFrame(uint32_t frame_index) noexcept;
+        void setUsedFrameIndex(uint32_t _frame_index) noexcept;
+
+        void invalidateFp16ShadowCache() const noexcept
+        {
+            if (fp16_shadow_cache)
+            {
+                fp16_shadow_cache->storage_version.fetch_add(1, std::memory_order_release);
+            }
+        }
+        std::shared_ptr<Fp16_Shadow_Cache> getFp16ShadowCache() const noexcept { return fp16_shadow_cache; }
+        std::shared_ptr<Fp16_Shadow_Cache> ensureFp16ShadowCache()
+        {
+            if (!fp16_shadow_cache)
+            {
+                fp16_shadow_cache = std::make_shared<Fp16_Shadow_Cache>();
+            }
+            return fp16_shadow_cache;
+        }
     };
 }

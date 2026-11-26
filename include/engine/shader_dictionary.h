@@ -27,6 +27,8 @@ struct Snippet_Metadata
     bool is_cooperative_matrix_support = false;
     std::vector<uint32_t> accumulator_output_indices;
     std::vector<uint32_t> persistent_output_indices;
+    std::vector<uint32_t> read_indices;
+    std::vector<uint32_t> write_indices;
     std::string glsl_template;
     std::string cooperative_glsl_template;
     std::string index_expression;
@@ -37,6 +39,12 @@ class Shader_Dictionary
 {
 private:
     std::array<Snippet_Metadata, static_cast<size_t>(Compute_Pipeline::COMPUTE_PIPELINE_END)> metadata_table;
+
+    static const Snippet_Metadata &emptyMetadata() noexcept
+    {
+        static const Snippet_Metadata empty{};
+        return empty;
+    }
 
 public:
     explicit Shader_Dictionary(const std::string &_file_path = "compute_shader/shader_dictionary.json");
@@ -49,16 +57,23 @@ public:
     Shader_Dictionary &operator=(Shader_Dictionary &&_other) noexcept = default;
 
     static const Shader_Dictionary &getInstance();
-    static const Shader_Dictionary &getInstance(const std::string &_file_path);
 
     void loadFromFile(const std::string &_file_path);
 
     const std::array<Snippet_Metadata, static_cast<size_t>(Compute_Pipeline::COMPUTE_PIPELINE_END)> &getMetadataTable() const noexcept { return metadata_table; }
-    const Snippet_Metadata &getSnippetMetadata(Compute_Pipeline _pipeline) const noexcept { return metadata_table[static_cast<size_t>(_pipeline)]; }
-    const Snippet_Metadata &getMetadata(Compute_Pipeline _pipeline) const noexcept { return metadata_table[static_cast<size_t>(_pipeline)]; }
+    const Snippet_Metadata &getSnippetMetadata(Compute_Pipeline _pipeline) const noexcept
+    {
+        size_t pipeline_index = static_cast<size_t>(_pipeline);
+        if (pipeline_index >= metadata_table.size())
+        {
+            return emptyMetadata();
+        }
+        return metadata_table[pipeline_index];
+    }
+    const Snippet_Metadata &getMetadata(Compute_Pipeline _pipeline) const noexcept { return getSnippetMetadata(_pipeline); }
     const std::string &getGlslTemplate(Compute_Pipeline _pipeline, bool _use_cooperative_matrix) const noexcept
     {
-        const auto &meta = metadata_table[static_cast<size_t>(_pipeline)];
+        const auto &meta = getSnippetMetadata(_pipeline);
         if (_use_cooperative_matrix && meta.is_cooperative_matrix_support && !meta.cooperative_glsl_template.empty())
         {
             return meta.cooperative_glsl_template;
@@ -67,7 +82,7 @@ public:
     }
     uint32_t getSharedMemorySize(Compute_Pipeline _pipeline, bool _use_cooperative_matrix) const noexcept
     {
-        const auto &meta = metadata_table[static_cast<size_t>(_pipeline)];
+        const auto &meta = getSnippetMetadata(_pipeline);
         if (_use_cooperative_matrix && meta.is_cooperative_matrix_support)
         {
             return meta.cooperative_shared_memory_size;
@@ -80,6 +95,21 @@ public:
         return pipeline_index < metadata_table.size() && !metadata_table[pipeline_index].glsl_template.empty();
     }
 
-    void setMetadataTable(const std::array<Snippet_Metadata, static_cast<size_t>(Compute_Pipeline::COMPUTE_PIPELINE_END)> &_table) noexcept { metadata_table = _table; }
-    void setMetadata(Compute_Pipeline _pipeline, const Snippet_Metadata &_metadata) noexcept { metadata_table[static_cast<size_t>(_pipeline)] = _metadata; }
+    void setMetadataTable(const std::array<Snippet_Metadata, static_cast<size_t>(Compute_Pipeline::COMPUTE_PIPELINE_END)> &_table) { metadata_table = _table; }
+    void setMetadata(Compute_Pipeline _pipeline, const Snippet_Metadata &_metadata)
+    {
+        size_t pipeline_index = static_cast<size_t>(_pipeline);
+        if (pipeline_index < metadata_table.size())
+        {
+            metadata_table[pipeline_index] = _metadata;
+        }
+    }
+    void setMetadata(Compute_Pipeline _pipeline, Snippet_Metadata &&_metadata) noexcept
+    {
+        size_t pipeline_index = static_cast<size_t>(_pipeline);
+        if (pipeline_index < metadata_table.size())
+        {
+            metadata_table[pipeline_index] = std::move(_metadata);
+        }
+    }
 };

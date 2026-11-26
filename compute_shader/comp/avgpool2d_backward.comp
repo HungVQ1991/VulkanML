@@ -1,13 +1,25 @@
 #version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#endif
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 layout(std430, set = 0, binding = 0) readonly restrict buffer Grad_Output_Buffer {
+#ifdef USE_FP16
+    float16_t grad_output[];
+#else
     float grad_output[];
+#endif
 };
 
 layout(std430, set = 0, binding = 1) writeonly restrict buffer Grad_Input_Buffer {
+#ifdef USE_FP16
+    float16_t grad_input[];
+#else
     float grad_input[];
+#endif
 };
 
 layout(push_constant) uniform PushConstants {
@@ -23,6 +35,7 @@ layout(push_constant) uniform PushConstants {
 } pc;
 
 void main() {
+    if (pc.in_h == 0u || pc.in_w == 0u || pc.stride == 0u || pc.kernel_size == 0u) return;
     uint c_idx = gl_GlobalInvocationID.x;
     uint in_w_idx = gl_GlobalInvocationID.y;
     uint n_in_h_idx = gl_GlobalInvocationID.z;
@@ -61,11 +74,19 @@ void main() {
                     uint out_idx = n_idx * (pc.out_h * pc.out_w * pc.channels) +
                                    out_y * (pc.out_w * pc.channels) +
                                    out_x * pc.channels + c_idx;
+#ifdef USE_FP16
+                    grad += float(grad_output[out_idx]) / float(k_sz * k_sz);
+#else
                     grad += grad_output[out_idx] / float(k_sz * k_sz);
+#endif
                 }
             }
         }
     }
 
+#ifdef USE_FP16
+    grad_input[in_idx] = float16_t(grad);
+#else
     grad_input[in_idx] = grad;
+#endif
 }

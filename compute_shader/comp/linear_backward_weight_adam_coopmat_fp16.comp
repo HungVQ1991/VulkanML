@@ -3,216 +3,291 @@
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_KHR_memory_scope_semantics : require
 #extension GL_KHR_cooperative_matrix : require
+#extension GL_KHR_shader_subgroup_basic : require
 
-#define TILE_M 16
-#define TILE_N 16
-#define TILE_K 16
+#define TILE_M 64u
+#define TILE_N 64u
+#define TILE_K 32u
+#define SMEM_STRIDE 9u
 
-layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
-// 1. Activation from forward: [batch_size, in_dim]
-layout(std430, set = 0, binding = 0) readonly buffer InputX {
-    float16_t x_data[];
-};
-
-// 2. Output gradient from downstream: [batch_size, out_dim]
-layout(std430, set = 0, binding = 1) readonly buffer GradY {
-    float16_t dy_data[];
-};
-
-// 3. Master FP32 weights to update in-place: [in_dim, out_dim]
-layout(std430, set = 0, binding = 2) restrict buffer WeightBuffer {
-    float weights[];
-};
-
-// 4. Adam 1st moment vector (mean): [in_dim, out_dim]
-layout(std430, set = 0, binding = 3) restrict buffer MBuffer {
-    float m_vec[];
-};
-
-// 5. Adam 2nd moment vector (uncentered variance): [in_dim, out_dim]
-layout(std430, set = 0, binding = 4) restrict buffer VBuffer {
-    float v_vec[];
-};
-
-// 6. Dynamic optimizer parameters (updated per step)
-layout(std430, set = 0, binding = 5) readonly restrict buffer DynamicParams {
+layout(std430, set = 0, binding = 0) readonly buffer InputX    { float16_t x_data[]; };
+layout(std430, set = 0, binding = 0) readonly buffer InputX_V4 { uvec4     x_data4[]; };
+layout(std430, set = 0, binding = 1) readonly buffer GradY     { float16_t dy_data[]; };
+layout(std430, set = 0, binding = 1) readonly buffer GradY_V4  { uvec4     dy_data4[]; };
+layout(std430, set = 0, binding = 2) restrict buffer WeightBuffer   { float weights[]; };
+layout(std430, set = 0, binding = 2) restrict buffer WeightBuffer4  { vec4  weights4[]; };
+layout(std430, set = 0, binding = 3) restrict buffer MBuffer        { float m_vec[]; };
+layout(std430, set = 0, binding = 3) restrict buffer MBuffer4       { vec4  m_vec4[]; };
+layout(std430, set = 0, binding = 4) restrict buffer VBuffer        { float v_vec[]; };
+layout(std430, set = 0, binding = 4) restrict buffer VBuffer4       { vec4  v_vec4[]; };
+layout(std430, set = 0, binding = 5) coherent restrict buffer DynamicParams {
     float lr;
     float inv_correction1;
     float inv_sqrt_correction2;
     float inv_scale;
+    uint overflow_detected;
 } dyn;
-
-// 7. FP16 weight cache for forward & backward GEMM: [in_dim, out_dim]
-layout(std430, set = 0, binding = 6) writeonly restrict buffer Fp16WeightBuffer {
-    float16_t fp16_weights[];
-};
-
-// 8. Bias gradient: [out_dim]
-layout(std430, set = 0, binding = 7) buffer GradB {
-    float db_data[];
-};
+layout(std430, set = 0, binding = 6) writeonly restrict buffer Fp16WeightBuffer  { float16_t fp16_weights[]; };
+layout(std430, set = 0, binding = 6) writeonly restrict buffer Fp16WeightBuffer4 { f16vec4   fp16_weights4[]; };
+layout(std430, set = 0, binding = 7) buffer GradB { float db_data[]; };
 
 layout(push_constant) uniform PushConstants {
-    uint batch_size;    // M (sequence tokens)
-    uint in_dim;        // K (input dimension)
-    uint out_dim;       // N (output dimension)
-    float beta1;        // Adam beta1 (e.g. 0.9)
-    float beta2;        // Adam beta2 (e.g. 0.999)
-    float eps;          // Numerical stability epsilon (e.g. 1e-8)
-    float max_grad;     // Gradient clipping threshold (0 = disabled)
-    float weight_decay; // AdamW decoupled weight decay
+    uint batch_size;
+    uint in_dim;
+    uint out_dim;
+    float beta1;
+    float beta2;
+    float eps;
+    float max_grad;
+    float weight_decay;
 } pc;
 
-shared float16_t smem_a[TILE_M * TILE_K];
-shared float16_t smem_b[TILE_K * TILE_N];
-shared float smem_c[TILE_M * TILE_N];
+shared uvec4 smem_x[TILE_K * SMEM_STRIDE];
+shared uvec4 smem_dy[TILE_K * SMEM_STRIDE];
+shared float smem_c[4u * 256u];
+
+uvec4 pack8FromBufferX(uint gr, uint gc, uint rows, uint cols) {
+    if (gr >= rows || gc >= cols) return uvec4(0u);
+    uint row_off = gr * cols;
+    float h0 = float(x_data[row_off + gc]);
+    float h1 = (gc + 1u < cols) ? float(x_data[row_off + gc + 1u]) : 0.0;
+    float h2 = (gc + 2u < cols) ? float(x_data[row_off + gc + 2u]) : 0.0;
+    float h3 = (gc + 3u < cols) ? float(x_data[row_off + gc + 3u]) : 0.0;
+    float h4 = (gc + 4u < cols) ? float(x_data[row_off + gc + 4u]) : 0.0;
+    float h5 = (gc + 5u < cols) ? float(x_data[row_off + gc + 5u]) : 0.0;
+    float h6 = (gc + 6u < cols) ? float(x_data[row_off + gc + 6u]) : 0.0;
+    float h7 = (gc + 7u < cols) ? float(x_data[row_off + gc + 7u]) : 0.0;
+    return uvec4(
+        packHalf2x16(vec2(h0, h1)),
+        packHalf2x16(vec2(h2, h3)),
+        packHalf2x16(vec2(h4, h5)),
+        packHalf2x16(vec2(h6, h7))
+    );
+}
+
+uvec4 pack8FromBufferDY(uint gr, uint gc, uint rows, uint cols) {
+    if (gr >= rows || gc >= cols) return uvec4(0u);
+    uint row_off = gr * cols;
+    float h0 = float(dy_data[row_off + gc]);
+    float h1 = (gc + 1u < cols) ? float(dy_data[row_off + gc + 1u]) : 0.0;
+    float h2 = (gc + 2u < cols) ? float(dy_data[row_off + gc + 2u]) : 0.0;
+    float h3 = (gc + 3u < cols) ? float(dy_data[row_off + gc + 3u]) : 0.0;
+    float h4 = (gc + 4u < cols) ? float(dy_data[row_off + gc + 4u]) : 0.0;
+    float h5 = (gc + 5u < cols) ? float(dy_data[row_off + gc + 5u]) : 0.0;
+    float h6 = (gc + 6u < cols) ? float(dy_data[row_off + gc + 6u]) : 0.0;
+    float h7 = (gc + 7u < cols) ? float(dy_data[row_off + gc + 7u]) : 0.0;
+    return uvec4(
+        packHalf2x16(vec2(h0, h1)),
+        packHalf2x16(vec2(h2, h3)),
+        packHalf2x16(vec2(h4, h5)),
+        packHalf2x16(vec2(h6, h7))
+    );
+}
+
+void adamScalarElem(uint g_idx, float g, float lr, float inv_c1, float inv_sqrt_c2,
+                    float one_minus_b1, float one_minus_b2, inout bool saw_overflow) {
+    if (isnan(g) || isinf(g)) {
+        saw_overflow = true;
+        return;
+    }
+    if (pc.max_grad > 0.0) {
+        g = clamp(g, -pc.max_grad, pc.max_grad);
+    }
+    float m_val = fma(pc.beta1, m_vec[g_idx], one_minus_b1 * g);
+    float v_val = fma(pc.beta2, v_vec[g_idx], one_minus_b2 * (g * g));
+    m_vec[g_idx] = m_val;
+    v_vec[g_idx] = v_val;
+
+    float step_val = (m_val * inv_c1) / (sqrt(v_val) * inv_sqrt_c2 + pc.eps);
+    float p = weights[g_idx];
+    p -= (pc.weight_decay > 0.0) ? (lr * fma(pc.weight_decay, p, step_val)) : (lr * step_val);
+    weights[g_idx] = p;
+    fp16_weights[g_idx] = float16_t(clamp(p, -65504.0, 65504.0));
+}
+
+void applySubtileAdam(uint sub_row, uint sub_col, uint wave_base, uint lane_id,
+                      bool out_div4, uint in_dim, uint out_dim,
+                      float lr, float inv_c1, float inv_sqrt_c2, float inv_scale,
+                      float one_minus_b1, float one_minus_b2, inout bool saw_overflow) {
+    if (out_div4 && (sub_row + 16u <= in_dim) && (sub_col + 16u <= out_dim)) {
+        uint out4 = out_dim >> 2u;
+        uint col4_base = sub_col >> 2u;
+        for (uint v = 0u; v < 2u; ++v) {
+            uint vidx = v * 32u + lane_id;
+            uint soff = wave_base + (vidx << 2u);
+            vec4 g = vec4(smem_c[soff], smem_c[soff + 1u], smem_c[soff + 2u], smem_c[soff + 3u]) * inv_scale;
+            uint g_idx4 = (sub_row + (vidx >> 2u)) * out4 + col4_base + (vidx & 3u);
+            if (any(isnan(g)) || any(isinf(g))) {
+                uint g_base = g_idx4 << 2u;
+                adamScalarElem(g_base,      g.x, lr, inv_c1, inv_sqrt_c2, one_minus_b1, one_minus_b2, saw_overflow);
+                adamScalarElem(g_base + 1u, g.y, lr, inv_c1, inv_sqrt_c2, one_minus_b1, one_minus_b2, saw_overflow);
+                adamScalarElem(g_base + 2u, g.z, lr, inv_c1, inv_sqrt_c2, one_minus_b1, one_minus_b2, saw_overflow);
+                adamScalarElem(g_base + 3u, g.w, lr, inv_c1, inv_sqrt_c2, one_minus_b1, one_minus_b2, saw_overflow);
+            } else {
+                if (pc.max_grad > 0.0) {
+                    g = clamp(g, vec4(-pc.max_grad), vec4(pc.max_grad));
+                }
+                vec4 mv = fma(vec4(pc.beta1), m_vec4[g_idx4], vec4(one_minus_b1) * g);
+                vec4 vv = fma(vec4(pc.beta2), v_vec4[g_idx4], vec4(one_minus_b2) * (g * g));
+                m_vec4[g_idx4] = mv;
+                v_vec4[g_idx4] = vv;
+                vec4 step_v = (mv * inv_c1) / (sqrt(vv) * inv_sqrt_c2 + vec4(pc.eps));
+                vec4 p = weights4[g_idx4];
+                p -= (pc.weight_decay > 0.0) ? (lr * fma(vec4(pc.weight_decay), p, step_v)) : (lr * step_v);
+                weights4[g_idx4] = p;
+                fp16_weights4[g_idx4] = f16vec4(clamp(p, vec4(-65504.0), vec4(65504.0)));
+            }
+        }
+    } else {
+        for (uint i = 0u; i < 8u; ++i) {
+            uint idx = i * 32u + lane_id;
+            uint gr = sub_row + (idx >> 4u);
+            uint gc = sub_col + (idx & 15u);
+            if (gr < in_dim && gc < out_dim) {
+                adamScalarElem(gr * out_dim + gc, smem_c[wave_base + idx] * inv_scale,
+                               lr, inv_c1, inv_sqrt_c2, one_minus_b1, one_minus_b2, saw_overflow);
+            }
+        }
+    }
+    controlBarrier(gl_ScopeSubgroup, gl_ScopeSubgroup, gl_StorageSemanticsShared, gl_SemanticsAcquireRelease);
+}
 
 void main() {
-    uint tile_col = gl_WorkGroupID.x * TILE_N; // along out_dim (N)
-    uint tile_row = gl_WorkGroupID.y * TILE_M; // along in_dim (K)
-
+    uint tile_col = gl_WorkGroupID.x * TILE_N;
+    uint tile_row = gl_WorkGroupID.y * TILE_M;
     if (tile_row >= pc.in_dim || tile_col >= pc.out_dim) return;
 
-    uint lane_id = gl_LocalInvocationID.x;
+    uint tid       = gl_LocalInvocationID.x;
+    uint wave_id   = tid >> 5u;
+    uint lane_id   = tid & 31u;
+    uint wave_m    = wave_id >> 1u;
+    uint wave_n    = wave_id & 1u;
+    uint wave_base = wave_id * 256u;
 
-    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc;
-    acc = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+    uint batch_size = pc.batch_size;
+    uint in_dim     = pc.in_dim;
+    uint out_dim    = pc.out_dim;
 
-    float db_accum = 0.0;
-    bool is_k_aligned = (tile_row + TILE_M <= pc.in_dim);
-    bool is_n_aligned = (tile_col + TILE_N <= pc.out_dim);
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc00 = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc01 = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc10 = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> acc11 = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0);
 
-    // Reduction loop along batch_size (tokens M)
-    for (uint m = 0; m < pc.batch_size; m += TILE_K) {
-        bool is_m_aligned = (m + TILE_K <= pc.batch_size);
+    bool compute_db = (gl_WorkGroupID.y == 0u);
+    vec2 db_pair_acc = vec2(0.0);
+    uint db_v4_idx = lane_id >> 2u;
+    uint db_comp   = lane_id & 3u;
 
-        // Load tile of X^T [16 x 16]: X^T(r, c) = X(m + c, tile_row + r)
-        coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> matA;
-        for (uint i = 0; i < 8; ++i) {
-            uint idx = lane_id * 8 + i;
-            uint r = idx / TILE_K;
-            uint c = idx % TILE_K;
-            uint gx_row = m + c;
-            uint gx_col = tile_row + r;
-            smem_a[idx] = (gx_row < pc.batch_size && gx_col < pc.in_dim)
-                ? x_data[gx_row * pc.in_dim + gx_col]
-                : float16_t(0.0);
-        }
-        barrier();
-        coopMatLoad(matA, smem_a, 0, TILE_K, gl_CooperativeMatrixLayoutRowMajor);
-        barrier();
+    bool in_vec_aligned  = ((in_dim & 7u) == 0u);
+    bool out_vec_aligned = ((out_dim & 7u) == 0u);
+    bool out_div4        = ((out_dim & 3u) == 0u);
 
-        // Load tile of dY [16 x 16] (Row-major)
-        coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> matB;
-        if (gl_WorkGroupID.y == 0) {
-            for (uint i = 0; i < 8; ++i) {
-                uint idx = lane_id * 8 + i;
-                uint r = idx / TILE_N;
-                uint c = idx % TILE_N;
-                uint gdy_row = m + r;
-                uint gdy_col = tile_col + c;
-                smem_b[idx] = (gdy_row < pc.batch_size && gdy_col < pc.out_dim)
-                    ? dy_data[gdy_row * pc.out_dim + gdy_col]
-                    : float16_t(0.0);
-            }
-            barrier();
-            coopMatLoad(matB, smem_b, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
+    uint r0 = tid >> 3u;
+    uint r1 = r0 + 16u;
+    uint c4 = tid & 7u;
+    uint c8 = c4 * 8u;
 
-            if (lane_id < 16) {
-                float col_sum = 0.0;
-                for (uint r = 0; r < 16; ++r) {
-                    col_sum += float(smem_b[r * 16 + lane_id]);
-                }
-                db_accum += col_sum;
-            }
-            barrier();
+    for (uint m = 0u; m < batch_size; m += TILE_K) {
+        uint gm0 = m + r0;
+        uint gm1 = m + r1;
+
+        if (in_vec_aligned) {
+            uint in_stride4 = in_dim >> 3u;
+            uint tk4 = tile_row >> 3u;
+            bool k_in = (tk4 + c4 < in_stride4);
+            smem_x[r0 * SMEM_STRIDE + c4] = (gm0 < batch_size && k_in) ? x_data4[gm0 * in_stride4 + tk4 + c4] : uvec4(0u);
+            smem_x[r1 * SMEM_STRIDE + c4] = (gm1 < batch_size && k_in) ? x_data4[gm1 * in_stride4 + tk4 + c4] : uvec4(0u);
         } else {
-            if (is_m_aligned && is_n_aligned) {
-                coopMatLoad(matB, dy_data, m * pc.out_dim + tile_col, pc.out_dim, gl_CooperativeMatrixLayoutRowMajor);
-            } else {
-                for (uint i = 0; i < 8; ++i) {
-                    uint idx = lane_id * 8 + i;
-                    uint r = idx / TILE_N;
-                    uint c = idx % TILE_N;
-                    uint gdy_row = m + r;
-                    uint gdy_col = tile_col + c;
-                    smem_b[idx] = (gdy_row < pc.batch_size && gdy_col < pc.out_dim)
-                        ? dy_data[gdy_row * pc.out_dim + gdy_col]
-                        : float16_t(0.0);
-                }
-                barrier();
-                coopMatLoad(matB, smem_b, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
-                barrier();
+            smem_x[r0 * SMEM_STRIDE + c4] = pack8FromBufferX(gm0, tile_row + c8, batch_size, in_dim);
+            smem_x[r1 * SMEM_STRIDE + c4] = pack8FromBufferX(gm1, tile_row + c8, batch_size, in_dim);
+        }
+
+        if (out_vec_aligned) {
+            uint out_stride4 = out_dim >> 3u;
+            uint tn4 = tile_col >> 3u;
+            bool n_in = (tn4 + c4 < out_stride4);
+            smem_dy[r0 * SMEM_STRIDE + c4] = (gm0 < batch_size && n_in) ? dy_data4[gm0 * out_stride4 + tn4 + c4] : uvec4(0u);
+            smem_dy[r1 * SMEM_STRIDE + c4] = (gm1 < batch_size && n_in) ? dy_data4[gm1 * out_stride4 + tn4 + c4] : uvec4(0u);
+        } else {
+            smem_dy[r0 * SMEM_STRIDE + c4] = pack8FromBufferDY(gm0, tile_col + c8, batch_size, out_dim);
+            smem_dy[r1 * SMEM_STRIDE + c4] = pack8FromBufferDY(gm1, tile_col + c8, batch_size, out_dim);
+        }
+
+        barrier();
+
+        for (uint m_sub = 0u; m_sub < 2u; ++m_sub) {
+            coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> matA0, matA1;
+            coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> matB0, matB1;
+
+            uint a_off0 = (m_sub * 16u) * SMEM_STRIDE + ((wave_m * 32u)        >> 3u);
+            uint a_off1 = (m_sub * 16u) * SMEM_STRIDE + ((wave_m * 32u + 16u)  >> 3u);
+            uint b_off0 = (m_sub * 16u) * SMEM_STRIDE + ((wave_n * 32u)        >> 3u);
+            uint b_off1 = (m_sub * 16u) * SMEM_STRIDE + ((wave_n * 32u + 16u)  >> 3u);
+
+            coopMatLoad(matA0, smem_x,  a_off0, SMEM_STRIDE, gl_CooperativeMatrixLayoutColumnMajor);
+            coopMatLoad(matA1, smem_x,  a_off1, SMEM_STRIDE, gl_CooperativeMatrixLayoutColumnMajor);
+            coopMatLoad(matB0, smem_dy, b_off0, SMEM_STRIDE, gl_CooperativeMatrixLayoutRowMajor);
+            coopMatLoad(matB1, smem_dy, b_off1, SMEM_STRIDE, gl_CooperativeMatrixLayoutRowMajor);
+
+            acc00 = coopMatMulAdd(matA0, matB0, acc00);
+            acc01 = coopMatMulAdd(matA0, matB1, acc01);
+            acc10 = coopMatMulAdd(matA1, matB0, acc10);
+            acc11 = coopMatMulAdd(matA1, matB1, acc11);
+        }
+
+        if (compute_db) {
+            uint dy_row_base = wave_id * 8u;
+            for (uint r = 0u; r < 8u; ++r) {
+                uvec4 v = smem_dy[(dy_row_base + r) * SMEM_STRIDE + db_v4_idx];
+                uint packed = (db_comp == 0u) ? v.x : ((db_comp == 1u) ? v.y : ((db_comp == 2u) ? v.z : v.w));
+                db_pair_acc += unpackHalf2x16(packed);
             }
         }
 
-        acc = coopMatMulAdd(matA, matB, acc);
+        barrier();
     }
 
-    // Store accumulated dW tile into shared memory LDS
-    coopMatStore(acc, smem_c, 0, TILE_N, gl_CooperativeMatrixLayoutRowMajor);
-    barrier();
+    float lr           = dyn.lr;
+    float inv_c1       = dyn.inv_correction1;
+    float inv_sqrt_c2  = dyn.inv_sqrt_correction2;
+    float inv_scale    = dyn.inv_scale;
+    float one_minus_b1 = 1.0 - pc.beta1;
+    float one_minus_b2 = 1.0 - pc.beta2;
+    bool  saw_overflow = false;
 
-    // In-place AdamW Update directly on weights and optimizer states
-    // 32 threads in subgroup, each processing 8 elements = 256 elements (16x16 tile)
-    // idx = i * 32 + lane_id ensures coalesced contiguous global memory access across wavefront
-    for (uint i = 0; i < 8; ++i) {
-        uint idx = i * 32 + lane_id;
-        uint lr = idx / TILE_N;
-        uint lc = idx % TILE_N;
-        uint gr = tile_row + lr;
-        uint gc = tile_col + lc;
+    uint base_r = tile_row + wave_m * 32u;
+    uint base_c = tile_col + wave_n * 32u;
 
-        if (gr < pc.in_dim && gc < pc.out_dim) {
-            uint g_idx = gr * pc.out_dim + gc;
-
-            // 1. Raw gradient from GEMM
-            float g = smem_c[idx];
-            if (isnan(g) || isinf(g)) g = 0.0;
-
-            // 2. Unscale loss scale
-            g *= dyn.inv_scale;
-
-            // 3. Gradient clipping (if enabled)
-            if (pc.max_grad > 0.0) {
-                g = clamp(g, -pc.max_grad, pc.max_grad);
-            }
-
-            // 4. Update biased 1st and 2nd moment estimates
-            float m_old = m_vec[g_idx];
-            float v_old = v_vec[g_idx];
-            float m_val = fma(pc.beta1, m_old, (1.0 - pc.beta1) * g);
-            float v_val = fma(pc.beta2, v_old, (1.0 - pc.beta2) * (g * g));
-
-            m_vec[g_idx] = m_val;
-            v_vec[g_idx] = v_val;
-
-            // 5. Bias-corrected moment estimates
-            float m_hat = m_val * dyn.inv_correction1;
-            float v_hat_sqrt = sqrt(v_val) * dyn.inv_sqrt_correction2;
-
-            // 6. AdamW weight update (step + weight decay)
-            float step_val = m_hat / (v_hat_sqrt + pc.eps);
-            float p = weights[g_idx];
-            if (pc.weight_decay > 0.0) {
-                p -= dyn.lr * (step_val + pc.weight_decay * p);
-            } else {
-                p -= dyn.lr * step_val;
-            }
-
-            // 7. Write back master FP32 weight & update FP16 weight cache
-            weights[g_idx] = p;
-            fp16_weights[g_idx] = float16_t(clamp(p, -65504.0, 65504.0));
+    for (uint s = 0u; s < 4u; ++s) {
+        uint sub_row = base_r + ((s >> 1u) * 16u);
+        uint sub_col = base_c + ((s & 1u) * 16u);
+        if (sub_row < in_dim && sub_col < out_dim) {
+            if (s == 0u)      coopMatStore(acc00, smem_c, wave_base, 16u, gl_CooperativeMatrixLayoutRowMajor);
+            else if (s == 1u) coopMatStore(acc01, smem_c, wave_base, 16u, gl_CooperativeMatrixLayoutRowMajor);
+            else if (s == 2u) coopMatStore(acc10, smem_c, wave_base, 16u, gl_CooperativeMatrixLayoutRowMajor);
+            else              coopMatStore(acc11, smem_c, wave_base, 16u, gl_CooperativeMatrixLayoutRowMajor);
+            controlBarrier(gl_ScopeSubgroup, gl_ScopeSubgroup, gl_StorageSemanticsShared, gl_SemanticsAcquireRelease);
+            applySubtileAdam(sub_row, sub_col, wave_base, lane_id, out_div4, in_dim, out_dim,
+                             lr, inv_c1, inv_sqrt_c2, inv_scale, one_minus_b1, one_minus_b2, saw_overflow);
         }
     }
 
-    // Write out dB
-    if (gl_WorkGroupID.y == 0 && lane_id < 16) {
-        uint gc = tile_col + lane_id;
-        if (gc < pc.out_dim) {
-            if (isnan(db_accum) || isinf(db_accum)) db_accum = 0.0;
-            db_data[gc] = db_accum;
+    if (saw_overflow) {
+        atomicOr(dyn.overflow_detected, 1u);
+    }
+
+    if (compute_db) {
+        barrier();
+        smem_c[wave_id * 64u + lane_id * 2u]      = db_pair_acc.x;
+        smem_c[wave_id * 64u + lane_id * 2u + 1u] = db_pair_acc.y;
+        barrier();
+        if (tid < 64u) {
+            uint gc = tile_col + tid;
+            if (gc < out_dim) {
+                db_data[gc] = (smem_c[tid] + smem_c[64u + tid]) + (smem_c[128u + tid] + smem_c[192u + tid]);
+            }
         }
     }
 }

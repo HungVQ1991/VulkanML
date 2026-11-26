@@ -2,6 +2,7 @@
 #include "engine/vulkan_context.h"
 
 #include <algorithm>
+#include <bit>
 #include <format>
 #include <limits>
 #include <stdexcept>
@@ -54,7 +55,14 @@ void Memory_Planner::planMemoryLayout()
         for (size_t block_index = 0; block_index < virtual_blocks.size(); ++block_index)
         {
             const auto &block = virtual_blocks[block_index];
-            if (block.free_after_node_index < tensor.start_node_index)
+            const bool overlaps = std::any_of(
+                block.occupied_intervals.begin(),
+                block.occupied_intervals.end(),
+                [&](const std::pair<uint32_t, uint32_t> &iv)
+                {
+                    return !(iv.second < tensor.start_node_index || tensor.end_node_index < iv.first);
+                });
+            if (!overlaps)
             {
                 VkDeviceSize alignment = tensor.alignment;
                 VkDeviceSize aligned_offset = (alignment <= 1)
@@ -79,7 +87,8 @@ void Memory_Planner::planMemoryLayout()
         if (best_block_index != std::numeric_limits<size_t>::max())
         {
             tensor.allocated_offset = best_aligned_offset;
-            virtual_blocks[best_block_index].free_after_node_index = tensor.end_node_index;
+            virtual_blocks[best_block_index].free_after_node_index = std::max(virtual_blocks[best_block_index].free_after_node_index, tensor.end_node_index);
+            virtual_blocks[best_block_index].occupied_intervals.emplace_back(tensor.start_node_index, tensor.end_node_index);
         }
         else
         {
@@ -94,7 +103,8 @@ void Memory_Planner::planMemoryLayout()
             virtual_blocks.push_back(Virtual_Block{
                 .offset = aligned_offset,
                 .size = tensor.size,
-                .free_after_node_index = tensor.end_node_index});
+                .free_after_node_index = tensor.end_node_index,
+                .occupied_intervals = { { tensor.start_node_index, tensor.end_node_index } } });
         }
     }
 }
@@ -133,13 +143,51 @@ VkDeviceSize Memory_Planner::getOffset(uint32_t _tensor_id) const
 
 uint32_t Vulkan_Sub_Allocator::findMemoryType(uint32_t _type_filter, VkMemoryPropertyFlags _memory_properties) const
 {
+    const bool wants_host_visible = (_memory_properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
+    const bool wants_device_local = (_memory_properties & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0;
+
+    uint32_t best_index = std::numeric_limits<uint32_t>::max();
+    int best_score = std::numeric_limits<int>::min();
+
     for (uint32_t i = 0; i < physical_device_memory_properties.memoryTypeCount; ++i)
     {
-        if ((_type_filter & (1u << i)) && (physical_device_memory_properties.memoryTypes[i].propertyFlags & _memory_properties) == _memory_properties)
+        if ((_type_filter & (1u << i)) == 0)
         {
-            return i;
+            continue;
+        }
+        const VkMemoryPropertyFlags flags = physical_device_memory_properties.memoryTypes[i].propertyFlags;
+        if ((flags & _memory_properties) != _memory_properties)
+        {
+            continue;
+        }
+
+        int score = 0;
+        if (wants_host_visible && !wants_device_local)
+        {
+            if ((flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != 0)
+            {
+                score += 1000;
+            }
+            if ((flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0)
+            {
+                score -= 500;
+            }
+        }
+        const VkMemoryPropertyFlags extra_flags = flags & ~_memory_properties;
+        score -= std::popcount(static_cast<uint32_t>(extra_flags));
+
+        if (best_index == std::numeric_limits<uint32_t>::max() || score > best_score)
+        {
+            best_score = score;
+            best_index = i;
         }
     }
+
+    if (best_index != std::numeric_limits<uint32_t>::max())
+    {
+        return best_index;
+    }
+
     Logger::logMessage("Vulkan_Sub_Allocator::findMemoryType: Failed to find suitable memory type",
                        Log_Level::LOG_ERROR,
                        true,
@@ -151,8 +199,9 @@ uint32_t Vulkan_Sub_Allocator::findMemoryType(uint32_t _type_filter, VkMemoryPro
 size_t Vulkan_Sub_Allocator::createChunk(const VkMemoryRequirements& _memory_requirements, VkMemoryPropertyFlags _memory_properties, bool _is_dedicated_arena)
 {
     uint32_t memory_type_index = findMemoryType(_memory_requirements.memoryTypeBits, _memory_properties);
-    VkDeviceSize allocation_size = std::max(default_chunk_size, _memory_requirements.size);
-
+    VkDeviceSize allocation_size = _is_dedicated_arena
+        ? _memory_requirements.size
+        : std::max(default_chunk_size, _memory_requirements.size);
 
     Logger::logMessage(Input_Format{ "Vulkan_Sub_Allocator::createChunk: Allocating new memory chunk of size {} bytes (memory_type_index={}, memory_properties={}, is_dedicated_arena={})",
                                    allocation_size, memory_type_index, static_cast<uint32_t>(_memory_properties), _is_dedicated_arena },
@@ -238,14 +287,28 @@ size_t Vulkan_Sub_Allocator::createChunk(const VkMemoryRequirements& _memory_req
         }
     }
 
+    const VkMemoryPropertyFlags actual_flags =
+        (memory_type_index < physical_device_memory_properties.memoryTypeCount)
+            ? physical_device_memory_properties.memoryTypes[memory_type_index].propertyFlags
+            : _memory_properties;
+
     Memory_Chunk new_chunk{
         .device_memory = device_memory,
         .chunk_size = allocation_size,
         .memory_type_index = memory_type_index,
-        .memory_properties = _memory_properties,
+        .memory_properties = actual_flags,
         .free_blocks = _is_dedicated_arena ? std::vector<Free_Block>{} : std::vector<Free_Block>{ Free_Block{ .offset = 0, .size = allocation_size } },
         .is_dedicated_arena = _is_dedicated_arena,
         .mapped_pointer = mapped_ptr };
+
+    for (size_t i = 0; i < memory_chunks.size(); ++i)
+    {
+        if (memory_chunks[i].device_memory == VK_NULL_HANDLE && !memory_chunks[i].is_dedicated_arena)
+        {
+            memory_chunks[i] = std::move(new_chunk);
+            return i;
+        }
+    }
 
     memory_chunks.push_back(std::move(new_chunk));
     return memory_chunks.size() - 1;
@@ -259,6 +322,32 @@ void Vulkan_Sub_Allocator::insertAndCoalesce(std::vector<Free_Block> &_free_bloc
                                            {
                                                return lhs.offset < rhs.offset;
                                            });
+
+    if (block_iterator != _free_blocks.end() && (_offset >= block_iterator->offset || _size > block_iterator->offset - _offset))
+    {
+        Logger::logMessage(Input_Format{"Vulkan_Sub_Allocator::insertAndCoalesce: Overlapping or double-free block with next free block (offset={}, size={}, next_offset={})",
+                                       _offset, _size, block_iterator->offset},
+                           Log_Level::LOG_ERROR,
+                           true,
+                           0,
+                           Log_Feature::MEMORY_ALLOCATION);
+        return;
+    }
+
+    if (block_iterator != _free_blocks.begin())
+    {
+        auto prev_it = block_iterator - 1;
+        if (prev_it->size > _offset - prev_it->offset)
+        {
+            Logger::logMessage(Input_Format{"Vulkan_Sub_Allocator::insertAndCoalesce: Overlapping or double-free block with previous free block (prev_offset={}, prev_size={}, offset={})",
+                                           prev_it->offset, prev_it->size, _offset},
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::MEMORY_ALLOCATION);
+            return;
+        }
+    }
 
     block_iterator = _free_blocks.insert(block_iterator, new_block);
 
@@ -322,24 +411,30 @@ Vulkan_Sub_Allocator::~Vulkan_Sub_Allocator()
         0,
         Log_Feature::MEMORY_ALLOCATION);
     std::lock_guard<std::recursive_mutex> lock(allocator_mutex);
-    for (auto& chunk : memory_chunks)
+    for (size_t i = 0; i < memory_chunks.size(); ++i)
     {
+        auto &chunk = memory_chunks[i];
         if (chunk.device_memory != VK_NULL_HANDLE)
         {
+            const bool is_completely_free = chunk.free_blocks.size() == 1 &&
+                                            chunk.free_blocks[0].offset == 0 &&
+                                            chunk.free_blocks[0].size == chunk.chunk_size;
+            if (!chunk.is_dedicated_arena && !is_completely_free)
+            {
+                Logger::logMessage(Input_Format{"Vulkan_Sub_Allocator::~Vulkan_Sub_Allocator: Unfreed allocation leaked in chunk {} (size={} bytes)",
+                                                i, chunk.chunk_size},
+                                   Log_Level::LOG_WARNING,
+                                   true,
+                                   0,
+                                   Log_Feature::MEMORY_ALLOCATION);
+            }
             if (chunk.mapped_pointer != nullptr)
             {
                 vkUnmapMemory(device, chunk.device_memory);
                 chunk.mapped_pointer = nullptr;
             }
             vkFreeMemory(device, chunk.device_memory, nullptr);
-        }
-        else
-        {
-            Logger::logMessage("Vulkan_Sub_Allocator::~Vulkan_Sub_Allocator: Null device_memory handle encountered in chunk",
-                Log_Level::LOG_WARNING,
-                false,
-                0,
-                Log_Feature::MEMORY_ALLOCATION);
+            chunk.device_memory = VK_NULL_HANDLE;
         }
     }
 }
@@ -354,8 +449,22 @@ void Vulkan_Sub_Allocator::free(const Memory_Allocation &_allocation)
     std::lock_guard<std::recursive_mutex> lock(allocator_mutex);
     if (_allocation.chunk_index < memory_chunks.size())
     {
-        if (memory_chunks[_allocation.chunk_index].is_dedicated_arena)
+        auto &chunk = memory_chunks[_allocation.chunk_index];
+        if (chunk.is_dedicated_arena)
         {
+            return;
+        }
+
+        if (_allocation.memory != chunk.device_memory ||
+            _allocation.offset > chunk.chunk_size ||
+            _allocation.size > chunk.chunk_size - _allocation.offset)
+        {
+            Logger::logMessage(Input_Format{"Vulkan_Sub_Allocator::free: Invalid allocation bounds or memory handle in chunk {} (offset={}, size={}, chunk_size={})",
+                                           _allocation.chunk_index, _allocation.offset, _allocation.size, chunk.chunk_size},
+                               Log_Level::LOG_ERROR,
+                               true,
+                               0,
+                               Log_Feature::MEMORY_ALLOCATION);
             return;
         }
 
@@ -365,7 +474,49 @@ void Vulkan_Sub_Allocator::free(const Memory_Allocation &_allocation)
                            true,
                            0,
                            Log_Feature::MEMORY_ALLOCATION);
-        insertAndCoalesce(memory_chunks[_allocation.chunk_index].free_blocks, _allocation.offset, _allocation.size);
+        insertAndCoalesce(chunk.free_blocks, _allocation.offset, _allocation.size);
+
+        if (chunk.free_blocks.size() == 1 &&
+            chunk.free_blocks[0].offset == 0 &&
+            chunk.free_blocks[0].size == chunk.chunk_size)
+        {
+            const uint32_t mtype = chunk.memory_type_index;
+            size_t empty_same_type_count = 0;
+            for (const auto &c : memory_chunks)
+            {
+                if (c.device_memory != VK_NULL_HANDLE &&
+                    !c.is_dedicated_arena &&
+                    c.memory_type_index == mtype &&
+                    c.free_blocks.size() == 1 &&
+                    c.free_blocks[0].offset == 0 &&
+                    c.free_blocks[0].size == c.chunk_size)
+                {
+                    ++empty_same_type_count;
+                }
+            }
+
+            if (empty_same_type_count > 1 || chunk.chunk_size > default_chunk_size)
+            {
+                const VkDeviceSize freed_size = chunk.chunk_size;
+                if (chunk.mapped_pointer != nullptr)
+                {
+                    vkUnmapMemory(device, chunk.device_memory);
+                    chunk.mapped_pointer = nullptr;
+                }
+                vkFreeMemory(device, chunk.device_memory, nullptr);
+                chunk.device_memory = VK_NULL_HANDLE;
+                chunk.chunk_size = 0;
+                chunk.free_blocks.clear();
+                ++total_reclaimed_chunks;
+                total_reclaimed_bytes += static_cast<uint64_t>(freed_size);
+                Logger::logMessage(Input_Format{"Vulkan_Sub_Allocator::free: Reclaimed empty chunk {} ({} bytes)",
+                                                _allocation.chunk_index, freed_size},
+                                   Log_Level::LOG_DEBUG,
+                                   true,
+                                   0,
+                                   Log_Feature::MEMORY_ALLOCATION);
+            }
+        }
     }
     else
     {
@@ -380,6 +531,11 @@ void Vulkan_Sub_Allocator::free(const Memory_Allocation &_allocation)
 
 Memory_Allocation Vulkan_Sub_Allocator::allocate(const VkMemoryRequirements &_memory_requirements, VkMemoryPropertyFlags _memory_properties, VkPhysicalDevice _target_physical_device)
 {
+    if (_memory_requirements.size == 0)
+    {
+        return Memory_Allocation{};
+    }
+
     std::lock_guard<std::recursive_mutex> lock(allocator_mutex);
 
     Logger::logMessage(Input_Format{"Vulkan_Sub_Allocator::allocate: Requesting size {} bytes, alignment {} bytes, memory_properties {}",
@@ -395,6 +551,13 @@ Memory_Allocation Vulkan_Sub_Allocator::allocate(const VkMemoryRequirements &_me
         vkGetPhysicalDeviceMemoryProperties(physical_device, &physical_device_memory_properties);
     }
 
+    const bool wants_host_visible = (_memory_properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
+    const bool wants_device_local = (_memory_properties & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0;
+    const uint32_t preferred_type = findMemoryType(_memory_requirements.memoryTypeBits, _memory_properties);
+    const bool preferred_is_device_local =
+        (preferred_type < physical_device_memory_properties.memoryTypeCount) &&
+        ((physical_device_memory_properties.memoryTypes[preferred_type].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0);
+
     size_t best_chunk_index = std::numeric_limits<size_t>::max();
     size_t best_block_index = std::numeric_limits<size_t>::max();
     VkDeviceSize minimum_leftover_size = std::numeric_limits<VkDeviceSize>::max();
@@ -405,9 +568,13 @@ Memory_Allocation Vulkan_Sub_Allocator::allocate(const VkMemoryRequirements &_me
     {
         auto &chunk = memory_chunks[chunk_index];
 
-        if (chunk.is_dedicated_arena ||
+        if (chunk.device_memory == VK_NULL_HANDLE ||
+            chunk.is_dedicated_arena ||
             (_memory_requirements.memoryTypeBits & (1u << chunk.memory_type_index)) == 0 ||
-            (chunk.memory_properties & _memory_properties) != _memory_properties)
+            (chunk.memory_properties & _memory_properties) != _memory_properties ||
+            (wants_host_visible && chunk.mapped_pointer == nullptr) ||
+            (wants_host_visible && !wants_device_local && !preferred_is_device_local &&
+             (chunk.memory_properties & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0))
         {
             continue;
         }
@@ -540,4 +707,192 @@ Memory_Allocation Vulkan_Sub_Allocator::allocate(const VkMemoryRequirements &_me
             .mapped_pointer = (new_chunk.mapped_pointer != nullptr)
                                   ? static_cast<void*>(static_cast<uint8_t*>(new_chunk.mapped_pointer) + allocated_offset)
                                   : nullptr };
+}
+
+size_t Vulkan_Sub_Allocator::allocateDedicatedArena(VkDeviceSize _total_size, uint32_t _memory_type_bits, VkMemoryPropertyFlags _memory_properties)
+{
+    if (_total_size == 0)
+    {
+        throw std::invalid_argument("Vulkan_Sub_Allocator::allocateDedicatedArena: Total size must be > 0");
+    }
+
+    std::lock_guard<std::recursive_mutex> lock(allocator_mutex);
+
+    VkMemoryRequirements mem_req{
+        .size = _total_size,
+        .alignment = 256,
+        .memoryTypeBits = _memory_type_bits
+    };
+    size_t chunk_idx = createChunk(mem_req, _memory_properties, true);
+    arena_chunk_index = chunk_idx;
+    return chunk_idx;
+}
+
+Memory_Allocation Vulkan_Sub_Allocator::getArenaAllocation(size_t _chunk_index, VkDeviceSize _offset, VkDeviceSize _size) const
+{
+    std::lock_guard<std::recursive_mutex> lock(allocator_mutex);
+
+    if (_chunk_index >= memory_chunks.size())
+    {
+        throw std::out_of_range("Vulkan_Sub_Allocator::getArenaAllocation: chunk index out of range");
+    }
+    const auto &chunk = memory_chunks[_chunk_index];
+    if (!chunk.is_dedicated_arena || chunk.device_memory == VK_NULL_HANDLE)
+    {
+        throw std::runtime_error("Vulkan_Sub_Allocator::getArenaAllocation: chunk is not an active dedicated arena");
+    }
+    if (_size == 0 || _offset > chunk.chunk_size || _size > chunk.chunk_size - _offset)
+    {
+        throw std::out_of_range("Vulkan_Sub_Allocator::getArenaAllocation: offset + size exceeds arena bounds");
+    }
+
+    return Memory_Allocation{
+        .memory = chunk.device_memory,
+        .offset = _offset,
+        .size = _size,
+        .chunk_index = _chunk_index,
+        .mapped_pointer = (chunk.mapped_pointer != nullptr)
+                              ? static_cast<void *>(static_cast<uint8_t *>(chunk.mapped_pointer) + _offset)
+                              : nullptr
+    };
+}
+
+void Vulkan_Sub_Allocator::releaseDedicatedArena(size_t _chunk_index)
+{
+    std::lock_guard<std::recursive_mutex> lock(allocator_mutex);
+
+    if (_chunk_index >= memory_chunks.size())
+    {
+        return;
+    }
+    auto &chunk = memory_chunks[_chunk_index];
+    if (!chunk.is_dedicated_arena)
+    {
+        return;
+    }
+    if (chunk.mapped_pointer != nullptr && chunk.device_memory != VK_NULL_HANDLE)
+    {
+        vkUnmapMemory(device, chunk.device_memory);
+        chunk.mapped_pointer = nullptr;
+    }
+    if (chunk.device_memory != VK_NULL_HANDLE)
+    {
+        vkFreeMemory(device, chunk.device_memory, nullptr);
+        chunk.device_memory = VK_NULL_HANDLE;
+    }
+    chunk.chunk_size = 0;
+    chunk.free_blocks.clear();
+    chunk.is_dedicated_arena = false;
+    if (arena_chunk_index == _chunk_index)
+    {
+        arena_chunk_index = std::numeric_limits<size_t>::max();
+    }
+}
+
+uint64_t Vulkan_Sub_Allocator::reclaimEmptyChunks(bool _keep_one_default_chunk_per_type)
+{
+    std::lock_guard<std::recursive_mutex> lock(allocator_mutex);
+
+    uint64_t reclaimed_now = 0;
+    size_t chunks_reclaimed_now = 0;
+    std::vector<uint32_t> kept_memory_types;
+
+    for (size_t i = 0; i < memory_chunks.size(); ++i)
+    {
+        auto &chunk = memory_chunks[i];
+        if (chunk.device_memory == VK_NULL_HANDLE || chunk.is_dedicated_arena)
+        {
+            continue;
+        }
+        const bool is_completely_free = chunk.free_blocks.size() == 1 &&
+                                        chunk.free_blocks[0].offset == 0 &&
+                                        chunk.free_blocks[0].size == chunk.chunk_size;
+        if (!is_completely_free)
+        {
+            continue;
+        }
+
+        if (_keep_one_default_chunk_per_type && chunk.chunk_size <= default_chunk_size)
+        {
+            if (std::find(kept_memory_types.begin(), kept_memory_types.end(), chunk.memory_type_index) == kept_memory_types.end())
+            {
+                kept_memory_types.push_back(chunk.memory_type_index);
+                continue;
+            }
+        }
+
+        const VkDeviceSize freed_size = chunk.chunk_size;
+        if (chunk.mapped_pointer != nullptr)
+        {
+            vkUnmapMemory(device, chunk.device_memory);
+            chunk.mapped_pointer = nullptr;
+        }
+        vkFreeMemory(device, chunk.device_memory, nullptr);
+        chunk.device_memory = VK_NULL_HANDLE;
+        chunk.chunk_size = 0;
+        chunk.free_blocks.clear();
+
+        reclaimed_now += static_cast<uint64_t>(freed_size);
+        ++chunks_reclaimed_now;
+    }
+
+    if (chunks_reclaimed_now > 0)
+    {
+        total_reclaimed_chunks += chunks_reclaimed_now;
+        total_reclaimed_bytes += reclaimed_now;
+        Logger::logMessage(Input_Format{"Vulkan_Sub_Allocator::reclaimEmptyChunks: Reclaimed {} empty chunk(s) totaling {} bytes",
+                                        chunks_reclaimed_now, reclaimed_now},
+                           Log_Level::LOG_INFO,
+                           false,
+                           0,
+                           Log_Feature::MEMORY_ALLOCATION);
+    }
+
+    return reclaimed_now;
+}
+
+Allocator_Stats Vulkan_Sub_Allocator::getStats() const
+{
+    std::lock_guard<std::recursive_mutex> lock(allocator_mutex);
+
+    Allocator_Stats stats{};
+    stats.reclaimed_chunk_count = total_reclaimed_chunks;
+    stats.reclaimed_bytes = total_reclaimed_bytes;
+
+    for (const auto &chunk : memory_chunks)
+    {
+        if (chunk.device_memory == VK_NULL_HANDLE)
+        {
+            continue;
+        }
+        ++stats.active_chunk_count;
+        const uint64_t cap = static_cast<uint64_t>(chunk.chunk_size);
+        stats.total_allocated_bytes += cap;
+
+        if (chunk.is_dedicated_arena)
+        {
+            stats.dedicated_arena_bytes += cap;
+            stats.total_used_bytes += cap;
+            continue;
+        }
+
+        uint64_t chunk_free = 0;
+        for (const auto &fb : chunk.free_blocks)
+        {
+            chunk_free += static_cast<uint64_t>(fb.size);
+        }
+        stats.total_free_bytes += chunk_free;
+        if (cap >= chunk_free)
+        {
+            stats.total_used_bytes += (cap - chunk_free);
+        }
+        if (chunk.free_blocks.size() == 1 &&
+            chunk.free_blocks[0].offset == 0 &&
+            chunk.free_blocks[0].size == chunk.chunk_size)
+        {
+            ++stats.empty_chunk_count;
+        }
+    }
+
+    return stats;
 }

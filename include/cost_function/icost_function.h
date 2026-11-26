@@ -1,9 +1,10 @@
 #pragma once
 
 #include <cstdint>
-#include <fstream>
+#include <iostream>
+#include <stdexcept>
+#include <vector>
 
-#include "helper/logger.h"
 #include "math/tensor.h"
 
 enum class Cost_Type : uint32_t
@@ -34,17 +35,29 @@ public:
         return computeLoss(prediction_tensor, target_tensor);
     }
 
-    virtual float computeLossAndGradient(const Tensor& prediction_tensor, const std::vector<int32_t>& target_indices, Tensor& gradient_out) const
-    {   
-        return 0.0f;
+    virtual float computeLossAndGradient(const Tensor& , const std::vector<int32_t>& , Tensor& ) const
+    {
+        throw std::logic_error("ICost_Function::computeLossAndGradient: Integer targets are not supported by this cost function");
     }
 
     virtual bool isFused() const noexcept { return false; }
 
     virtual bool supportsIntegerTargets() const noexcept { return false; }
 
-    virtual void saveCheckpoint(std::ofstream &_output_file_stream) const {}
-    virtual void loadCheckpoint(std::ifstream &_input_file_stream) {}
+    virtual void saveCheckpoint(std::ostream &_output_stream) const
+    {
+        if (!_output_stream.good())
+        {
+            throw std::runtime_error("ICost_Function::saveCheckpoint: Output stream is not ready");
+        }
+    }
+    virtual void loadCheckpoint(std::istream &_input_stream)
+    {
+        if (!_input_stream.good())
+        {
+            throw std::runtime_error("ICost_Function::loadCheckpoint: Input stream is not ready");
+        }
+    }
 
     virtual Cost_Type getType() const noexcept = 0;
 };

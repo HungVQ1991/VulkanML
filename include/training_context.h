@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <fstream>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -37,20 +38,61 @@ public:
     static std::unique_ptr<ILayer> constructLayerFromConfig(std::ifstream &_input_file_stream, Layer_Type _layer_type, Execution_Target _execution_target);
     bool loadHeader(std::ifstream &_input_file_stream, Execution_Target _execution_target = Execution_Target::CPU);
 
-    const ILearning_Rate &getLearningRateScheduler() const noexcept { return *learning_rate_scheduler; }
-    ILearning_Rate &getLearningRateScheduler() noexcept { return *learning_rate_scheduler; }
-    const ICost_Function &getCostFunction() const noexcept { return *cost_function; }
-    ICost_Function &getCostFunction() noexcept { return *cost_function; }
-    const ILearning_Rate &getLearningRate() const noexcept { return *learning_rate_scheduler; }
-    ILearning_Rate &getLearningRate() noexcept { return *learning_rate_scheduler; }
-    const IOptimizer &getOptimizer() const noexcept { return *optimizer; }
-    IOptimizer &getOptimizer() noexcept { return *optimizer; }
+    const ILearning_Rate &getLearningRateScheduler() const
+    {
+        if (!learning_rate_scheduler)
+        {
+            throw std::logic_error("Training_Context::getLearningRateScheduler: Learning rate scheduler is not set");
+        }
+        return *learning_rate_scheduler;
+    }
+    ILearning_Rate &getLearningRateScheduler()
+    {
+        if (!learning_rate_scheduler)
+        {
+            throw std::logic_error("Training_Context::getLearningRateScheduler: Learning rate scheduler is not set");
+        }
+        return *learning_rate_scheduler;
+    }
+    const ICost_Function &getCostFunction() const
+    {
+        if (!cost_function)
+        {
+            throw std::logic_error("Training_Context::getCostFunction: Cost function is not set");
+        }
+        return *cost_function;
+    }
+    ICost_Function &getCostFunction()
+    {
+        if (!cost_function)
+        {
+            throw std::logic_error("Training_Context::getCostFunction: Cost function is not set");
+        }
+        return *cost_function;
+    }
+    const IOptimizer &getOptimizer() const
+    {
+        if (!optimizer)
+        {
+            throw std::logic_error("Training_Context::getOptimizer: Optimizer is not set");
+        }
+        return *optimizer;
+    }
+    IOptimizer &getOptimizer()
+    {
+        if (!optimizer)
+        {
+            throw std::logic_error("Training_Context::getOptimizer: Optimizer is not set");
+        }
+        return *optimizer;
+    }
     size_t getCurrentEpoch() const noexcept { return current_epoch; }
     bool hasCostFunction() const noexcept { return cost_function != nullptr; }
+    bool hasOptimizer() const noexcept { return optimizer != nullptr; }
+    bool hasLearningRateScheduler() const noexcept { return learning_rate_scheduler != nullptr; }
 
-    void setLearningRate(std::unique_ptr<ILearning_Rate> _learning_rate_scheduler);
+    void setLearningRateScheduler(std::unique_ptr<ILearning_Rate> _learning_rate_scheduler);
     void setOptimizer(std::unique_ptr<IOptimizer> _optimizer);
     void setCostFunction(std::unique_ptr<ICost_Function> _cost_function);
-    void setLearningRateScheduler(std::unique_ptr<ILearning_Rate> _learning_rate_scheduler) { setLearningRate(std::move(_learning_rate_scheduler)); }
     void setCurrentEpoch(size_t _epoch) noexcept { current_epoch = _epoch; }
 };

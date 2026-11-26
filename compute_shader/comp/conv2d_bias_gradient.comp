@@ -1,9 +1,17 @@
 #version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#endif
 
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
 layout(std430, set = 0, binding = 0) readonly buffer Grad_Output_Buffer {
+#ifdef USE_FP16
+    float16_t grad_output[];
+#else
     float grad_output[];
+#endif
 };
 
 layout(std430, set = 0, binding = 1) writeonly buffer Grad_Bias_Buffer {
@@ -34,10 +42,11 @@ void main() {
 
     float sum = 0.0;
     for (uint m = tid; m < M; m += 256) {
-        float val = grad_output[m * params.out_c + c];
-        if (!isnan(val) && !isinf(val)) {
-            sum += val;
-        }
+#ifdef USE_FP16
+        sum += float(grad_output[m * params.out_c + c]);
+#else
+        sum += grad_output[m * params.out_c + c];
+#endif
     }
 
     sdata[tid] = sum;
@@ -54,8 +63,6 @@ void main() {
         float b = sdata[0];
         if (isnan(b) || isinf(b)) {
             b = 0.0f;
-        } else {
-            b = clamp(b, -10000.0f, 10000.0f);
         }
         grad_bias[c] = b;
     }

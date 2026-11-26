@@ -1,17 +1,33 @@
 #version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#endif
 
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
 layout(std430, set = 0, binding = 0) readonly restrict buffer InputBuffer {
+#ifdef USE_FP16
+    float16_t X[];
+#else
     float X[];
+#endif
 };
 
 layout(std430, set = 0, binding = 1) readonly restrict buffer GradOutputBuffer {
+#ifdef USE_FP16
+    float16_t dY[];
+#else
     float dY[];
+#endif
 };
 
 layout(std430, set = 0, binding = 2) writeonly restrict buffer GradInputBuffer {
+#ifdef USE_FP16
+    float16_t dX[];
+#else
     float dX[];
+#endif
 };
 
 layout(push_constant) uniform PushConstants {
@@ -20,8 +36,15 @@ layout(push_constant) uniform PushConstants {
 } pc;
 
 void main() {
-    uint idx = gl_GlobalInvocationID.x;
+    uint idx = (gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 256u + gl_LocalInvocationID.x;
     if (idx >= pc.total_elements) return;
 
+#ifdef USE_FP16
+    float16_t slope = float16_t(pc.negative_slope);
+    float16_t dy = dY[idx];
+    if (isnan(float(dy)) || isinf(float(dy))) dy = float16_t(0.0);
+    dX[idx] = (X[idx] >= float16_t(0.0)) ? dy : float16_t(dy * slope);
+#else
     dX[idx] = (X[idx] >= 0.0f) ? dY[idx] : (dY[idx] * pc.negative_slope);
+#endif
 }

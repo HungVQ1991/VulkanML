@@ -1,0 +1,49 @@
+#version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#endif
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+#ifdef USE_FP16
+layout(std430, set = 0, binding = 0) readonly restrict buffer InputBuffer { float16_t in_data[]; };
+layout(std430, set = 0, binding = 1) writeonly restrict buffer OutputBuffer { float16_t out_data[]; };
+layout(std430, set = 0, binding = 2) writeonly restrict buffer MaskBuffer { float16_t mask_data[]; };
+#else
+layout(std430, set = 0, binding = 0) readonly restrict buffer InputBuffer { float in_data[]; };
+layout(std430, set = 0, binding = 1) writeonly restrict buffer OutputBuffer { float out_data[]; };
+layout(std430, set = 0, binding = 2) writeonly restrict buffer MaskBuffer { float mask_data[]; };
+#endif
+
+layout(push_constant) uniform Dropout_Constants {
+    uint total_elements;
+    float dropout_rate;
+    float scale;
+    uint seed_lo;
+    uint seed_hi;
+} pc;
+
+uint pcgHash(uint v) {
+    uint state = v * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+void main() {
+    uint idx = (gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 256u + gl_LocalInvocationID.x;
+    if (idx >= pc.total_elements) return;
+
+    uint h = pcgHash(idx ^ pcgHash(pc.seed_lo ^ pcgHash(pc.seed_hi + 0x9E3779B9u)));
+    float u = float(h & 0x00FFFFFFu) * (1.0 / 16777216.0);
+    float m = (u >= pc.dropout_rate) ? pc.scale : 0.0;
+#ifdef USE_FP16
+    mask_data[idx] = float16_t(clamp(m, 0.0, 65504.0));
+    float y = float(in_data[idx]) * m;
+    if (isnan(y) || isinf(y)) y = 0.0;
+    out_data[idx] = float16_t(clamp(y, -65504.0, 65504.0));
+#else
+    mask_data[idx] = m;
+    out_data[idx] = in_data[idx] * m;
+#endif
+}

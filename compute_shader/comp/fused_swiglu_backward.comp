@@ -7,12 +7,14 @@ layout(std430, binding = 1) readonly buffer InMatrix { float data_in[]; };
 layout(std430, binding = 2) writeonly buffer GradX { float data_dx[]; };
 
 layout(push_constant) uniform Constants {
-    uint total_elements; // rows * half_dim
-    uint half_dim;       // total_cols / 2
+    uint total_elements;
+    uint half_dim;
 } pcs;
 
 void main() {
-    uint idx = gl_GlobalInvocationID.x;
+    if (pcs.half_dim == 0u) return;
+    uint wg_id = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
+    uint idx = wg_id * 256u + gl_LocalInvocationID.x;
     if (idx >= pcs.total_elements) return;
 
     uint row = idx / pcs.half_dim;

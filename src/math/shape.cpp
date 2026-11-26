@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <format>
+#include <limits>
 #include <stdexcept>
 
 Shape::Shape(std::initializer_list<size_t> dimension_list)
@@ -10,6 +11,7 @@ Shape::Shape(std::initializer_list<size_t> dimension_list)
     {
         throw std::invalid_argument("Shape: Rank exceeds maximum supported rank");
     }
+    validateTotalElementsNoOverflow(std::span<const size_t>(dimension_list.begin(), dimension_list.size()));
     rank_size = static_cast<std::uint8_t>(dimension_list.size());
     std::copy(dimension_list.begin(), dimension_list.end(), dimensions.begin());
 }
@@ -20,11 +22,12 @@ Shape::Shape(std::span<const size_t> dimension_span)
     {
         throw std::invalid_argument("Shape: Rank exceeds maximum supported rank");
     }
+    validateTotalElementsNoOverflow(dimension_span);
     rank_size = static_cast<std::uint8_t>(dimension_span.size());
     std::copy(dimension_span.begin(), dimension_span.end(), dimensions.begin());
 }
 
-Shape Shape::computeContiguousStrides() const noexcept
+Shape Shape::computeContiguousStrides() const
 {
     Shape strides_result;
     strides_result.rank_size = rank_size;
@@ -37,6 +40,10 @@ Shape Shape::computeContiguousStrides() const noexcept
     for (size_t i = rank_size; i > 0; --i)
     {
         strides_result.dimensions[i - 1] = current_stride;
+        if (dimensions[i - 1] != 0 && current_stride > std::numeric_limits<size_t>::max() / dimensions[i - 1])
+        {
+            throw std::overflow_error("Shape::computeContiguousStrides: size_t overflow");
+        }
         current_stride *= dimensions[i - 1];
     }
     return strides_result;
@@ -79,8 +86,10 @@ void Shape::setDimensions(std::span<const size_t> _dimension_span)
     {
         throw std::invalid_argument("Shape: Rank exceeds maximum supported rank");
     }
+    validateTotalElementsNoOverflow(_dimension_span);
     rank_size = static_cast<std::uint8_t>(_dimension_span.size());
     std::copy(_dimension_span.begin(), _dimension_span.end(), dimensions.begin());
+    std::fill(dimensions.begin() + rank_size, dimensions.end(), static_cast<size_t>(0));
 }
 
 void Shape::setRank(size_t _rank)
@@ -90,4 +99,5 @@ void Shape::setRank(size_t _rank)
         throw std::invalid_argument("Shape: Rank exceeds maximum supported rank");
     }
     rank_size = static_cast<std::uint8_t>(_rank);
+    std::fill(dimensions.begin() + rank_size, dimensions.end(), static_cast<size_t>(0));
 }

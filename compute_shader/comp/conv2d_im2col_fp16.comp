@@ -2,14 +2,22 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
 #extension GL_EXT_shader_16bit_storage : require
 
-layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
 layout(std430, set = 0, binding = 0) readonly buffer Input_Buffer {
     float16_t input_data[];
 };
 
+layout(std430, set = 0, binding = 0) readonly buffer Input_Buffer_V4 {
+    uvec4 input_data4[];
+};
+
 layout(std430, set = 0, binding = 1) writeonly buffer Col_Buffer {
     float16_t col_data[];
+};
+
+layout(std430, set = 0, binding = 1) writeonly buffer Col_Buffer_V4 {
+    uvec4 col_data4[];
 };
 
 layout(push_constant) uniform Push_Constants {
@@ -26,19 +34,52 @@ layout(push_constant) uniform Push_Constants {
 } params;
 
 void main() {
-    uint m = gl_GlobalInvocationID.x;
-    uint k = gl_GlobalInvocationID.y;
-
+    uint idx = (gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 256u + gl_LocalInvocationID.x;
     uint M = params.batch_size * params.out_h * params.out_w;
-    uint K = params.kernel_size * params.kernel_size * params.in_c;
-
-    if (m >= M || k >= K) return;
-
     uint out_spatial = params.out_h * params.out_w;
+
+    if ((params.in_c & 7u) == 0u) {
+        uint in_c4 = params.in_c >> 3u;
+        uint K4 = params.kernel_size * params.kernel_size * in_c4;
+        uint total4 = M * K4;
+        if (idx >= total4) return;
+
+        uint m = idx / K4;
+        uint k4 = idx - m * K4;
+
+        uint n = m / out_spatial;
+        uint spatial_idx = m - n * out_spatial;
+        uint out_y = spatial_idx / params.out_w;
+        uint out_x = spatial_idx - out_y * params.out_w;
+
+        uint c_in4 = k4 % in_c4;
+        uint k_spatial = k4 / in_c4;
+        uint kx = k_spatial % params.kernel_size;
+        uint ky = k_spatial / params.kernel_size;
+
+        int in_y = int(out_y * params.stride + ky) - int(params.padding);
+        int in_x = int(out_x * params.stride + kx) - int(params.padding);
+
+        uvec4 val = uvec4(0u);
+        if (in_y >= 0 && in_y < int(params.in_h) && in_x >= 0 && in_x < int(params.in_w)) {
+            uint in_idx4 = ((n * params.in_h + uint(in_y)) * params.in_w + uint(in_x)) * in_c4 + c_in4;
+            val = input_data4[in_idx4];
+        }
+        col_data4[idx] = val;
+        return;
+    }
+
+    uint K = params.kernel_size * params.kernel_size * params.in_c;
+    uint total = M * K;
+    if (idx >= total) return;
+
+    uint m = idx / K;
+    uint k = idx - m * K;
+
     uint n = m / out_spatial;
-    uint spatial_idx = m % out_spatial;
+    uint spatial_idx = m - n * out_spatial;
     uint out_y = spatial_idx / params.out_w;
-    uint out_x = spatial_idx % params.out_w;
+    uint out_x = spatial_idx - out_y * params.out_w;
 
     uint c_in = k % params.in_c;
     uint k_spatial = k / params.in_c;
@@ -56,5 +97,5 @@ void main() {
         val = input_data[in_idx];
     }
 
-    col_data[m * K + k] = val;
+    col_data[idx] = val;
 }

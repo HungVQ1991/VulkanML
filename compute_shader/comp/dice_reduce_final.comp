@@ -1,0 +1,63 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer Partial_Buffer {
+    float partial_data[];
+};
+
+layout(std430, set = 0, binding = 1) writeonly buffer Out_Buffer {
+    float out_data[];
+};
+
+layout(push_constant) uniform Push_Constants {
+    uint num_partials;
+    float epsilon_val;
+    uint write_stats;
+} pc;
+
+shared float shared_inter[256];
+shared float shared_pred[256];
+shared float shared_target[256];
+
+void main() {
+    uint tid = gl_LocalInvocationID.x;
+
+    float inter_val = 0.0f;
+    float pred_val = 0.0f;
+    float target_val = 0.0f;
+
+    for (uint i = tid; i < pc.num_partials; i += 256u) {
+        uint base = i * 3u;
+        inter_val += partial_data[base + 0u];
+        pred_val += partial_data[base + 1u];
+        target_val += partial_data[base + 2u];
+    }
+
+    shared_inter[tid] = inter_val;
+    shared_pred[tid] = pred_val;
+    shared_target[tid] = target_val;
+    barrier();
+
+    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+        if (tid < stride) {
+            shared_inter[tid] += shared_inter[tid + stride];
+            shared_pred[tid] += shared_pred[tid + stride];
+            shared_target[tid] += shared_target[tid + stride];
+        }
+        barrier();
+    }
+
+    if (tid == 0u) {
+        float total_inter = shared_inter[0];
+        float total_pred = shared_pred[0];
+        float total_target = shared_target[0];
+        float dice = (2.0f * total_inter + pc.epsilon_val) / (total_pred + total_target + pc.epsilon_val);
+        out_data[0] = 1.0f - dice;
+        if (pc.write_stats != 0u) {
+            out_data[1] = total_inter;
+            out_data[2] = total_pred;
+            out_data[3] = total_target;
+        }
+    }
+}

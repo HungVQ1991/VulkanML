@@ -1,9 +1,18 @@
 #version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#endif
 
 layout(local_size_x = 256) in;
 
+#ifdef USE_FP16
+layout(std430, binding = 0) readonly buffer InBuffer { float16_t in_data[]; };
+layout(std430, binding = 1) writeonly buffer OutBuffer { float16_t out_data[]; };
+#else
 layout(std430, binding = 0) readonly buffer InBuffer { float in_data[]; };
 layout(std430, binding = 1) writeonly buffer OutBuffer { float out_data[]; };
+#endif
 
 layout(push_constant) uniform Constants {
     uint total_pairs;
@@ -12,17 +21,26 @@ layout(push_constant) uniform Constants {
     int direction;
     float base;
     uint num_heads;
-    uint mode; // 0: standard, 1: fused_permute ([B,S,H,D] -> [B,H,S,D]), 2: fused_unpermute ([B,H,S,D] -> [B,S,H,D])
+    uint mode;
+    uint position_offset;
+    uint rotary_dim;
+    float freq_scale;
 } pcs;
 
 void main() {
-    uint pair_id = gl_GlobalInvocationID.x;
+    if (pcs.head_dim == 0u || (pcs.head_dim & 1u) != 0u || pcs.seq_len == 0u) return;
+    if ((pcs.mode == 1u || pcs.mode == 2u || pcs.mode == 3u) && pcs.num_heads == 0u) return;
+
+    uint wg_id = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
+    uint pair_id = wg_id * 256u + gl_LocalInvocationID.x;
     if (pair_id >= pcs.total_pairs) return;
 
     uint base_idx = pair_id * 2;
     uint D = pcs.head_dim;
     uint S = pcs.seq_len;
     uint H = pcs.num_heads;
+    uint R = (pcs.rotary_dim > 0u && pcs.rotary_dim <= D && (pcs.rotary_dim & 1u) == 0u) ? pcs.rotary_dim : D;
+    float fscale = (pcs.freq_scale > 0.0) ? pcs.freq_scale : 1.0;
 
     uint c = base_idx % D;
     uint pair_idx = c / 2;
@@ -34,28 +52,66 @@ void main() {
         token_pos = (base_idx / D) % S;
         uint h = (base_idx / (D * S)) % H;
         uint b = base_idx / (D * S * H);
+#ifdef USE_FP16
+
+#endif
         in_idx = b * (S * H * D) + token_pos * (H * D) + h * D + c;
         out_idx = base_idx;
     } else if (pcs.mode == 2) {
         token_pos = (base_idx / D) % S;
         uint h = (base_idx / (D * S)) % H;
         uint b = base_idx / (D * S * H);
+#ifdef USE_FP16
+
+#endif
         in_idx = base_idx;
         out_idx = b * (S * H * D) + token_pos * (H * D) + h * D + c;
+    } else if (pcs.mode == 3) {
+        token_pos = (base_idx / (D * H)) % S;
+        in_idx = base_idx;
+        out_idx = base_idx;
     } else {
         token_pos = (base_idx / D) % S;
         in_idx = base_idx;
         out_idx = base_idx;
     }
 
-    float theta = pow(pcs.base, -2.0 * float(pair_idx) / float(D));
-    float alpha = float(pcs.direction) * float(token_pos) * theta;
+#ifdef USE_FP16
+    float x0 = float(in_data[in_idx]);
+    float x1 = float(in_data[in_idx + 1]);
+    if (isnan(x0) || isinf(x0)) x0 = 0.0;
+    if (isnan(x1) || isinf(x1)) x1 = 0.0;
+#else
+    float x0 = in_data[in_idx];
+    float x1 = in_data[in_idx + 1];
+#endif
+
+    if (c >= R) {
+#ifdef USE_FP16
+        out_data[out_idx]     = float16_t(clamp(x0, -65504.0, 65504.0));
+        out_data[out_idx + 1] = float16_t(clamp(x1, -65504.0, 65504.0));
+#else
+        out_data[out_idx]     = x0;
+        out_data[out_idx + 1] = x1;
+#endif
+        return;
+    }
+
+    float theta = pow(pcs.base, -2.0 * float(pair_idx) / float(R));
+    float alpha = float(pcs.direction) * (float(token_pos + pcs.position_offset) * fscale) * theta;
     float cos_a = cos(alpha);
     float sin_a = sin(alpha);
 
-    float x0 = in_data[in_idx];
-    float x1 = in_data[in_idx + 1];
+#ifdef USE_FP16
+    float r0 = x0 * cos_a - x1 * sin_a;
+    float r1 = x0 * sin_a + x1 * cos_a;
+    if (isnan(r0) || isinf(r0)) r0 = 0.0;
+    if (isnan(r1) || isinf(r1)) r1 = 0.0;
 
+    out_data[out_idx]     = float16_t(clamp(r0, -65504.0, 65504.0));
+    out_data[out_idx + 1] = float16_t(clamp(r1, -65504.0, 65504.0));
+#else
     out_data[out_idx]     = x0 * cos_a - x1 * sin_a;
     out_data[out_idx + 1] = x0 * sin_a + x1 * cos_a;
+#endif
 }

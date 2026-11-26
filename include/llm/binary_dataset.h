@@ -16,6 +16,7 @@ public:
         uint32_t version = CURRENT_VERSION;
         uint64_t total_tokens = 0;
     };
+    static_assert(sizeof(Header) == 16, "Binary_Token_Dataset::Header must be 16 bytes");
 
     static bool save(const std::string &file_path, const std::vector<int32_t> &tokens);
     static bool load(const std::string &file_path, std::vector<int32_t> &tokens);

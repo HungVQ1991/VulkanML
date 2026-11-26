@@ -16,7 +16,7 @@ layout(push_constant) uniform Push_Constants {
 
 void main() {
     uint n = push_constants.n;
-    if (n == 0) {
+    if (n == 0u || n > 128u) {
         return;
     }
 
@@ -52,6 +52,12 @@ void main() {
 
         float pivot = aug[i * aug_cols + i];
         if (abs(pivot) < 1e-7f) {
+            float nan_val = 0.0f / 0.0f;
+            for (uint r_idx = 0; r_idx < n; ++r_idx) {
+                for (uint c_idx = 0; c_idx < n; ++c_idx) {
+                    output_data[r_idx * n + c_idx] = nan_val;
+                }
+            }
             return;
         }
 

@@ -24,7 +24,7 @@ public:
     void addNode(const Compute_Node &_node);
     void addNode(Compute_Node &&_node);
     void clear() noexcept;
-    void print();
+    void print() const;
 
     const Compute_Node &getNode(size_t _index) const { return nodes.at(_index); }
     Compute_Node &getNode(size_t _index) { return nodes.at(_index); }

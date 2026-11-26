@@ -1,21 +1,36 @@
 #version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#endif
 
 layout(local_size_x = 256) in;
 
+#ifdef USE_FP16
+layout(set = 0, binding = 0) readonly buffer Forward_Input_Buffer { float16_t forward_input[]; };
+layout(set = 0, binding = 1) readonly buffer Grad_Output_Buffer { float16_t grad_output[]; };
+layout(set = 0, binding = 2) writeonly buffer Grad_Input_Buffer { float16_t grad_input[]; };
+#else
 layout(set = 0, binding = 0) readonly buffer Forward_Input_Buffer { float forward_input[]; };
 layout(set = 0, binding = 1) readonly buffer Grad_Output_Buffer { float grad_output[]; };
 layout(set = 0, binding = 2) writeonly buffer Grad_Input_Buffer { float grad_input[]; };
+#endif
 
-layout(push_constant) uniform Push_Constants { 
-    uint num_elements; 
+layout(push_constant) uniform Push_Constants {
+    uint num_elements;
 };
 
 void main() {
-    uint idx = gl_GlobalInvocationID.x;
+    uint idx = (gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 256u + gl_LocalInvocationID.x;
     if (idx >= num_elements) return;
 
+#ifdef USE_FP16
+    float x = float(forward_input[idx]);
+    float grad = float(grad_output[idx]);
+#else
     float x = forward_input[idx];
     float grad = grad_output[idx];
+#endif
 
     float k_alpha = 0.79788456;
     float k_beta = 0.044715;
@@ -23,11 +38,17 @@ void main() {
     float x2 = x * x;
     float x3 = x2 * x;
 
-    float u = k_alpha * (x + k_beta * x3);
+    float u = clamp(k_alpha * (x + k_beta * x3), -15.0f, 15.0f);
     float t = tanh(u);
-    float sech2 = 1.0 - t * t;
+    float sech2 = 1.0f - t * t;
+    float d_inner = k_alpha * (1.0f + 3.0f * k_beta * x2);
+    float term = (abs(u) >= 15.0f) ? 0.0f : (0.5f * x * sech2 * d_inner);
 
-    float derivative = 0.5 * (1.0 + t) + 0.5 * x * sech2 * k_alpha * (1.0 + 3.0 * k_beta * x2);
+    float derivative = 0.5f * (1.0f + t) + term;
 
+#ifdef USE_FP16
+    grad_input[idx] = float16_t(grad * derivative);
+#else
     grad_input[idx] = grad * derivative;
+#endif
 }

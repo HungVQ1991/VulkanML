@@ -20,11 +20,11 @@ void Compute_Graph::clear() noexcept
     nodes.clear();
 }
 
-void Compute_Graph::print()
+void Compute_Graph::print() const
 {
-    Logger::logMessage(Input_Format{"Node count: {} nodes", nodes.size()}, Log_Level::LOG_INFO, true, 1, Log_Feature::GRAPH);
+    Logger::logMessage(Input_Format{"Node count: {} nodes", nodes.size()}, Log_Level::LOG_INFO, true, 0, Log_Feature::GRAPH);
     for (const Compute_Node &node : nodes)
     {
-        Logger::logMessage(Input_Format{"{}", static_cast<std::string>(magic_enum::enum_name<Compute_Pipeline>(node.pipeline_id))}, Log_Level::LOG_INFO, true, nodes.size(), Log_Feature::GRAPH);
+        Logger::logMessage(Input_Format{"{}", static_cast<std::string>(magic_enum::enum_name<Compute_Pipeline>(node.pipeline_id))}, Log_Level::LOG_INFO, true, 0, Log_Feature::GRAPH);
     }
 }

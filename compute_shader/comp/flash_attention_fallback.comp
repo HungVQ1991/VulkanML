@@ -1,0 +1,95 @@
+#version 450
+
+layout(local_size_x = 1, local_size_y = 16, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer QBuffer { float q_data[]; };
+layout(std430, binding = 1) readonly buffer KBuffer { float k_data[]; };
+layout(std430, binding = 2) readonly buffer VBuffer { float v_data[]; };
+layout(std430, binding = 3) writeonly buffer OBuffer { float o_data[]; };
+layout(std430, binding = 4) writeonly buffer LBuffer { float l_data[]; };
+
+layout(push_constant) uniform Constants {
+    uint batch_size;
+    uint q_seq_len;
+    uint kv_seq_len;
+    uint head_dim;
+    uint is_causal;
+    uint causal_offset;
+    float scale;
+    uint gqa_group_size;
+    uint num_heads;
+    uint is_bshd;
+} pcs;
+
+void main() {
+    uint b = gl_WorkGroupID.z;
+    uint q_pos = gl_GlobalInvocationID.y;
+    if (b >= pcs.batch_size || q_pos >= pcs.q_seq_len) return;
+
+    uint D = pcs.head_dim;
+    uint S = pcs.q_seq_len;
+    uint T = pcs.kv_seq_len;
+    uint group = max(pcs.gqa_group_size, 1u);
+    uint H = max(pcs.num_heads, 1u);
+    uint H_kv = max(H / group, 1u);
+    uint q_base;
+    uint kv_head_base;
+    uint kv_row_stride;
+    if (pcs.is_bshd != 0u) {
+        uint batch_idx = b / H;
+        uint head_idx = b % H;
+        uint kv_head_idx = head_idx / group;
+        q_base = ((batch_idx * S + q_pos) * H + head_idx) * D;
+        kv_head_base = (batch_idx * T * H_kv + kv_head_idx) * D;
+        kv_row_stride = H_kv * D;
+    } else {
+        q_base = (b * S + q_pos) * D;
+        kv_head_base = (b / group) * T * D;
+        kv_row_stride = D;
+    }
+
+    uint max_j = (pcs.is_causal != 0) ? min(T, pcs.causal_offset + q_pos + 1) : T;
+
+    float m = -1e20;
+    float l = 0.0;
+    for (uint j = 0; j < max_j; ++j) {
+        uint k_base = kv_head_base + j * kv_row_stride;
+        float dot_val = 0.0;
+        for (uint d = 0; d < D; ++d) {
+            dot_val += q_data[q_base + d] * k_data[k_base + d];
+        }
+        float s_val = dot_val * pcs.scale;
+        float m_new = max(m, s_val);
+        l = l * exp(m - m_new) + exp(s_val - m_new);
+        m = m_new;
+    }
+
+    float lse = (l > 0.0) ? (m + log(l)) : -1e20;
+    l_data[b * S + q_pos] = lse;
+
+    for (uint d_base = 0; d_base < D; d_base += 32) {
+        uint chunk = min(32u, D - d_base);
+        float acc[32];
+        for (uint k = 0; k < chunk; ++k) {
+            acc[k] = 0.0;
+        }
+
+        if (l > 0.0) {
+            for (uint j = 0; j < max_j; ++j) {
+                uint kv_base = kv_head_base + j * kv_row_stride;
+                float dot_val = 0.0;
+                for (uint d = 0; d < D; ++d) {
+                    dot_val += q_data[q_base + d] * k_data[kv_base + d];
+                }
+                float p = exp(dot_val * pcs.scale - lse);
+                for (uint k = 0; k < chunk; ++k) {
+                    acc[k] += p * v_data[kv_base + d_base + k];
+                }
+            }
+        }
+
+        for (uint k = 0; k < chunk; ++k) {
+            o_data[q_base + d_base + k] = acc[k];
+        }
+    }
+}

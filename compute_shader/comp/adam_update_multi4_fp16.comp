@@ -1,0 +1,134 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) coherent restrict buffer DynamicParams {
+    float lr;
+    float inv_correction1;
+    float inv_sqrt_correction2;
+    float inv_scale;
+    uint overflow_detected;
+} dyn;
+
+#define DECLARE_ADAM_SLOT(S, BP, BG, BM, BV, BF) \
+    layout(std430, set = 0, binding = BP) restrict buffer P_##S { float p_##S[]; }; \
+    layout(std430, set = 0, binding = BP) restrict buffer P4_##S { vec4 p4_##S[]; }; \
+    layout(std430, set = 0, binding = BG) readonly restrict buffer G_##S { float g_##S[]; }; \
+    layout(std430, set = 0, binding = BG) readonly restrict buffer G4_##S { vec4 g4_##S[]; }; \
+    layout(std430, set = 0, binding = BM) restrict buffer M_##S { float m_##S[]; }; \
+    layout(std430, set = 0, binding = BM) restrict buffer M4_##S { vec4 m4_##S[]; }; \
+    layout(std430, set = 0, binding = BV) restrict buffer V_##S { float v_##S[]; }; \
+    layout(std430, set = 0, binding = BV) restrict buffer V4_##S { vec4 v4_##S[]; }; \
+    layout(std430, set = 0, binding = BF) writeonly restrict buffer F_##S { float16_t f_##S[]; }; \
+    layout(std430, set = 0, binding = BF) writeonly restrict buffer F4_##S { f16vec4 f4_##S[]; }
+
+DECLARE_ADAM_SLOT(0, 1, 2, 3, 4, 5);
+DECLARE_ADAM_SLOT(1, 6, 7, 8, 9, 10);
+DECLARE_ADAM_SLOT(2, 11, 12, 13, 14, 15);
+DECLARE_ADAM_SLOT(3, 16, 17, 18, 19, 20);
+
+layout(push_constant) uniform PushConstants {
+    uint n0;
+    uint n1;
+    uint n2;
+    uint n3;
+    float beta1;
+    float beta2;
+    float eps;
+    float max_grad;
+    float weight_decay;
+} pc;
+
+#define ADAM_SCALAR_SLOT(S, IDX)                                                            \
+    do {                                                                                    \
+        float _g = g_##S[(IDX)] * inv_scale;                                                \
+        if (isnan(_g) || isinf(_g)) {                                                       \
+            saw_overflow = true;                                                            \
+        } else {                                                                            \
+            if (pc.max_grad > 0.0) {                                                        \
+                _g = clamp(_g, -pc.max_grad, pc.max_grad);                                  \
+            }                                                                               \
+            float _mv = fma(pc.beta1, m_##S[(IDX)], one_minus_b1 * _g);                     \
+            float _vv = fma(pc.beta2, v_##S[(IDX)], one_minus_b2 * (_g * _g));              \
+            m_##S[(IDX)] = _mv;                                                             \
+            v_##S[(IDX)] = _vv;                                                             \
+            float _step = (_mv * inv_c1) / (sqrt(_vv) * inv_sqrt_c2 + pc.eps);              \
+            float _p = p_##S[(IDX)];                                                        \
+            if (pc.weight_decay > 0.0) {                                                    \
+                _p -= lr * fma(pc.weight_decay, _p, _step);                                 \
+            } else {                                                                        \
+                _p -= lr * _step;                                                           \
+            }                                                                               \
+            p_##S[(IDX)] = _p;                                                              \
+            f_##S[(IDX)] = float16_t(clamp(_p, -65504.0, 65504.0));                         \
+        }                                                                                   \
+    } while (false)
+
+#define RUN_ADAM_SLOT(S, N_ELEM)                                                            \
+    do {                                                                                    \
+        uint _n = (N_ELEM);                                                                 \
+        if (base >= _n) return;                                                             \
+        if (base + 3u < _n) {                                                               \
+            vec4 _g = g4_##S[vec_idx] * inv_scale;                                          \
+            if (any(isnan(_g)) || any(isinf(_g))) {                                         \
+                ADAM_SCALAR_SLOT(S, base);                                                  \
+                ADAM_SCALAR_SLOT(S, base + 1u);                                             \
+                ADAM_SCALAR_SLOT(S, base + 2u);                                             \
+                ADAM_SCALAR_SLOT(S, base + 3u);                                             \
+            } else {                                                                        \
+                if (pc.max_grad > 0.0) {                                                    \
+                    _g = clamp(_g, vec4(-pc.max_grad), vec4(pc.max_grad));                  \
+                }                                                                           \
+                vec4 _mv = fma(vec4(pc.beta1), m4_##S[vec_idx], vec4(one_minus_b1) * _g);   \
+                vec4 _vv = fma(vec4(pc.beta2), v4_##S[vec_idx], vec4(one_minus_b2) * (_g * _g)); \
+                m4_##S[vec_idx] = _mv;                                                      \
+                v4_##S[vec_idx] = _vv;                                                      \
+                vec4 _step = (_mv * inv_c1) / (sqrt(_vv) * inv_sqrt_c2 + vec4(pc.eps));     \
+                vec4 _p = p4_##S[vec_idx];                                                  \
+                if (pc.weight_decay > 0.0) {                                                \
+                    _p -= lr * fma(vec4(pc.weight_decay), _p, _step);                       \
+                } else {                                                                    \
+                    _p -= lr * _step;                                                       \
+                }                                                                           \
+                p4_##S[vec_idx] = _p;                                                       \
+                vec4 _pc = clamp(_p, vec4(-65504.0), vec4(65504.0));                        \
+                f4_##S[vec_idx] = f16vec4(_pc);                                             \
+            }                                                                               \
+        } else {                                                                            \
+            for (uint _k = 0u; _k < 4u && base + _k < _n; ++_k) {                           \
+                ADAM_SCALAR_SLOT(S, base + _k);                                             \
+            }                                                                               \
+        }                                                                                   \
+    } while (false)
+
+void main() {
+    uint slot = gl_WorkGroupID.z;
+    if (slot >= 4u) return;
+
+    uint vec_idx = (gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 256u + gl_LocalInvocationID.x;
+    uint base = vec_idx * 4u;
+
+    float lr           = dyn.lr;
+    float inv_c1       = dyn.inv_correction1;
+    float inv_sqrt_c2  = dyn.inv_sqrt_correction2;
+    float inv_scale    = dyn.inv_scale;
+    float one_minus_b1 = 1.0 - pc.beta1;
+    float one_minus_b2 = 1.0 - pc.beta2;
+    bool  saw_overflow = false;
+
+    if (slot == 0u) {
+        RUN_ADAM_SLOT(0, pc.n0);
+    } else if (slot == 1u) {
+        RUN_ADAM_SLOT(1, pc.n1);
+    } else if (slot == 2u) {
+        RUN_ADAM_SLOT(2, pc.n2);
+    } else {
+        RUN_ADAM_SLOT(3, pc.n3);
+    }
+
+    if (saw_overflow) {
+        atomicOr(dyn.overflow_detected, 1u);
+    }
+}

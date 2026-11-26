@@ -1,6 +1,8 @@
 #include "engine/gpu_vector.h"
 
+#include <algorithm>
 #include <cstring>
+#include <exception>
 #include <format>
 #include <stdexcept>
 
@@ -44,7 +46,9 @@ namespace gpu
         {
             vkDestroyBuffer(device, buffer, nullptr);
             buffer = VK_NULL_HANDLE;
-            context.deferDestruction(used_frame_index, VK_NULL_HANDLE, allocation);
+            const uint32_t mask = (used_frame_mask != 0) ? used_frame_mask : (1u << (used_frame_index % MAX_FRAMES_IN_FLIGHT));
+            context.deferDestructionMask(mask, VK_NULL_HANDLE, allocation);
+            allocation = Memory_Allocation{};
             Logger::logMessage("gpu::vector::createBuffer: Failed to bind buffer memory",
                                Log_Level::LOG_ERROR,
                                true,
@@ -53,8 +57,10 @@ namespace gpu
             throw std::runtime_error("Failed to bind buffer memory");
         }
 
+        global_buffer_mutation_epoch.fetch_add(1, std::memory_order_release);
+
         Logger::logMessage(Input_Format{"gpu::vector::createBuffer: ID: {}, Buffer: {:p}, Chunk: {}, Offset: {}, Size: {} bytes, Frame: {}",
-                                       vector_id, static_cast<void *>(buffer), allocation.chunk_index, allocation.offset, buffer_size_in_bytes, used_frame_index},
+                                       vector_id, static_cast<void *>(buffer), allocation.chunk_index, allocation.offset, static_cast<size_t>(size), used_frame_index},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
@@ -68,20 +74,29 @@ namespace gpu
 
     vector::vector(const Vulkan_Context &_context)
         : context(_context), buffer_size_in_bytes(0), element_count(0), data_type(Data_Type::FLOAT32),
-          used_frame_index(_context.getCurrentFrame()), vector_id(++global_vector_counter)
+          used_frame_index(_context.getCurrentFrame() % MAX_FRAMES_IN_FLIGHT),
+          used_frame_mask(1u << (_context.getCurrentFrame() % MAX_FRAMES_IN_FLIGHT)),
+          vector_id(++global_vector_counter),
+          fp16_shadow_cache(std::make_shared<Fp16_Shadow_Cache>())
     {
     }
 
     vector::vector(const Vulkan_Context &_context, size_t _element_count, Data_Type _type)
         : context(_context), buffer_size_in_bytes(0), element_count(0), data_type(_type),
-          used_frame_index(_context.getCurrentFrame()), vector_id(++global_vector_counter)
+          used_frame_index(_context.getCurrentFrame() % MAX_FRAMES_IN_FLIGHT),
+          used_frame_mask(1u << (_context.getCurrentFrame() % MAX_FRAMES_IN_FLIGHT)),
+          vector_id(++global_vector_counter),
+          fp16_shadow_cache(std::make_shared<Fp16_Shadow_Cache>())
     {
         allocateMemory(_element_count, _type);
     }
 
     vector::vector(const Vulkan_Context &_context, const std::vector<float> &_host_data)
         : context(_context), buffer_size_in_bytes(0), element_count(0), data_type(Data_Type::FLOAT32),
-          used_frame_index(_context.getCurrentFrame()), vector_id(++global_vector_counter)
+          used_frame_index(_context.getCurrentFrame() % MAX_FRAMES_IN_FLIGHT),
+          used_frame_mask(1u << (_context.getCurrentFrame() % MAX_FRAMES_IN_FLIGHT)),
+          vector_id(++global_vector_counter),
+          fp16_shadow_cache(std::make_shared<Fp16_Shadow_Cache>())
     {
         if (_host_data.empty())
         {
@@ -98,7 +113,10 @@ namespace gpu
 
     vector::vector(const Vulkan_Context &_context, const std::vector<float16_t> &_host_data)
         : context(_context), buffer_size_in_bytes(0), element_count(0), data_type(Data_Type::FLOAT16),
-          used_frame_index(_context.getCurrentFrame()), vector_id(++global_vector_counter)
+          used_frame_index(_context.getCurrentFrame() % MAX_FRAMES_IN_FLIGHT),
+          used_frame_mask(1u << (_context.getCurrentFrame() % MAX_FRAMES_IN_FLIGHT)),
+          vector_id(++global_vector_counter),
+          fp16_shadow_cache(std::make_shared<Fp16_Shadow_Cache>())
     {
         if (_host_data.empty())
         {
@@ -121,8 +139,9 @@ namespace gpu
     vector::vector(vector &&other) noexcept
         : context(other.context), buffer(other.buffer), allocation(other.allocation),
           buffer_size_in_bytes(other.buffer_size_in_bytes), element_count(other.element_count),
-          data_type(other.data_type), used_frame_index(other.used_frame_index), vector_id(other.vector_id),
-          host_mapped_pointer(other.host_mapped_pointer), is_host_mapped(other.is_host_mapped)
+          data_type(other.data_type), used_frame_index(other.used_frame_index), used_frame_mask(other.used_frame_mask),
+          vector_id(other.vector_id), host_mapped_pointer(other.host_mapped_pointer), is_host_mapped(other.is_host_mapped),
+          fp16_shadow_cache(std::move(other.fp16_shadow_cache))
     {
         other.buffer = VK_NULL_HANDLE;
         other.allocation = Memory_Allocation{};
@@ -130,15 +149,30 @@ namespace gpu
         other.element_count = 0;
         other.data_type = Data_Type::FLOAT32;
         other.used_frame_index = 0;
+        other.used_frame_mask = 0;
         other.vector_id = 0;
         other.host_mapped_pointer = nullptr;
         other.is_host_mapped = false;
+        if (buffer != VK_NULL_HANDLE)
+        {
+            global_buffer_mutation_epoch.fetch_add(1, std::memory_order_release);
+        }
     }
 
     vector &vector::operator=(vector &&other) noexcept
     {
         if (this != &other)
         {
+            if (&context != &other.context)
+            {
+                Logger::logMessage("gpu::vector::operator=(vector&&): Cannot move-assign across distinct Vulkan_Context instances",
+                                   Log_Level::LOG_ERROR,
+                                   true,
+                                   0,
+                                   Log_Feature::MEMORY_ALLOCATION);
+                std::terminate();
+            }
+
             freeMemory();
 
             buffer = other.buffer;
@@ -147,9 +181,11 @@ namespace gpu
             element_count = other.element_count;
             data_type = other.data_type;
             used_frame_index = other.used_frame_index;
+            used_frame_mask = other.used_frame_mask;
             vector_id = other.vector_id;
             host_mapped_pointer = other.host_mapped_pointer;
             is_host_mapped = other.is_host_mapped;
+            fp16_shadow_cache = std::move(other.fp16_shadow_cache);
 
             other.buffer = VK_NULL_HANDLE;
             other.allocation = Memory_Allocation{};
@@ -157,22 +193,28 @@ namespace gpu
             other.element_count = 0;
             other.data_type = Data_Type::FLOAT32;
             other.used_frame_index = 0;
+            other.used_frame_mask = 0;
             other.vector_id = 0;
             other.host_mapped_pointer = nullptr;
             other.is_host_mapped = false;
+            if (buffer != VK_NULL_HANDLE)
+            {
+                global_buffer_mutation_epoch.fetch_add(1, std::memory_order_release);
+            }
         }
         return *this;
     }
 
     void vector::allocateMemory(size_t _element_count, Data_Type _type)
     {
-        data_type = _type;
-        element_count = _element_count;
+        invalidateFp16ShadowCache();
         VkDeviceSize required_byte_size = (_type == Data_Type::TERNARY_INT2)
                                               ? static_cast<VkDeviceSize>(((_element_count + 15) / 16) * sizeof(uint32_t))
-                                              : static_cast<VkDeviceSize>(_element_count * getDataTypeSize(_type));
-        if (required_byte_size == buffer_size_in_bytes && buffer != VK_NULL_HANDLE)
+                                              : static_cast<VkDeviceSize>(_element_count * getDataTypeStorageWordBytes(_type));
+        if (!is_host_mapped && required_byte_size == buffer_size_in_bytes && buffer != VK_NULL_HANDLE)
         {
+            data_type = _type;
+            element_count = _element_count;
             Logger::logMessage(Input_Format{"gpu::vector::allocateMemory: Requested size matches current buffer size (ID: {}), skipping", vector_id},
                                Log_Level::LOG_DEBUG,
                                true,
@@ -182,9 +224,11 @@ namespace gpu
         }
 
         freeMemory();
+        data_type = _type;
 
         if (_element_count == 0)
         {
+            element_count = 0;
             Logger::logMessage("gpu::vector::allocateMemory: Requested allocation size is 0",
                                Log_Level::LOG_WARNING,
                                false,
@@ -193,32 +237,45 @@ namespace gpu
             return;
         }
 
-        if (vector_id == 0)
-        {
-            vector_id = ++global_vector_counter;
-        }
-
-        buffer_size_in_bytes = required_byte_size;
-        used_frame_index = context.getCurrentFrame();
+        const uint64_t next_id = ++global_vector_counter;
+        const uint32_t frame_idx = context.getCurrentFrame() % MAX_FRAMES_IN_FLIGHT;
+        vector_id = next_id;
+        used_frame_index = frame_idx;
+        used_frame_mask = (1u << frame_idx);
 
         Logger::logMessage(Input_Format{"gpu::vector::allocateMemory: Allocating {} elements ({} bytes) for ID: {}",
-                                       _element_count, buffer_size_in_bytes, vector_id},
+                                       _element_count, static_cast<size_t>(required_byte_size), vector_id},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
                            Log_Feature::MEMORY_ALLOCATION);
 
-        createBuffer(buffer_size_in_bytes,
+        createBuffer(required_byte_size,
                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+        buffer_size_in_bytes = static_cast<size_t>(required_byte_size);
+        element_count = _element_count;
+    }
+
+    void vector::allocateMemory(const Shape &_shape, Data_Type _type)
+    {
+        allocateMemoryByBytes(getTensorStorageBytes(_type, _shape), _type, _shape.getTotalElements());
     }
 
     void vector::allocateMemoryByBytes(size_t _byte_size, Data_Type _type, size_t _logical_elements)
     {
-        data_type = _type;
-        element_count = (_logical_elements > 0) ? _logical_elements : (_byte_size / getDataTypeSize(_type));
-        if (_byte_size == buffer_size_in_bytes && buffer != VK_NULL_HANDLE)
+        invalidateFp16ShadowCache();
+        if (_type == Data_Type::TERNARY_INT2 && _byte_size > 0 && _logical_elements == 0)
         {
+            throw std::invalid_argument("gpu::vector::allocateMemoryByBytes: TERNARY_INT2 non-empty allocation requires explicit _logical_elements > 0");
+        }
+        const size_t target_elements = (_logical_elements > 0) ? _logical_elements : getElementCountFromStorageBytes(_type, _byte_size);
+
+        if (!is_host_mapped && _byte_size == buffer_size_in_bytes && buffer != VK_NULL_HANDLE)
+        {
+            data_type = _type;
+            element_count = target_elements;
             Logger::logMessage(Input_Format{"gpu::vector::allocateMemoryByBytes: Requested size matches current buffer size (ID: {}), skipping", vector_id},
                                Log_Level::LOG_DEBUG,
                                true,
@@ -228,34 +285,38 @@ namespace gpu
         }
 
         freeMemory();
+        data_type = _type;
 
         if (_byte_size == 0)
         {
+            element_count = 0;
             return;
         }
 
-        if (vector_id == 0)
-        {
-            vector_id = ++global_vector_counter;
-        }
-
-        buffer_size_in_bytes = _byte_size;
-        used_frame_index = context.getCurrentFrame();
+        const uint64_t next_id = ++global_vector_counter;
+        const uint32_t frame_idx = context.getCurrentFrame() % MAX_FRAMES_IN_FLIGHT;
+        vector_id = next_id;
+        used_frame_index = frame_idx;
+        used_frame_mask = (1u << frame_idx);
 
         Logger::logMessage(Input_Format{"gpu::vector::allocateMemoryByBytes: Allocating {} bytes (logical {} elements) for ID: {}",
-                                       buffer_size_in_bytes, element_count, vector_id},
+                                       _byte_size, target_elements, vector_id},
                            Log_Level::LOG_DEBUG,
                            true,
                            0,
                            Log_Feature::MEMORY_ALLOCATION);
 
-        createBuffer(buffer_size_in_bytes,
+        createBuffer(_byte_size,
                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+        buffer_size_in_bytes = _byte_size;
+        element_count = target_elements;
     }
 
     void vector::freeMemory()
     {
+        invalidateFp16ShadowCache();
         if (buffer != VK_NULL_HANDLE || allocation.memory != VK_NULL_HANDLE)
         {
             Logger::logMessage(Input_Format{ "gpu::vector::freeMemory: ID: {}, Buffer: {:p}, Chunk: {}, Offset: {}, Size: {} bytes, Frame: {}",
@@ -265,64 +326,87 @@ namespace gpu
                 0,
                 Log_Feature::MEMORY_ALLOCATION);
 
-            if (buffer != VK_NULL_HANDLE)
-            {
-                context.removeTransferTasksForBuffer(buffer);
-            }
-
             host_mapped_pointer = nullptr;
             is_host_mapped = false;
 
-            context.deferDestruction(used_frame_index, buffer, allocation);
+            const uint32_t mask = (used_frame_mask != 0) ? used_frame_mask : (1u << (used_frame_index % MAX_FRAMES_IN_FLIGHT));
+            context.deferDestructionMask(mask, buffer, allocation);
 
             buffer = VK_NULL_HANDLE;
             allocation = Memory_Allocation{};
             buffer_size_in_bytes = 0;
+            element_count = 0;
+            used_frame_mask = 0;
+            global_buffer_mutation_epoch.fetch_add(1, std::memory_order_release);
         }
     }
 
-    void vector::allocateHostVisible(size_t _byte_size)
+    void vector::allocateHostVisible(size_t _byte_size, Data_Type _type)
     {
         freeMemory();
+        data_type = _type;
         if (_byte_size == 0)
         {
             return;
         }
 
-        if (vector_id == 0)
-        {
-            vector_id = ++global_vector_counter;
-        }
+        vector_id = ++global_vector_counter;
+        const uint32_t frame_idx = context.getCurrentFrame() % MAX_FRAMES_IN_FLIGHT;
+        used_frame_index = frame_idx;
+        used_frame_mask = (1u << frame_idx);
 
-        buffer_size_in_bytes = _byte_size;
-        element_count = _byte_size / sizeof(float);
-        data_type = Data_Type::FLOAT32;
-        used_frame_index = context.getCurrentFrame();
-
-        createBuffer(buffer_size_in_bytes,
+        createBuffer(_byte_size,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
-        host_mapped_pointer = allocation.mapped_pointer;
-        if (host_mapped_pointer == nullptr)
+        if (allocation.mapped_pointer == nullptr)
         {
+            buffer_size_in_bytes = _byte_size;
+            freeMemory();
             Logger::logMessage("gpu::vector::allocateHostVisible: Failed to obtain mapped host memory pointer",
                 Log_Level::LOG_ERROR, true, 0, Log_Feature::MEMORY_ALLOCATION);
             throw std::runtime_error("Failed to map host visible memory");
         }
+
+        host_mapped_pointer = allocation.mapped_pointer;
+        buffer_size_in_bytes = _byte_size;
+        element_count = getElementCountFromStorageBytes(_type, _byte_size);
+        data_type = _type;
         is_host_mapped = true;
     }
 
     void vector::writeHostDirect(const void *_source_pointer, size_t _size_in_bytes)
     {
-        if (host_mapped_pointer && _source_pointer && _size_in_bytes <= buffer_size_in_bytes)
+        if (_size_in_bytes == 0)
         {
-            std::memcpy(host_mapped_pointer, _source_pointer, _size_in_bytes);
+            return;
         }
+        if (!_source_pointer)
+        {
+            Logger::logMessage("gpu::vector::writeHostDirect: Null source pointer",
+                               Log_Level::LOG_ERROR, true, 0, Log_Feature::MEMORY_TRANSFER);
+            throw std::invalid_argument("gpu::vector::writeHostDirect: Null source pointer");
+        }
+        if (!is_host_mapped || !host_mapped_pointer)
+        {
+            Logger::logMessage("gpu::vector::writeHostDirect: Buffer is not host-mapped",
+                               Log_Level::LOG_ERROR, true, 0, Log_Feature::MEMORY_TRANSFER);
+            throw std::runtime_error("gpu::vector::writeHostDirect: Buffer is not host-mapped");
+        }
+        if (_size_in_bytes > buffer_size_in_bytes)
+        {
+            Logger::logMessage(Input_Format{"gpu::vector::writeHostDirect: Write size ({}) exceeds buffer size ({})",
+                                            _size_in_bytes, buffer_size_in_bytes},
+                               Log_Level::LOG_ERROR, true, 0, Log_Feature::MEMORY_TRANSFER);
+            throw std::out_of_range("gpu::vector::writeHostDirect: Write size exceeds buffer capacity");
+        }
+        std::memcpy(host_mapped_pointer, _source_pointer, _size_in_bytes);
+        invalidateFp16ShadowCache();
     }
 
     void vector::uploadRawData(const void *source_pointer, size_t size_in_bytes)
     {
+        invalidateFp16ShadowCache();
         if (!source_pointer || size_in_bytes == 0 || buffer_size_in_bytes == 0)
         {
             Logger::logMessage("gpu::vector::uploadRawData: Empty host data or zero GPU buffer size",
@@ -344,27 +428,16 @@ namespace gpu
         }
 
         uint32_t frame_index = context.getCurrentFrame();
-
-        VkBuffer staging_buffer = VK_NULL_HANDLE;
-        VkDeviceSize staging_offset = 0;
-        void *mapped_pointer = context.allocateStagingSpace(frame_index, buffer_size_in_bytes, staging_buffer, staging_offset);
-
-        std::memcpy(mapped_pointer, source_pointer, buffer_size_in_bytes);
-
-        Buffer_Transfer_Task transfer_task{
-            .source_buffer = staging_buffer,
-            .source_offset = staging_offset,
-            .destination_buffer = buffer,
-            .destination_offset = 0,
-            .size = buffer_size_in_bytes};
-
-        context.addTransferTask(transfer_task);
-
+        context.uploadToDevice(frame_index, source_pointer, buffer_size_in_bytes, buffer, 0);
         markAsUsedInFrame(frame_index);
     }
 
     void vector::uploadData(const std::vector<float> &host_data)
     {
+        if (data_type == Data_Type::TERNARY_INT2)
+        {
+            throw std::invalid_argument("gpu::vector::uploadData: Use uploadData(const std::vector<uint32_t>&) for packed TERNARY_INT2 buffers");
+        }
         if (data_type == Data_Type::FLOAT16)
         {
             std::vector<float16_t> fp16_data(host_data.size());
@@ -379,6 +452,10 @@ namespace gpu
 
     void vector::uploadData(const std::vector<float16_t> &host_data)
     {
+        if (data_type == Data_Type::TERNARY_INT2)
+        {
+            throw std::invalid_argument("gpu::vector::uploadData: Use uploadData(const std::vector<uint32_t>&) for packed TERNARY_INT2 buffers");
+        }
         if (data_type == Data_Type::FLOAT32)
         {
             std::vector<float> fp32_data(host_data.size());
@@ -408,20 +485,17 @@ namespace gpu
             return;
         }
 
-        context.flush();
-
-        VkBuffer staging_buffer = VK_NULL_HANDLE;
-        void *mapped_pointer = context.ensureReadbackStagingBuffer(buffer_size_in_bytes, staging_buffer);
-
-        copyBuffer(buffer, staging_buffer, buffer_size_in_bytes);
-
         size_t copy_bytes = std::min(size_in_bytes, buffer_size_in_bytes);
-        std::memcpy(destination_pointer, mapped_pointer, copy_bytes);
+        context.downloadFromDevice(buffer, destination_pointer, copy_bytes, buffer_size_in_bytes);
     }
 
     void vector::downloadData(std::vector<float> &host_data) const
     {
-        size_t count = getElementCount();
+        if (data_type == Data_Type::TERNARY_INT2)
+        {
+            throw std::invalid_argument("gpu::vector::downloadData: Use downloadData(std::vector<uint32_t>&) for packed TERNARY_INT2 buffers");
+        }
+        size_t count = getSize();
         if (host_data.size() != count)
         {
             host_data.resize(count);
@@ -435,13 +509,17 @@ namespace gpu
         }
         else
         {
-            downloadRawData(host_data.data(), buffer_size_in_bytes);
+            downloadRawData(host_data.data(), std::min(buffer_size_in_bytes, host_data.size() * sizeof(float)));
         }
     }
 
     void vector::downloadData(std::vector<float16_t> &host_data) const
     {
-        size_t count = getElementCount();
+        if (data_type == Data_Type::TERNARY_INT2)
+        {
+            throw std::invalid_argument("gpu::vector::downloadData: Use downloadData(std::vector<uint32_t>&) for packed TERNARY_INT2 buffers");
+        }
+        size_t count = getSize();
         if (host_data.size() != count)
         {
             host_data.resize(count);
@@ -455,7 +533,7 @@ namespace gpu
         }
         else
         {
-            downloadRawData(host_data.data(), buffer_size_in_bytes);
+            downloadRawData(host_data.data(), std::min(buffer_size_in_bytes, host_data.size() * sizeof(float16_t)));
         }
     }
 
@@ -466,11 +544,43 @@ namespace gpu
         {
             host_data.resize(count);
         }
-        downloadRawData(host_data.data(), buffer_size_in_bytes);
+        downloadRawData(host_data.data(), std::min(buffer_size_in_bytes, host_data.size() * sizeof(uint32_t)));
     }
 
     VkDevice vector::getDevice() const noexcept
     {
         return context.getDevice();
+    }
+
+    void vector::setDataType(Data_Type _type) noexcept
+    {
+        if (data_type != _type)
+        {
+            invalidateFp16ShadowCache();
+        }
+        if (buffer != VK_NULL_HANDLE && data_type != _type)
+        {
+            Logger::logMessage(Input_Format{"gpu::vector::setDataType: Mutating data_type of live buffer (ID: {}) without reallocation",
+                                            vector_id},
+                               Log_Level::LOG_WARNING,
+                               true,
+                               0,
+                               Log_Feature::MEMORY_ALLOCATION);
+        }
+        data_type = _type;
+    }
+
+    void vector::markAsUsedInFrame(uint32_t frame_index) noexcept
+    {
+        const uint32_t safe_frame = frame_index % MAX_FRAMES_IN_FLIGHT;
+        used_frame_index = safe_frame;
+        used_frame_mask |= (1u << safe_frame);
+    }
+
+    void vector::setUsedFrameIndex(uint32_t _frame_index) noexcept
+    {
+        const uint32_t safe_frame = _frame_index % MAX_FRAMES_IN_FLIGHT;
+        used_frame_index = safe_frame;
+        used_frame_mask |= (1u << safe_frame);
     }
 }

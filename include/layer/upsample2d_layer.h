@@ -12,7 +12,7 @@
 
 #include "helper/logger.h"
 #include "helper/magic_enum.hpp"
-#include "ilayer.h"
+#include "layer/ilayer.h"
 #include "math/tensor.h"
 
 class Up_Sample_2d_Layer : public ILayer
@@ -31,6 +31,9 @@ private:
 
     bool is_forward_completed = false;
     Execution_Target execution_target = Execution_Target::CPU;
+
+    static std::pair<uint32_t, uint32_t> validateAndComputeOutput(
+        uint32_t _height, uint32_t _width, uint32_t _channels, uint32_t _scale_factor);
 
 public:
     using ILayer::forward;
@@ -55,14 +58,7 @@ public:
     void saveCheckpoint(std::ofstream &_output_file_stream) const override;
     void loadCheckpoint(std::ifstream &_input_file_stream) override;
 
-    std::function<float(std::mt19937&)> getPopulationParameterInitializer(size_t) const override 
-    { 
-        return [](std::mt19937&) { return 0.0f; }; 
-    }
-
-    std::vector<std::pair<Tensor *, Tensor *>> getParametersAndGradients() override { return {}; }
-    std::vector<float> getPopulationParameter(size_t) const override { return {}; }
-    void setPopulationParameter(size_t, std::vector<float>) override {}
+    void setPopulationParameter(size_t param_index, std::vector<float> flat_data) override;
 
     uint32_t getInputHeight() const noexcept { return input_height; }
     uint32_t getInputWidth() const noexcept { return input_width; }

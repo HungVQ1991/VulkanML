@@ -1,20 +1,36 @@
 #version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#endif
 
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
 layout(std430, binding = 0) readonly buffer Buffer_A
 {
+#ifdef USE_FP16
+    float16_t data_a[];
+#else
     float data_a[];
+#endif
 };
 
 layout(std430, binding = 1) readonly buffer Buffer_B
 {
+#ifdef USE_FP16
+    float16_t data_b[];
+#else
     float data_b[];
+#endif
 };
 
 layout(std430, binding = 2) writeonly buffer Buffer_C
 {
+#ifdef USE_FP16
+    float16_t data_c[];
+#else
     float data_c[];
+#endif
 };
 
 layout(push_constant) uniform Elementwise_Dimensions
@@ -37,5 +53,15 @@ void main()
     {
         rhs_idx = idx % dims.cols;
     }
+#ifdef USE_FP16
+    float a = float(data_a[idx]);
+    float b = float(data_b[rhs_idx]);
+    if (isnan(a) || isinf(a)) a = 0.0;
+    if (isnan(b) || isinf(b)) b = 0.0;
+    float sum = a + b;
+    if (isnan(sum) || isinf(sum)) sum = 0.0;
+    data_c[idx] = float16_t(clamp(sum, -65504.0, 65504.0));
+#else
     data_c[idx] = data_a[idx] + data_b[rhs_idx];
+#endif
 }

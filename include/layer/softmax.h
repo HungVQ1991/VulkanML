@@ -19,15 +19,18 @@ private:
     Tensor output_tensor;
     Tensor input_gradient_tensor;
     Tensor input_fp32;
+    Tensor grad_fp32;
+    Tensor input_grad_fp32;
     bool is_fused_with_loss = false;
     bool is_forward_completed = false;
     Execution_Target execution_target = Execution_Target::CPU;
 
 public:
-    using ILayer::forward;    explicit Softmax_Layer(bool _is_fused_with_loss = false, Execution_Target _execution_target = Execution_Target::CPU);
+    using ILayer::forward;
+    explicit Softmax_Layer(bool _is_fused_with_loss = false, Execution_Target _execution_target = Execution_Target::CPU);
 
-
-    ~Softmax_Layer() noexcept override = default;    Tensor forward(const Tensor &_input_tensor) override;
+    ~Softmax_Layer() noexcept override = default;
+    Tensor forward(const Tensor &_input_tensor) override;
     Tensor forward(const Tensor& _batched_input, const std::vector<Tensor>& _batched_params) const override;
     std::unique_ptr<ILayer> clone() const override;
     Tensor backward(const Tensor& _output_gradient) override;
@@ -38,8 +41,7 @@ public:
     void saveCheckpoint(std::ofstream &_output_file_stream) const override;
     void loadCheckpoint(std::ifstream &_input_file_stream) override;
 
-
-    std::function<float(std::mt19937&)> getPopulationParameterInitializer(size_t param_index) const override { return [](std::mt19937&) { return 0.0f; }; }
+    std::function<float(std::mt19937&)> getPopulationParameterInitializer(size_t) const override { return [](std::mt19937&) { return 0.0f; }; }
     std::vector<Shape> getPopulationParameterDims() const override { return {}; }
     std::vector<bool> getPopulationParameterIsEvolvable() const override { return {}; }
     const Tensor &getInputGradient() const noexcept { return input_gradient_tensor; }
@@ -48,13 +50,16 @@ public:
     Execution_Target getExecutionTarget() const override { return execution_target; }
     Layer_Type getLayerType() const noexcept override { return Layer_Type::SOFTMAX; }
     bool supportsPopulationBatch() const override { return true; }
-    bool isForwardCompleted() const noexcept { return is_forward_completed; }    bool isFusedWithLoss() const noexcept;
+    bool isForwardCompleted() const noexcept { return is_forward_completed; }
+    bool isFusedWithLoss() const noexcept;
 
-    bool hasParameters() const noexcept override { return false; }    void setPopulationParameter(size_t param_index, std::vector<float> flat_data) override;
+    bool hasParameters() const noexcept override { return false; }
+    void setPopulationParameter(size_t param_index, std::vector<float> flat_data) override;
 
     void setInputGradient(const Tensor &_tensor) { input_gradient_tensor = _tensor; }
     void setInput(const Tensor &_tensor) { input_tensor = _tensor; }
-    void setOutput(const Tensor &_tensor) { output_tensor = _tensor; }    void setExecutionTarget(Execution_Target _new_execution_target) override;
+    void setOutput(const Tensor &_tensor) { output_tensor = _tensor; }
+    void setExecutionTarget(Execution_Target _new_execution_target) override;
     void setIsForwardCompleted(bool _is_completed) noexcept;
 
-};;
+};

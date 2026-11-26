@@ -25,6 +25,8 @@ private:
     Tensor beta;
     Tensor gamma_gradient_tensor;
     Tensor beta_gradient_tensor;
+    Tensor step_gamma_grad_scratch;
+    Tensor step_beta_grad_scratch;
 
     Tensor saved_mean;
     Tensor saved_inv_std;
@@ -33,8 +35,12 @@ private:
     Tensor input_tensor;
     Tensor output_tensor;
     Tensor input_gradient_tensor;
+    Tensor input_tensor_fp16;
+    Tensor output_gradient_fp16;
+    Tensor input_gradient_tensor_fp16;
 
     bool is_forward_completed = false;
+    void validateChannelTensor(const Tensor &_tensor, const char *_setter_name) const;
 
 public:
     using ILayer::forward;
@@ -65,6 +71,7 @@ public:
     std::vector<Shape> getPopulationParameterDims() const noexcept override { return { Shape{1, channels}, Shape{1, channels} }; }
     std::vector<bool> getPopulationParameterIsEvolvable() const override { return { true, true }; }
     std::vector<std::pair<Tensor *, Tensor *>> getParametersAndGradients() override;
+    std::vector<const Tensor *> getNoDecayParameters() const override { return { &gamma, &beta }; }
 
     const Tensor &getWeightsGradient() const override { return gamma_gradient_tensor; }
     const Tensor &getGammaGradient() const noexcept { return gamma_gradient_tensor; }
@@ -87,26 +94,27 @@ public:
     uint32_t getChannels() const noexcept { return channels; }
 
     float getEpsilon() const noexcept { return epsilon; }
-    bool supportsPopulationBatch() const override { return true; }
+    bool supportsPopulationBatch() const override { return false; }
     bool isForwardCompleted() const noexcept { return is_forward_completed; }
     bool hasParameters() const noexcept override { return true; }
 
     void setPopulationParameter(size_t param_index, std::vector<float> flat_data) override;
-    void setGammaGradient(const Tensor &_tensor) { gamma_gradient_tensor = _tensor; }
-    void setBetaGradient(const Tensor &_tensor) { beta_gradient_tensor = _tensor; }
+    void setGammaGradient(const Tensor &_tensor);
+    void setBetaGradient(const Tensor &_tensor);
     void setSavedMean(const Tensor &_tensor) { saved_mean = _tensor; }
     void setSavedInvStd(const Tensor &_tensor) { saved_inv_std = _tensor; }
     void setInputGradient(const Tensor &_tensor) { input_gradient_tensor = _tensor; }
     void setNormalizedInput(const Tensor &_tensor) { normalized_input = _tensor; }
     void setOutput(const Tensor &_tensor) { output_tensor = _tensor; }
-    void setGamma(const Tensor &_tensor) { gamma = _tensor; }
+    void setGamma(const Tensor &_tensor);
     void setInput(const Tensor &_tensor) { input_tensor = _tensor; }
-    void setBeta(const Tensor &_tensor) { beta = _tensor; }
+    void setBeta(const Tensor &_tensor);
     void setExecutionTarget(Execution_Target _new_execution_target) override;
-    void setInputHeight(uint32_t _height) noexcept { input_height = _height; }
-    void setInputWidth(uint32_t _width) noexcept { input_width = _width; }
-    void setChannels(uint32_t _channels) noexcept { channels = _channels; }
-    void setEpsilon(float _epsilon) noexcept { epsilon = _epsilon; }
+    void setMixedPrecision(bool _enable) noexcept override;
+    void invalidateWeightCache() noexcept override;
+    void setInputHeight(uint32_t _height);
+    void setInputWidth(uint32_t _width);
+    void setEpsilon(float _epsilon);
     void setIsForwardCompleted(bool _is_completed) noexcept { is_forward_completed = _is_completed; }
-    void setTrainingMode(bool /*_is_training*/) override {}
+    void setTrainingMode(bool ) override {}
 };

@@ -1,43 +1,184 @@
 #version 450
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
 #extension GL_EXT_shader_16bit_storage : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
 
-layout(local_size_x = 256) in;
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-layout(std430, binding = 0) readonly buffer GradOutBuffer { float16_t grad_out[]; };
-layout(std430, binding = 1) readonly buffer InBuffer { float16_t in_data[]; };
-layout(std430, binding = 2) readonly buffer InvRmsBuffer { float inv_rms_data[]; };
-layout(std430, binding = 3) buffer GradGammaBuffer { float grad_gamma[]; };
+layout(std430, binding = 0) readonly buffer GradOutBuffer   { float16_t grad_out[]; };
+layout(std430, binding = 0) readonly buffer GradOutBufferU  { uint      grad_out_u[]; };
+layout(std430, binding = 0) readonly buffer GradOutBufferU4 { uvec4     grad_out_u4[]; };
+layout(std430, binding = 1) readonly buffer InBuffer        { float16_t in_data[]; };
+layout(std430, binding = 1) readonly buffer InBufferU       { uint      in_data_u[]; };
+layout(std430, binding = 1) readonly buffer InBufferU4      { uvec4     in_data_u4[]; };
+layout(std430, binding = 2) readonly buffer InvRmsBuffer    { float     inv_rms_data[]; };
+layout(std430, binding = 3) buffer GradGammaBuffer          { float     grad_gamma[]; };
+layout(std430, binding = 3) buffer GradGammaBuffer4         { vec4      grad_gamma4[]; };
 
 layout(push_constant) uniform Constants {
     uint batch_size;
     uint dim;
     uint accumulate;
+    uint split_count;
+    uint pass_mode;
 } pcs;
 
-void main() {
-    uint c = gl_GlobalInvocationID.x;
-    if (c >= pcs.dim) return;
+shared vec4 s_red_lo[16][17];
+shared vec4 s_red_hi[16][17];
 
-    float sum = 0.0;
-    for (uint r = 0; r < pcs.batch_size; ++r) {
-        float dy = float(grad_out[r * pcs.dim + c]);
-        float x = float(in_data[r * pcs.dim + c]);
-        float inv_rms = inv_rms_data[r];
-        if (isnan(dy) || isinf(dy)) dy = 0.0;
-        if (isnan(x) || isinf(x)) x = 0.0;
-        if (isnan(inv_rms) || isinf(inv_rms)) inv_rms = 0.0;
-        float term = dy * (x * inv_rms);
-        if (!isnan(term) && !isinf(term)) {
-            sum += term;
+void main() {
+    uint batch_size = pcs.batch_size;
+    uint dim        = pcs.dim;
+    if (dim == 0u) return;
+
+    uint lx = gl_LocalInvocationID.x;
+    uint ly = gl_LocalInvocationID.y;
+
+    if (pcs.pass_mode == 1u) {
+        uint split_count = max(pcs.split_count, 1u);
+        uint split_idx   = gl_WorkGroupID.y;
+        uint col_v4      = gl_WorkGroupID.x * 16u + lx;
+        uint dim_v4      = dim >> 3u;
+
+        vec4 acc_lo = vec4(0.0);
+        vec4 acc_hi = vec4(0.0);
+
+        if (split_idx < split_count && col_v4 < dim_v4 && batch_size > 0u) {
+            uint row_start = (split_idx * batch_size) / split_count;
+            uint row_end   = ((split_idx + 1u) * batch_size) / split_count;
+            for (uint r = row_start + ly; r < row_end; r += 16u) {
+                float inv_r = inv_rms_data[r];
+                uint idx4   = r * dim_v4 + col_v4;
+                uvec4 ug    = grad_out_u4[idx4];
+                uvec4 ux    = in_data_u4[idx4];
+
+                vec4 g0 = vec4(unpackHalf2x16(ug.x), unpackHalf2x16(ug.y));
+                vec4 x0 = vec4(unpackHalf2x16(ux.x), unpackHalf2x16(ux.y));
+                acc_lo  = fma(g0, x0 * inv_r, acc_lo);
+
+                vec4 g1 = vec4(unpackHalf2x16(ug.z), unpackHalf2x16(ug.w));
+                vec4 x1 = vec4(unpackHalf2x16(ux.z), unpackHalf2x16(ux.w));
+                acc_hi  = fma(g1, x1 * inv_r, acc_hi);
+            }
         }
+
+        s_red_lo[ly][lx] = acc_lo;
+        s_red_hi[ly][lx] = acc_hi;
+        barrier();
+
+        for (uint stride = 8u; stride > 0u; stride >>= 1u) {
+            if (ly < stride) {
+                s_red_lo[ly][lx] += s_red_lo[ly + stride][lx];
+                s_red_hi[ly][lx] += s_red_hi[ly + stride][lx];
+            }
+            barrier();
+        }
+
+        if (ly == 0u && split_idx < split_count && col_v4 < dim_v4) {
+            uint out_v4 = split_idx * (dim >> 2u) + (col_v4 << 1u);
+            grad_gamma4[out_v4]      = s_red_lo[0][lx];
+            grad_gamma4[out_v4 + 1u] = s_red_hi[0][lx];
+        }
+        return;
     }
 
-    if (isnan(sum) || isinf(sum)) sum = 0.0;
+    if (pcs.pass_mode == 2u) {
+        uint split_count = max(pcs.split_count, 1u);
+        uint col         = gl_WorkGroupID.x * 16u + lx;
+        float partial    = 0.0;
+        if (col < dim) {
+            for (uint s = ly; s < split_count; s += 16u) {
+                partial += inv_rms_data[s * dim + col];
+            }
+        }
 
-    if (pcs.accumulate != 0) {
-        grad_gamma[c] += sum;
+        s_red_lo[ly][lx].x = partial;
+        barrier();
+
+        for (uint stride = 8u; stride > 0u; stride >>= 1u) {
+            if (ly < stride) {
+                s_red_lo[ly][lx].x += s_red_lo[ly + stride][lx].x;
+            }
+            barrier();
+        }
+
+        if (ly == 0u && col < dim) {
+            float total = s_red_lo[0][lx].x;
+            if (pcs.accumulate != 0u) {
+                grad_gamma[col] += total;
+            } else {
+                grad_gamma[col] = total;
+            }
+        }
+        return;
+    }
+
+    if ((dim & 1u) == 0u) {
+        uint dim2     = dim >> 1u;
+        uint col_pair = gl_WorkGroupID.x * 16u + lx;
+        uint col      = col_pair << 1u;
+
+        vec2 sum2 = vec2(0.0);
+        if (col_pair < dim2) {
+            for (uint r = ly; r < batch_size; r += 16u) {
+                float inv_r = inv_rms_data[r];
+                uint idx    = r * dim2 + col_pair;
+                vec2 dy     = unpackHalf2x16(grad_out_u[idx]);
+                vec2 x      = unpackHalf2x16(in_data_u[idx]);
+                sum2        = fma(dy, x * inv_r, sum2);
+            }
+        }
+
+        s_red_lo[ly][lx].xy = sum2;
+        barrier();
+
+        for (uint stride = 8u; stride > 0u; stride >>= 1u) {
+            if (ly < stride) {
+                s_red_lo[ly][lx].xy += s_red_lo[ly + stride][lx].xy;
+            }
+            barrier();
+        }
+
+        if (ly == 0u && col_pair < dim2) {
+            vec2 total = s_red_lo[0][lx].xy;
+            if (pcs.accumulate != 0u) {
+                grad_gamma[col]      += total.x;
+                grad_gamma[col + 1u] += total.y;
+            } else {
+                grad_gamma[col]      = total.x;
+                grad_gamma[col + 1u] = total.y;
+            }
+        }
     } else {
-        grad_gamma[c] = sum;
+        uint col = gl_WorkGroupID.x * 16u + lx;
+
+        float sum = 0.0;
+        if (col < dim) {
+            for (uint r = ly; r < batch_size; r += 16u) {
+                uint idx = r * dim + col;
+                float dy = float(grad_out[idx]);
+                float x  = float(in_data[idx]);
+                sum      = fma(dy, x * inv_rms_data[r], sum);
+            }
+        }
+
+        s_red_lo[ly][lx].x = sum;
+        barrier();
+
+        for (uint stride = 8u; stride > 0u; stride >>= 1u) {
+            if (ly < stride) {
+                s_red_lo[ly][lx].x += s_red_lo[ly + stride][lx].x;
+            }
+            barrier();
+        }
+
+        if (ly == 0u && col < dim) {
+            float total = s_red_lo[0][lx].x;
+            if (pcs.accumulate != 0u) {
+                grad_gamma[col] += total;
+            } else {
+                grad_gamma[col] = total;
+            }
+        }
     }
 }

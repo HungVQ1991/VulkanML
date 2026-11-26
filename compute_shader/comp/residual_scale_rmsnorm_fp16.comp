@@ -1,0 +1,119 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer ResInBuffer     { float16_t res_in[]; };
+layout(std430, binding = 0) readonly buffer ResInBuffer4    { f16vec4   res_in4[]; };
+layout(std430, binding = 1) readonly buffer BranchBuffer    { float16_t br_in[]; };
+layout(std430, binding = 1) readonly buffer BranchBuffer4   { f16vec4   br_in4[]; };
+layout(std430, binding = 2) readonly buffer GammaBuffer     { float16_t gamma_data[]; };
+layout(std430, binding = 2) readonly buffer GammaBuffer4    { f16vec4   gamma4[]; };
+layout(std430, binding = 3) buffer ResOutBuffer             { float16_t res_out[]; };
+layout(std430, binding = 3) buffer ResOutBuffer4            { f16vec4   res_out4[]; };
+layout(std430, binding = 4) writeonly buffer NormOutBuffer  { float16_t norm_out[]; };
+layout(std430, binding = 4) writeonly buffer NormOutBuffer4 { f16vec4   norm_out4[]; };
+layout(std430, binding = 5) writeonly buffer InvRmsBuffer   { float inv_rms_data[]; };
+
+layout(push_constant) uniform Constants {
+    uint batch_size;
+    uint dim;
+    float scale;
+    float epsilon;
+} pcs;
+
+shared float s_wave_sums[16];
+
+float blockReduceSum(float val) {
+    val = subgroupAdd(val);
+    if (gl_SubgroupInvocationID == 0u) {
+        s_wave_sums[gl_SubgroupID] = val;
+    }
+    barrier();
+    float total = 0.0;
+    for (uint i = 0u; i < gl_NumSubgroups; ++i) {
+        total += s_wave_sums[i];
+    }
+    return total;
+}
+
+void main() {
+    uint dim = pcs.dim;
+    if (dim == 0u || pcs.batch_size == 0u) return;
+    uint row = gl_WorkGroupID.x;
+    if (row >= pcs.batch_size) return;
+
+    uint lid = gl_LocalInvocationID.x;
+
+    if (dim <= 256u && (dim & 3u) == 0u) {
+        uint vec_count = dim >> 2u;
+        uint rbase4 = row * vec_count;
+        vec4 h = vec4(0.0);
+        vec4 g = vec4(0.0);
+        float sum_sq = 0.0;
+
+        if (lid < vec_count) {
+            uint vidx = rbase4 + lid;
+            h = fma(vec4(pcs.scale), vec4(br_in4[vidx]), vec4(res_in4[vidx]));
+            res_out4[vidx] = f16vec4(clamp(h, vec4(-65504.0), vec4(65504.0)));
+            g = vec4(gamma4[lid]);
+            sum_sq = dot(h, h);
+        }
+
+        float mean_sq = blockReduceSum(sum_sq) / float(dim);
+        float inv_rms = inversesqrt(mean_sq + pcs.epsilon);
+        if (lid == 0u) {
+            inv_rms_data[row] = inv_rms;
+        }
+
+        if (lid < vec_count) {
+            uint vidx = rbase4 + lid;
+            norm_out4[vidx] = f16vec4(clamp(h * inv_rms * g, vec4(-65504.0), vec4(65504.0)));
+        }
+    } else if ((dim & 3u) == 0u) {
+        uint vec_count = dim >> 2u;
+        uint rbase4 = row * vec_count;
+        float sum_sq = 0.0;
+
+        for (uint v = lid; v < vec_count; v += 64u) {
+            uint vidx = rbase4 + v;
+            vec4 h = clamp(fma(vec4(pcs.scale), vec4(br_in4[vidx]), vec4(res_in4[vidx])), vec4(-65504.0), vec4(65504.0));
+            res_out4[vidx] = f16vec4(h);
+            sum_sq += dot(h, h);
+        }
+
+        float mean_sq = blockReduceSum(sum_sq) / float(dim);
+        float inv_rms = inversesqrt(mean_sq + pcs.epsilon);
+        if (lid == 0u) {
+            inv_rms_data[row] = inv_rms;
+        }
+
+        for (uint v = lid; v < vec_count; v += 64u) {
+            uint vidx = rbase4 + v;
+            vec4 h = vec4(res_out4[vidx]);
+            vec4 g = vec4(gamma4[v]);
+            norm_out4[vidx] = f16vec4(clamp(h * inv_rms * g, vec4(-65504.0), vec4(65504.0)));
+        }
+    } else {
+        uint row_offset = row * dim;
+        float sum_sq = 0.0;
+        for (uint c = lid; c < dim; c += 64u) {
+            float h = clamp(fma(pcs.scale, float(br_in[row_offset + c]), float(res_in[row_offset + c])), -65504.0, 65504.0);
+            res_out[row_offset + c] = float16_t(h);
+            sum_sq = fma(h, h, sum_sq);
+        }
+
+        float mean_sq = blockReduceSum(sum_sq) / float(dim);
+        float inv_rms = inversesqrt(mean_sq + pcs.epsilon);
+        if (lid == 0u) {
+            inv_rms_data[row] = inv_rms;
+        }
+
+        for (uint c = lid; c < dim; c += 64u) {
+            float h = float(res_out[row_offset + c]);
+            norm_out[row_offset + c] = float16_t(clamp(h * inv_rms * float(gamma_data[c]), -65504.0, 65504.0));
+        }
+    }
+}

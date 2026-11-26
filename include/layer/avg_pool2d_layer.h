@@ -11,7 +11,7 @@
 
 #include "helper/logger.h"
 #include "helper/magic_enum.hpp"
-#include "ilayer.h"
+#include "layer/ilayer.h"
 #include "math/tensor.h"
 
 class Avg_Pool_2d_Layer : public ILayer
@@ -32,6 +32,10 @@ private:
 
     bool is_forward_completed = false;
     Execution_Target execution_target = Execution_Target::CPU;
+
+    static std::pair<uint32_t, uint32_t> validateAndComputeOutput(
+        uint32_t _height, uint32_t _width, uint32_t _channels,
+        uint32_t _kernel_size, uint32_t _stride, uint32_t _padding);
 
 public:
     using ILayer::forward;
@@ -74,21 +78,21 @@ public:
 
     uint32_t getPadding() const noexcept { return padding; }
     uint32_t getStride() const noexcept { return stride; }
-    bool supportsPopulationBatch() const override { return true; }
+    bool supportsPopulationBatch() const override { return false; }
     bool isForwardCompleted() const noexcept { return is_forward_completed; }
     bool hasParameters() const noexcept override { return false; }
-    void setPopulationParameter(size_t, std::vector<float>) override {}
+    void setPopulationParameter(size_t param_index, std::vector<float> flat_data) override;
 
     void setInputGradient(const Tensor &_tensor) { input_gradient_tensor = _tensor; }
     void setInput(const Tensor &_tensor) { input_tensor = _tensor; }
     void setOutput(const Tensor &_tensor) { output_tensor = _tensor; }
     void setExecutionTarget(Execution_Target _new_execution_target) override;
-    void setOutputHeight(uint32_t _height) noexcept { output_height = _height; }
-    void setOutputWidth(uint32_t _width) noexcept { output_width = _width; }
-    void setInputHeight(uint32_t _height) noexcept { input_height = _height; }
-    void setKernelSize(uint32_t _size) noexcept { kernel_size = _size; }
-    void setInputWidth(uint32_t _width) noexcept { input_width = _width; }
-    void setChannels(uint32_t _channels) noexcept { channels = _channels; }
-    void setPadding(uint32_t _padding) noexcept { padding = _padding; }
-    void setStride(uint32_t _stride) noexcept { stride = _stride; }
+    void reconfigure(uint32_t _height, uint32_t _width, uint32_t _channels,
+                     uint32_t _kernel_size, uint32_t _stride, uint32_t _padding);
+    void setInputHeight(uint32_t _height);
+    void setKernelSize(uint32_t _size);
+    void setInputWidth(uint32_t _width);
+    void setChannels(uint32_t _channels);
+    void setPadding(uint32_t _padding);
+    void setStride(uint32_t _stride);
 };

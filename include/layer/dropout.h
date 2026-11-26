@@ -22,12 +22,17 @@ private:
     float dropout_rate = 0.5f;
     bool is_training = true;
     uint64_t seed = 0;
+    mutable uint64_t step_counter = 0;
     Tensor mask_tensor;
     Tensor input_tensor;
     Tensor output_tensor;
     Tensor input_gradient_tensor;
     bool is_forward_completed = false;
+    bool was_training_in_forward = false;
+    float last_forward_dropout_rate = 0.0f;
     Execution_Target execution_target = Execution_Target::CPU;
+
+    uint64_t nextStepSeed() const noexcept;
 
 public:
     using ILayer::forward;
@@ -49,7 +54,7 @@ public:
     void saveCheckpoint(std::ofstream &_output_file_stream) const override;
     void loadCheckpoint(std::ifstream &_input_file_stream) override;
 
-    std::function<float(std::mt19937 &)> getPopulationParameterInitializer(size_t /*param_index*/) const override
+    std::function<float(std::mt19937 &)> getPopulationParameterInitializer(size_t ) const override
     {
         return [](std::mt19937 &) { return 0.0f; };
     }
@@ -63,15 +68,23 @@ public:
     Execution_Target getExecutionTarget() const override { return execution_target; }
     Layer_Type getLayerType() const noexcept override { return Layer_Type::DROPOUT; }
     bool supportsPopulationBatch() const noexcept override { return true; }
+    bool supportsStaticGraph() const noexcept override { return !is_training || dropout_rate <= 0.0f; }
     bool isForwardCompleted() const noexcept { return is_forward_completed; }
     bool hasParameters() const noexcept override { return false; }
     bool isTraining() const noexcept { return is_training; }
     float getDropoutRate() const noexcept { return dropout_rate; }
+    uint64_t getSeed() const noexcept { return seed; }
+    uint64_t getStepCounter() const noexcept { return step_counter; }
 
-    void setPopulationParameter(size_t /*param_index*/, std::vector<float> /*flat_data*/) override {}
+    void setPopulationParameter(size_t param_index, std::vector<float> flat_data) override;
     void setTrainingMode(bool _is_training) override { is_training = _is_training; }
     void setDropoutRate(float _rate);
-    void setSeed(uint64_t _seed) noexcept { seed = _seed; }
+    void setSeed(uint64_t _seed) noexcept
+    {
+        seed = _seed;
+        step_counter = 0;
+    }
+    void setStepCounter(uint64_t _step) noexcept { step_counter = _step; }
     void setInputGradient(const Tensor &_tensor) { input_gradient_tensor = _tensor; }
     void setInput(const Tensor &_tensor) { input_tensor = _tensor; }
     void setOutput(const Tensor &_tensor) { output_tensor = _tensor; }

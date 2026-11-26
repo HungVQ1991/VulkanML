@@ -27,7 +27,6 @@ vulkanml_core.dll
 mujoco.dll
 
 # Build system & scripts
-CMakeLists.txt
 CMakeLists.txt.bak
 compile.bat
 *.bat
@@ -56,45 +55,24 @@ backup/
 *.cache
 MUJOCO_LOG.TXT
 
-# Temporary test shaders in root
 /*.spv
 /*.comp
 
-# Loose shaders in compute_shader root (preserves compute_shader/spv/ and comp/)
 compute_shader/*.spv
-
-# --------------------------------------------------------------------
-# 4. External Applications & Non-Core Domains
-# --------------------------------------------------------------------
-# CheXpert / Chest Localization Application
+compute_shader/spv/*.spv
 include/chexlocalize/
 src/chexlocalize/
+apps/chexpert/
 chexpert_thresholds.json
 pack_chest_segmentation.py
 
-# Reinforcement Learning & MuJoCo Environments
-include/rl/
-src/rl/
 include/environment/
 mujoco/
-
-# Tokenizer Tools & Datasets
-include/tokenizer/
-src/tokenizer/
-tokenizer/
+/tokenizer/
 token.cpp
 build_syllable_tokenizer.cpp
-
-# --------------------------------------------------------------------
-# 5. Standalone Training, Benchmark & Experiment Scripts
-# (Chỉ giữ lại test.cpp và example.cpp cho core library)
-# --------------------------------------------------------------------
-train_*.cpp
-!train_sllm.cpp
-benchmark_*.cpp
-validate_*.cpp
-verify_*.cpp
-cifar_train.cpp
+apps/*.cpp
+!apps/example.cpp
 reload_model.cpp
 convert.cpp
 include/c_api.cpp
@@ -105,16 +83,23 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 
-# --------------------------------------------------------------------
-# 6. IDE, Editors, OS & User Configuration
-# --------------------------------------------------------------------
 .vscode/
 .vs/
 .idea/
 .VSCodeCounter/
+.sourcedive/
 .editorconfig
 .prettierrc
 user_preferences.json
 VULKANML_PROJECT_REVIEW.md
+corelib_review.md
+corelib_fix_report.md
 Thumbs.db
 .DS_Store
+build_release/
+cmake/
+
+
+
+AGENTS.md
+PROJECT_REVIEW.md

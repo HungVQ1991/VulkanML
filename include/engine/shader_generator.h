@@ -1,13 +1,15 @@
 #pragma once
 
+#include <algorithm>
+#include <bitset>
 #include <cstddef>
 #include <cstdint>
 #include <sstream>
+#include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 #include <vulkan/vulkan.h>
-
-extern bool is_coop;
 
 enum class Buffer_Access
 {
@@ -42,21 +44,42 @@ private:
 
 public:
     template <typename T>
+        requires std::is_trivially_copyable_v<T>
     void addConstant(uint32_t _constant_id, const T &_value)
     {
+        for (const auto &entry : entries)
+        {
+            if (entry.constantID == _constant_id)
+            {
+                throw std::invalid_argument("Specialization_Map_Builder::addConstant: Duplicate constant_id");
+            }
+        }
+
         size_t offset = data.size();
-        size_t size = sizeof(T);
-
-        entries.push_back(VkSpecializationMapEntry{
-            .constantID = _constant_id,
-            .offset = static_cast<uint32_t>(offset),
-            .size = size});
-
-        const auto *byte_pointer = reinterpret_cast<const std::uint8_t *>(&_value);
-        data.insert(data.end(), byte_pointer, byte_pointer + size);
+        if constexpr (std::is_same_v<std::remove_cv_t<T>, bool>)
+        {
+            VkBool32 vk_val = _value ? VK_TRUE : VK_FALSE;
+            constexpr size_t size = sizeof(VkBool32);
+            entries.push_back(VkSpecializationMapEntry{
+                .constantID = _constant_id,
+                .offset = static_cast<uint32_t>(offset),
+                .size = size});
+            const auto *byte_pointer = reinterpret_cast<const std::uint8_t *>(&vk_val);
+            data.insert(data.end(), byte_pointer, byte_pointer + size);
+        }
+        else
+        {
+            size_t size = sizeof(T);
+            entries.push_back(VkSpecializationMapEntry{
+                .constantID = _constant_id,
+                .offset = static_cast<uint32_t>(offset),
+                .size = size});
+            const auto *byte_pointer = reinterpret_cast<const std::uint8_t *>(&_value);
+            data.insert(data.end(), byte_pointer, byte_pointer + size);
+        }
     }
 
-    VkSpecializationInfo build() const noexcept
+    VkSpecializationInfo build() const & noexcept
     {
         return VkSpecializationInfo{
             .mapEntryCount = static_cast<uint32_t>(entries.size()),
@@ -64,6 +87,7 @@ public:
             .dataSize = data.size(),
             .pData = data.data()};
     }
+    VkSpecializationInfo build() const && = delete;
 
     bool empty() const noexcept { return entries.empty(); }
     void clear() noexcept
@@ -87,10 +111,9 @@ private:
     uint32_t group_z;
     uint32_t current_binding = 0;
     uint32_t var_counter = 0;
+    size_t total_shared_memory_bytes = 0;
     std::string default_data_type = "float";
 
-    std::ostringstream header_stream;
-    std::ostringstream specialization_stream;
     std::ostringstream bindings_stream;
     std::ostringstream shared_memory_stream;
     std::ostringstream body_stream;
@@ -98,12 +121,20 @@ private:
     bool is_subgroup_enabled = false;
     bool is_control_flow_enabled = false;
     bool is_float16_enabled = false;
+    bool is_cooperative_matrix_enabled = false;
+    bool has_push_constants = false;
+    std::bitset<32> used_bindings;
     std::vector<Specialization_Constant_Entry> spec_constants;
 
 public:
     Shader_Generator(uint32_t _group_x, uint32_t _group_y = 1, uint32_t _group_z = 1, const std::string &_default_data_type = "float");
 
     void enableFloat16() noexcept { is_float16_enabled = true; }
+    void enableCooperativeMatrix() noexcept
+    {
+        is_cooperative_matrix_enabled = true;
+        is_float16_enabled = true;
+    }
     void enableSubgroupOperations();
     void enableControlFlowAttributes();
 
@@ -130,7 +161,17 @@ public:
     const std::string &getDefaultDataType() const noexcept { return default_data_type; }
     void setDefaultDataType(const std::string &_type_name) noexcept { default_data_type = _type_name; }
     const std::vector<Specialization_Constant_Entry> &getSpecializationConstants() const noexcept { return spec_constants; }
-    void setSpecializationConstants(const std::vector<Specialization_Constant_Entry> &_constants) { spec_constants = _constants; }
+    void setSpecializationConstants(const std::vector<Specialization_Constant_Entry> &_constants)
+    {
+        spec_constants = _constants;
+        for (const auto &entry : spec_constants)
+        {
+            if (entry.type_name == "float16_t")
+            {
+                is_float16_enabled = true;
+            }
+        }
+    }
     uint32_t getCurrentBinding() const noexcept { return current_binding; }
     uint32_t getVarCounter() const noexcept { return var_counter; }
     uint32_t getGroupX() const noexcept { return group_x; }
@@ -138,13 +179,15 @@ public:
     uint32_t getGroupZ() const noexcept { return group_z; }
     void setCurrentBinding(uint32_t _binding) noexcept { current_binding = _binding; }
     void setVarCounter(uint32_t _counter) noexcept { var_counter = _counter; }
-    void setGroupX(uint32_t _group_x) noexcept { group_x = _group_x; }
-    void setGroupY(uint32_t _group_y) noexcept { group_y = _group_y; }
-    void setGroupZ(uint32_t _group_z) noexcept { group_z = _group_z; }
+    void setGroupX(uint32_t _group_x) noexcept { group_x = std::max<uint32_t>(1u, _group_x); }
+    void setGroupY(uint32_t _group_y) noexcept { group_y = std::max<uint32_t>(1u, _group_y); }
+    void setGroupZ(uint32_t _group_z) noexcept { group_z = std::max<uint32_t>(1u, _group_z); }
     bool isControlFlowEnabled() const noexcept { return is_control_flow_enabled; }
     bool isSubgroupEnabled() const noexcept { return is_subgroup_enabled; }
     bool isFloat16Enabled() const noexcept { return is_float16_enabled; }
+    bool isCooperativeMatrixEnabled() const noexcept { return is_cooperative_matrix_enabled; }
     void setControlFlowEnabled(bool _enabled) noexcept { is_control_flow_enabled = _enabled; }
     void setSubgroupEnabled(bool _enabled) noexcept { is_subgroup_enabled = _enabled; }
     void setFloat16Enabled(bool _enabled) noexcept { is_float16_enabled = _enabled; }
+    void setCooperativeMatrixEnabled(bool _enabled) noexcept { is_cooperative_matrix_enabled = _enabled; }
 };

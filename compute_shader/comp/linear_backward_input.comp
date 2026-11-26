@@ -1,17 +1,33 @@
 #version 450
+#ifdef USE_FP16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#endif
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 layout(std430, set = 0, binding = 0) readonly buffer GradY {
+#ifdef USE_FP16
+    float16_t dy_data[];
+#else
     float dy_data[];
+#endif
 };
 
 layout(std430, set = 0, binding = 1) readonly buffer WeightsW {
+#ifdef USE_FP16
+    float16_t w_data[];
+#else
     float w_data[];
+#endif
 };
 
 layout(std430, set = 0, binding = 2) writeonly buffer GradX {
+#ifdef USE_FP16
+    float16_t dx_data[];
+#else
     float dx_data[];
+#endif
 };
 
 layout(push_constant) uniform PushConstants {
@@ -20,8 +36,13 @@ layout(push_constant) uniform PushConstants {
     uint out_dim;
 } params;
 
+#ifdef USE_FP16
+shared float16_t tile_dy[16][17];
+shared float16_t tile_w[16][17];
+#else
 shared float tile_dy[16][17];
 shared float tile_w[16][17];
+#endif
 
 void main() {
     uint col = gl_GlobalInvocationID.x;
@@ -39,7 +60,11 @@ void main() {
         if (dy_row < params.batch_size && dy_col < params.out_dim) {
             tile_dy[local_row][local_col] = dy_data[dy_row * params.out_dim + dy_col];
         } else {
+#ifdef USE_FP16
+            tile_dy[local_row][local_col] = float16_t(0.0);
+#else
             tile_dy[local_row][local_col] = 0.0;
+#endif
         }
 
         uint w_row = gl_WorkGroupID.x * 16 + local_row;
@@ -47,14 +72,22 @@ void main() {
         if (w_row < params.in_dim && w_col < params.out_dim) {
             tile_w[local_row][local_col] = w_data[w_row * params.out_dim + w_col];
         } else {
+#ifdef USE_FP16
+            tile_w[local_row][local_col] = float16_t(0.0);
+#else
             tile_w[local_row][local_col] = 0.0;
+#endif
         }
 
         barrier();
 
         #pragma unroll
         for (uint k = 0; k < 16; ++k) {
+#ifdef USE_FP16
+            sum = fma(float(tile_dy[local_row][k]), float(tile_w[local_col][k]), sum);
+#else
             sum = fma(tile_dy[local_row][k], tile_w[local_col][k], sum);
+#endif
         }
 
         barrier();
@@ -62,6 +95,10 @@ void main() {
 
     if (row < params.batch_size && col < params.in_dim) {
         if (isnan(sum) || isinf(sum)) sum = 0.0;
+#ifdef USE_FP16
+        dx_data[row * params.in_dim + col] = float16_t(clamp(sum, -65504.0, 65504.0));
+#else
         dx_data[row * params.in_dim + col] = sum;
+#endif
     }
 }

@@ -33,7 +33,7 @@ void batchNorm2dBackward(const Tensor &output_gradient, const Tensor &gamma,
                          float epsilon,
                          bool is_training = true, const Tensor &running_variance = Tensor());
 
-} // namespace ops::normalization
+}
 
 namespace ops::norm
 {
@@ -41,4 +41,4 @@ using ops::normalization::batchNormForward;
 using ops::normalization::batchNormBackward;
 using ops::normalization::batchNorm2dForward;
 using ops::normalization::batchNorm2dBackward;
-} // namespace ops::norm
+}
